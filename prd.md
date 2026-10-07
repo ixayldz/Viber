@@ -2,16 +2,16 @@
 
 | Alan | Değer |
 |---|---|
-| Belge / sürüm | `prd.md` / 1.0 |
-| Tarih | 5 Ekim 2026 |
+| Belge / sürüm | `prd.md` / 1.1 |
+| Tarih | 7 Ekim 2026 |
 | Ürün | Modelden bağımsız, kalıcı görev durumuna sahip coding CLI ve harness |
 | Depo / dal | [ixayldz/Viber](https://github.com/ixayldz/Viber) / `origin/main` |
 | Durum | Kodlamaya temel olacak ürün ve mühendislik sözleşmesi; henüz çalışan uygulama veya ölçülmüş üstünlük beyanı değildir |
 | Yetkili kaynak | Ürün kapsamı, mimari, UX, veri, güvenlik, kodlama fazları, eval ve release için bu belge |
 
-Bu PRD, uygulamayı geliştirmek için diğer proje Markdown belgelerine ihtiyaç kalmayacak şekilde hazırlanmıştır. İlk vizyonun 90 bölümü, mimari tasarımın bütün sözleşmeleri, mimari incelemenin bulguları ve uygulama/eval planının bütün fazları burada birleştirilmiştir. Çelişen öneriler aşağıdaki kararlara göre çözülmüştür. Önceki belgeler tarihsel kayıttır. `AGENTS.md` depo çalışma ve Git teslim talimatlarını taşır; ayrı ürün gereksinimleri kaynağı değildir.
+Bu PRD, uygulamayı geliştirmek için tek ürün ve mühendislik sözleşmesidir. Önceki tasarımlardan alınan kapsam §30.1'de tarihsel izlenebilirlik olarak tutulur; uygulama için bu dosyaları okumak gerekmez. `AGENTS.md` depo çalışma ve Git teslim talimatlarını taşır; ayrı ürün gereksinimleri kaynağı değildir. 1.1 incelemesi, doğrulama güven zincirini, yaşam döngüsünü, kalıcılık sınırlarını ve release bağımlılıklarını netleştirir; düzeltme kaydı §3.1'dedir.
 
-**ZORUNLU** uygulanacak sözleşme, **HEDEF** ölçümle sınanacak başlangıç değeri, **DENEYSEL** adoption gate geçmeden varsayılan olamayacak özelliktir. Bu belgede verilen performans ve başarı hedefleri ölçülmüş sonuç değildir.
+**ZORUNLU** uygulanacak sözleşme, **HEDEF** ölçümle sınanacak başlangıç değeri, **DENEYSEL** adoption gate geçmeden varsayılan olamayacak özelliktir. Normatif hükümler kabul koşuludur; örnek, öneri ve deney hedefi destek garantisi değildir. Bu belgede verilen performans ve başarı hedefleri ölçülmüş sonuç değildir. Ürün kuralları §4–23'te, teslim sırası §26'da, kabul/eval §27–29'da tanımlıdır; faz ertelemesi güvenlik kuralını ertelemez. Yeni çelişki bulunursa ilgili gereksinim/spec düzeltilmeden daha zayıf yorum uygulanmaz.
 
 ## İçindekiler
 
@@ -87,7 +87,7 @@ Birincil kullanıcı terminal/Git kullanan bireysel geliştirici veya küçük e
 
 ### 2.2 Kapsam sırası
 
-İlk kararlı ürün Faz A–D'dir: kendi agent loop'u, tek writer, doğrudan provider/local adapter, durable state, lexical/outline, izole candidate, process sandbox, bounded context, doğrulama, CLI/TUI/headless, apply/restore ve privacy.
+İlk kararlı ürün Faz A–D'dir: kendi agent loop'u, tek metadata writer, doğrudan provider/local adapter, durable state, lexical/outline, izole candidate, process sandbox, bounded context, doğrulama, CLI/TUI/headless, apply/restore ve privacy. Faz B dış kullanıma hazır kararlı sürüm değil, kontrollü teknik önizlemedir. Faz D beta sonrası aynı A–D kapsamının release kapıları kapanınca ilk kararlı sürüm çıkar. E–G bu sürümün ön koşulu değildir.
 
 Faz E–G geniş vizyonu tamamlar: symbol/resolved graph, semantic/history retrieval, runtime trace, reranker, kontrollü çoklu ajan, routing, external CLI workers, procedural skills, offline policy optimizasyonu, opt-in training ve ekip/remote execution. Her özellik ayrı fayda ve güvenlik kapısından geçer.
 
@@ -126,13 +126,34 @@ Bu kararlar önceki fikirlerdeki çelişkilerin yerine geçer. Performans optimi
 | D25 | Eval model/bütçe/history koşulları farklıydı | Eşleştirilmiş deney, repo/zaman holdout, leakage engeli |
 | D26 | Task/session/epoch UX'i karmaşıktı | UI'da görev, değişiklik, doğrulama ve karar |
 | D27 | Read-set yalnız mevcut dosyaydı | Eksik path, directory listing ve glob/negative scope dahil |
-| D28 | Test copy source mutation PASS'i bozmazdı | Başlangıç ve bitiş source integrity; mutation receipt'i geçersiz |
+| D28 | Test copy source mutation PASS'i bozmazdı | Verification boyunca read-only source/check; bitiş integrity ek kontrol |
 | D29 | Provider server tools gate'i atlayabiliyordu | İlk sürüm client tools; server tools eşdeğer effect/egress denetimi ister |
 | D30 | Her epoch bütün testleri yeniden gerektiriyordu | Eylem fencing ile receipt policy applicability ayrı; sahte rerun yok |
 | D31 | Repo config izin genişletebiliyordu | Kısıtların kesişimi; genişletme yalnız yetkili user policy |
-| D32 | Çalışma sonucu ile kalite karışıyordu | Execution state, terminal outcome, quality ve exit ayrı |
+| D32 | Çalışma sonucu ile kalite karışıyordu | Execution state, terminal outcome, quality, fulfillment ve exit ayrı |
 
 Araştırma başarı oranları ürüne aktarılmaz. MCP entegrasyon protokolüdür; cache veya task store değildir. “Compatible”, “local”, “container”, “RLM” ve “verified” etiketi kendi başına garanti oluşturmaz.
+
+### 3.1 Sürüm 1.1 incelemesi ve düzeltmeler
+
+İnceleme sonucu: çekirdek ürün fikri korunabilir; aşağıdaki boşluklar kodlamadan önce bağlayıcı sözleşme gerektiriyordu. Bu tablo çalışan implementasyonda hata bulunduğu veya testlerin koşulduğu iddiası değildir.
+
+| ID | Bulgu / etkisi | Düzeltilen sözleşme ve kabul |
+|---|---|---|
+| D33 | B yayınlanırken güvenlik için gerekli context/privacy/steering davranışı C/D'ye kalıyordu | B asgari güvenlik tabanı; sonraki fazlar optimizasyon/UX; §26, senaryo 25 |
+| D34 | CheckSet'in ilk freeze'i testlerin önceden zayıflatılmasını engellemiyordu | Mutation öncesi protected origin ve yürütme bağımlılıkları; §21.1, senaryo 26 |
+| D35 | Ön/son hash eşitliği test sırasında değiştirip geri almayı yakalamaz | Verification boyunca read-only source/check ve güvenilir sonuç kanalı; §21.2, senaryo 27 |
+| D36 | Candidate kalitesi ile teslim/görev başarısı aynı predicate'teydi | Quality, fulfillment, strict success ve exit önceliği ayrı; §12/21/22, senaryo 28 |
+| D37 | Persist edilmiş monotonic deadline yeni boot/host'ta anlamlı olmayabilir | Clock domain, yeni generation ve lease yeniden kabulü; §11/19, senaryo 29 |
+| D38 | Tek global DB ile project başına writer anlatımı belirsizdi | App-data store başına tek owner; candidate/target mutex ayrı; §9/11, senaryo 30 |
+| D39 | Child process, cache veya fixture verification sonunu kirletebilirdi | Process quiescence, immutable girdiler, ayrı scratch ve effect kapsamı; §14/21, senaryo 31 |
+| D40 | PAUSED→resume, headless cevap ve komut dedup sözleşmesi eksikti | Legal transition, bağlı response ve payload conflict; §12/22, senaryo 32 |
+| D41 | Bitmiş bütçe/disk, iptal ve recovery'yi de engelleyebilirdi | Ayrılmış kontrol kaynağı ve muhafazakâr unknown settlement; §20, senaryo 33 |
+| D42 | Shared blob/yedek silme ile integrity journal çelişebilirdi | Scope'lu erişim, silme manifest'i, backup purge ve restore kontrolü; §11/23, senaryo 34 |
+| D43 | task_seq/journal_seq/checkpoint replay sırası tam tanımlı değildi | Global store_seq, task_seq, deterministik reducer ve sıra aralığı; §11, senaryo 35 |
+| D44 | Eksik ham niyet veya boş kriter listesi sahte başarıya kapı bırakıyordu | Retained intent, sıfır kriter reddi, analysis/no-op teslimi; §21, senaryo 36 |
+| D45 | Çözülemeyen kontrol görevleri ve self-reported VERIFIED benchmark'ı karıştırıyordu | Bağımsız evaluator, çözüm/güvenli davranış kohortları, açık paydalar; §27, senaryo 37 |
+| D46 | Host Git, secret-bearing process ve terminal çıktısı örtük güven sınırıydı | Sanitized Git, effect/egress sınırı, çıktı escape ve taint aktarımı; §15/23, senaryo 38 |
 
 ## 4. Değişmez çekirdek kuralları
 
@@ -141,8 +162,8 @@ Araştırma başarı oranları ürüne aktarılmaz. MCP entegrasyon protokolüd�
 3. **INV-03:** Consequential okuma/edit/check snapshot, spec ve environment'a bağlıdır.
 4. **INV-04:** Eski epoch/generation ile yeni yan etki veya promotion kabul edilmez.
 5. **INV-05:** Kullanıcı değişikliği sessiz overwrite, broad reset veya rollback ile silinmez.
-6. **INV-06:** VERIFIED belirli criterion/scope/candidate kanıtıdır; model final metni değildir.
-7. **INV-07:** Eksik kaynak/check veya kayıp dış sonuç başarı sayılmaz.
+6. **INV-06:** VERIFIED belirli criterion/scope/candidate veya artifact kanıtıdır; model final metni değildir.
+7. **INV-07:** Gerekli kaynak/check veya kapsamı kesişen belirsiz dış sonuç eksikken strict success oluşmaz; ilgisiz belirsizlikler de rapordan gizlenmez.
 8. **INV-08:** Özet/index/memory/tool description izin veya zorunlu kriter üretmez.
 9. **INV-09:** Parent/child bütün çağrılar aynı atomik bütçe ledger'ındadır.
 10. **INV-10:** Inspection ve reducer replay dış eylem çalıştırmaz.
@@ -155,11 +176,11 @@ Araştırma başarı oranları ürüne aktarılmaz. MCP entegrasyon protokolüd�
 
 ## 5. Başarı ve ürün kabulü
 
-Birincil metrik önceden belirlenen bütçe/süre içinde bağımsız zorunlu kontrolleri geçen görev oranıdır. İkincil metrikler başarısız denemeler dahil çözülmüş görev başına maliyet, kullanıcı rework süresi, false VERIFIED ve recovery başarısıdır.
+Birincil metrik önceden belirlenen bütçe/süre içinde bağımsız zorunlu kontrolleri geçen atanmış çözüm görevi oranıdır (§27). Kontrol kohortunda doğru clarification/block/UNKNOWN davranışı ayrıca ölçülür; kod çözümü yerine sayılmaz. İkincil metrikler başarısız denemeler dahil çözülmüş görev başına maliyet, kullanıcı rework süresi, false VERIFIED ve recovery başarısıdır.
 
 ZORUNLU ayırt edici demo: çok dosyalı iş başlat; mutation sınırında süreci öldür; kullanıcı arada dosya değiştirsin; başka izinli modelle resume et; eski proposal'ı reddet/yeniden temellendir; niyeti koru; güncel final candidate'ı doğru receipt'lerle teslim et. Kullanıcı editleri kaybolamaz.
 
-HEDEF feature adoption: aynı bütçede +5 yüzde puan strict success veya en fazla -2 puan başarı kaybıyla toplam maliyette en az %20 azalma. Eşik ve cohort deney öncesi kaydedilir. Belirsizlik sonucu ayırt etmiyorsa özellik deneysel kalır. Güvenlik/veri koruma ihlali daha yüksek benchmark karşılığında kabul edilmez.
+HEDEF feature adoption: aynı bütçede +5 yüzde puan bağımsız başarı veya en fazla -2 puan başarı kaybıyla toplam maliyette en az %20 azalma. §27'deki güven aralığı kuralı uygulanır; yalnız ortalama/point estimate yeterli değildir. Eşik, latency/rework sınırları ve cohort deney öncesi kaydedilir. Belirsizlik sonucu ayırt etmiyorsa özellik deneysel kalır. Güvenlik/veri koruma ihlali daha yüksek benchmark karşılığında kabul edilmez.
 
 ## 6. Platform ve destek matrisi
 
@@ -212,22 +233,22 @@ Her gereksinim bir test/receipt veya kapsam denetimiyle kapatılır. “Kod yaz�
 | FR-08 | Capability gate, scoped approval ve epoch fencing | B |
 | FR-09 | Global reserve/settle/release ledger | B |
 | FR-10 | Lexical/path/range ve bounded artifact paging | B |
-| FR-11 | Kriter/check/receipt ve ayrı quality verdict | B |
-| FR-12 | Run/status/diff/pause/resume/cancel/inspect, JSONL | B |
+| FR-11 | Kriter/check/receipt, quality verdict ve ayrı fulfillment sonucu | B |
+| FR-12 | Run/status/diff/pause/resume/cancel/inspect/requests/respond, JSONL | B |
 | FR-13 | Typed checkpoint ve deterministic replay | B/C |
-| FR-14 | Context manifest, stable prefix, protocol/token rezervi | C |
-| FR-15 | Dependency/environment evidence invalidation | C |
+| FR-14 | Asgari bounded context/token preflight; gelişmiş compiler/manifest/stable prefix | B/C |
+| FR-15 | B'de conservative snapshot/environment invalidation; C'de artımlı dependency invalidation | B/C |
 | FR-16 | Bounded compaction ve authoritative state korunması | C |
 | FR-17 | Context/history pin/page ve inclusion explanation | C/D |
 | FR-18 | Güvenli model switch, privacy/model lock | C |
-| FR-19 | Steering ve prompt queue; durable input barrier | D |
+| FR-19 | B'de durable input/pause/revision barrier; D'de steering TUI/prompt queue | B/D |
 | FR-20 | Review/guided/auto ve ayrı isolation profili | D |
-| FR-21 | Apply/restore, üç yönlü conflict, delivery receipt | D |
+| FR-21 | Apply/restore primitive ve delivery receipt; D'de conflict UX | B/D |
 | FR-22 | TUI, @file, slash commands, diff/status | D |
 | FR-23 | Doctor/onboarding ve destek matrisi | A/D |
 | FR-24 | İki remote provider ve bir local conformance | A/D |
-| FR-25 | Detach/attach, secure IPC, cursor reconnect | D |
-| FR-26 | Export/retention/delete ve derived veri silme | D |
+| FR-25 | B'de secure owner command IPC; D'de detach/attach ve cursor reconnect | B/D |
+| FR-26 | B'de asgari retention/delete; D'de export ve yönetim UX | B/D |
 | FR-27 | TS/JS/Python outline/source-bound symbols | D |
 | FR-28 | AST/LSP resolved graph, coverage/freshness | E |
 | FR-29 | Git history/co-change/issue memory, cutoff | E |
@@ -248,11 +269,11 @@ Her gereksinim bir test/receipt veya kapsam denetimiyle kapatılır. “Kod yaz�
 | NFR-02 | Bilinen eski yetki/binding admission yok | B–G |
 | NFR-03 | Eksik check/unknown effect ile false VERIFIED yok | B–G |
 | NFR-04 | Provider/plugin/ortam hatası kurtarılabilir | B–G |
-| NFR-05 | Offline profilde bütün egress yolları kapalı | D–G |
+| NFR-05 | Her profilde egress gate; sunulan offline profilde tüm uzak egress kapalı | B–G |
 | NFR-06 | Bounded log/context/UI memory ve quota | B–G |
 | NFR-07 | Schema migration, version pin, restore-tested backup | B–G |
 | NFR-08 | Warm CLI p95<1 s; context p95<250 ms hedefleri | D |
-| NFR-09 | Yetkisiz source/index/memory metadata sızıntısı yok | C–G |
+| NFR-09 | Yetkisiz source/index/memory metadata sızıntısı yok | B–G |
 | NFR-10 | Sürümlü JSONL/cursor/exit sözleşmesi | B–G |
 | NFR-11 | Default telemetry/training OFF, secret-safe export | B–G |
 | NFR-12 | Kontrollü ablation ve tüm denemelerin maliyeti | C–G |
@@ -297,7 +318,9 @@ flowchart TD
 | Eval/Learning | Local trace/attribution/izinli adaylar | Güvenlik invariant'ı öğrenmeyle değişmez |
 | Extension Host | Versioned MCP/plugin/capability RPC | Untrusted in-process kod yok |
 
-Foreground önce gelir; detach aynı kernel'in on-demand supervisor'ını kullanır. Bir workspace/candidate için ikinci writer lock ve generation ile engellenir.
+Bir app-data store'u için aynı anda tek kernel owner metadata yazar; bütün project/task command'ları onun sürümlü API'sinde serialize edilir. İlk foreground kernel store lock'unu alır; ikinci CLI mevcut owner'a bağlanır. Faz D supervisor bu ownership'i sürdürür; ikinci bağımsız kernel aynı DB'ye yazamaz. SQLite write transaction kilidi, business-level tek owner garantisinin yerine geçmez.
+
+Candidate başına tek mutation writer, canlı hedef başına delivery mutex ayrıca tutulur. Project canonical root ve Git common-dir kimliği path alias/worktree üzerinden kilit atlamayı engeller; Git ortak ref işlemleri aynı repo mutex'ini kullanır. İlk B sürümünde store başına tek aktif task yeterlidir; eşzamanlı task desteği ölçülene kadar diğerleri sırada bekler. F worker'ları metadata writer olmaz, yalnız izole çıktı üretir. Lock kaybında eski owner admission'ı durdurur; backend fencing veya eski process quiescence doğrulanmadan yeni writer başlamaz.
 
 ## 10. Otorite, kanıt ve güncellik
 
@@ -330,12 +353,12 @@ Watcher hızlandırıcıdır. Rename/kaçan event/checkout/mode/case/symlink/loc
 
 ### 11.1 Tip sözleşmeleri
 
-Her authoritative tip `id, schema_version, actor/producer, causation, journal_seq` taşır. UTC timestamp sunum içindir; ordering sequence, timeout/lease monotonic clock ile yapılır. Her tip ayrı tablo olmak zorunda değildir.
+Her authoritative tip `id, schema_version, actor/producer, causation, journal_seq` taşır. `journal_seq`, store genelindeki monoton artan `store_seq` alanının adıdır; `task_seq` yalnız bir task içindeki sıra/cursor'dur. UTC timestamp sunum ve audit içindir. Timeout/lease aynı clock domain içinde monotonic clock kullanır; persist edilen sayı yeni boot/host'ta tek başına geçerli deadline değildir. Clock domain kimliği, suspend davranışı ve kalan süre politikası backend contract'ında tanımlanır; domain bilinmiyorsa eski lease geçersizdir. Her tip ayrı tablo olmak zorunda değildir.
 
 ```text
 Project:
   project_id, canonical_root_identity, repo_identity, trust_profile,
-  config_revision, languages, active_kernel_generation
+  config_revision, languages, store_owner_id, active_kernel_generation
 
 UserInput:
   input_id, task_id, raw_payload_ref, actor, kind, source_spans,
@@ -344,11 +367,13 @@ UserInput:
 TaskSpec:
   task_id, version, goal, input_event_ids,
   requirements[{id, source_span, kind, required, risk, verification_method}],
+  protected_check_origin_ref, deliverable_kind, required_artifact_contract,
   constraints[{id, source_span, scope, status, interpretation}],
   allowed_effects, delivery_policy, budget_policy, created_by
 
 TaskState:
   spec_version, execution_state, terminal_outcome, quality_verdict,
+  fulfillment_status, last_active_state, current_admissibility_ref,
   candidate_ref, attempt, kernel_generation, obligations, blockers, requests,
   plan_ref, decisions, failures, policy_epoch, journal_seq
 
@@ -387,7 +412,8 @@ Operation:
 OperationReceipt:
   id, op_id, attempt_id, backend, start_identity,
   start_seq, end_seq, exit_code, signal, timeout, outcome,
-  changed_set_digest, artifacts, partial_output, external_ref
+  changed_set_digest, artifacts, partial_output, external_ref,
+  process_tree_quiescent, runner_result_channel, reconciled_outcome
 
 Observation:
   id, op_id, snapshot, environment, source_locator, source_hash,
@@ -400,15 +426,18 @@ Claim / Decision / Hypothesis / Failure:
 
 CheckDefinition:
   id, version, digest, requirement_ids, protected_origin,
-  execution_contract, expected_result, skip_policy, trust, environment_scope
+  execution_contract, expected_result, skip_policy, trust, environment_scope,
+  execution_closure_digest, discovery_contract, result_protocol_version
 
 VerificationReceipt:
   id, check_id/digest/source, task, spec_version,
   frozen_candidate_id/digest, baseline_id, environment_id, check_set_id/digest,
+  verification_subject_kind, subject_artifact_manifest_digest?,
   executed_policy_epoch, policy_digest, sandbox_profile_digest,
   invocation/runner_digest, requirement_ids, result_artifacts,
   verdict, scope, selected_tests, skips, reruns, exit/signal/timeout,
-  baseline_comparison, source_mutation_status, human_review_scope
+  baseline_comparison, source_mutation_status, human_review_scope,
+  source_enforcement_digest, process_tree_quiescent, discovered/executed_test_counts
 
 AdmissibilityDecision:
   id, receipt_id, current_spec, current_policy_epoch,
@@ -416,7 +445,8 @@ AdmissibilityDecision:
 
 DeliveryReceipt:
   id, candidate, target_baseline/after_manifest,
-  mode, conflicts, preserved_user_changes, op_refs, quality_binding
+  mode, conflicts, preserved_user_changes, op_refs, quality_binding,
+  artifact_manifest_ref, target_identity, verified_target_binding
 
 PlanNode:
   id, task, goal, dependencies, inputs, output_contract,
@@ -425,7 +455,8 @@ PlanNode:
 AgentRun / AgentLease:
   id, parent, node, model_profile, attempt, status,
   lease_id, owner, generation, scope, base_snapshot, policy_epoch,
-  expiry_monotonic, renewal_seq, capabilities, reservation, output_schema
+  clock_domain_id, expiry_monotonic, ttl_duration, renewal_seq,
+  capabilities, reservation, output_schema
 
 ContextManifest:
   id, call_id, spec, candidate, epoch, compiler_version,
@@ -443,8 +474,9 @@ PolicyRevision:
   autonomy, isolation, capabilities, egress, resource_constraints
 
 CheckSet:
-  check_set_id, digest, protected_origin, requirement_coverage,
-  required_check_ids, optional_check_ids, freeze_seq, environment_scope
+  check_set_id, digest, protected_origin, origin_seq, requirement_coverage,
+  required_check_ids, optional_check_ids, authorized_revision_refs,
+  freeze_seq, environment_scope
 
 ResourceLedger:
   ledger_id, task_id, version, limits, reserved, charged, settled,
@@ -452,7 +484,7 @@ ResourceLedger:
 
 BudgetReservation:
   reservation_id, parent_reservation_id, task_id, ledger_version,
-  upper_bound, reserved, settled, unknown_risk, status
+  upper_bound, reserved, settled, unknown_risk, status, control_reserve_class
 
 ModelProfile:
   id, version, provider/endpoint/model_ids, protocol_capabilities,
@@ -482,16 +514,23 @@ Operation status:
   INTENDED | ADMITTED | DISPATCHED | RUNNING | SUCCEEDED | FAILED |
   CANCEL_REQUESTED | CANCELLED | UNKNOWN_OUTCOME | RECONCILED
 
+PendingRequest:
+  request_id, task_id, attempt, kind, action_digest, spec_version, policy_digest,
+  choices/response_schema, affected_scope, expires_at, status, resolution_ref
+
 Checkpoint:
-  id, journal_seq, state_digest, schema_version, spec_version,
+  id, journal_seq, state_digest, schema_version, reducer_version, spec_version,
   candidate_ref, open_operations, unknown_effects, decisions/failures,
   policy_epoch, kernel_generation, budget_ledger_version,
-  continuation_ref, event_integrity_ref, durability_barrier
+  continuation_ref, event_integrity_ref, durability_barrier,
+  task_seq, required_payload_manifest, clock_domain_id
 ```
+
+Metadata digest'leri sürümlü canonical encoding ve collision-resistant hash ile üretilir; field sırası, absent/null, sayı/ID temsili, array sırası ve path byte encoding'i A1 conformance vektörleriyle sabitlenir. Dosya blob hash'i exact byte'lardan hesaplanır; Unicode/CRLF normalizasyonu sessizce uygulanmaz. Display path yetki veya identity anahtarı değildir.
 
 Environment/backend profile ayrıca `assurance_level, enforcement_profile_digest, filesystem/network/process/resource_policy_digests, capability_test_manifest` taşır. Doctor, operation receipt ve final report aynı etkin profile digest'ini gösterir.
 
-Reproducibility `EXACT / REPRODUCIBLE_WITH_LOCKS / PARTIAL / NON_REPRODUCIBLE`; capture `ATOMIC / QUIESCENT / BEST_EFFORT / INCONSISTENT`. INCONSISTENT candidate verification'a giremez; BEST_EFFORT kapsam ve yeniden kontrol gerektirir. Secret fingerprint ham değer veya tahmin edilebilir secret hash'i değildir; scoped version handle kullanılır.
+Reproducibility `EXACT / REPRODUCIBLE_WITH_LOCKS / PARTIAL / NON_REPRODUCIBLE`; capture `ATOMIC / QUIESCENT / BEST_EFFORT / INCONSISTENT`. INCONSISTENT candidate verification'a giremez; BEST_EFFORT kapsam ve yeniden kontrol gerektirir. Reproducibility etiketi girdilerin yeniden kurulabilirliğini anlatır; EXACT bile test/LLM çıktısının deterministik olacağı garantisi değildir. Secret fingerprint ham değer veya tahmin edilebilir secret hash'i değildir; scoped version handle kullanılır.
 
 Opaque refs `ctx://blob/<hash>`, `ctx://snapshot/<id>/path/<encoded>`, `ctx://symbol/<id>@<snapshot>`, `ctx://evidence/<id>`, `ctx://task/<id>/node/<id>` olabilir. Referans keyfi host path yetkisi değildir. Paging de scope/retention gate'inden geçer.
 
@@ -512,13 +551,15 @@ app-data/viber/
 
 SQLite tek writer metadata/journal store'udur. Durable profilde foreign_keys, busy_timeout, desteklenen yerel filesystem'de WAL ve synchronous=FULL; gerçek açılış ayarları doğrulanır. NORMAL durability kaybı sessiz optimizasyon olamaz. WAL aynı host ve yerel filesystem koşullarına sahiptir; resmi [SQLite WAL](https://sqlite.org/wal.html) belgesi kapsamı açıklar. Uygulama journal'ı SQLite WAL dosyasından ayrı kavramdır.
 
-Event envelope `event_id, schema_version, task_id, task_seq, kernel_generation, actor, op_id, causation_id, timestamp, payload_ref, payload_digest` taşır. Event/projection aynı DB transaction'ında; reducer saf ve sürümlüdür. Checksum/hash-chain veya eşdeğer sequence/payload integrity kontrolü bulunur; bu host admin'e karşı mutlak tamper-proof iddiası değildir.
+Event envelope `event_id, schema_version, store_seq, task_id?, task_seq?, kernel_generation, actor, op_id, causation_id, timestamp, payload_ref, payload_digest` taşır. Store-geneli olaylarda task alanları boş olabilir. Event/projection aynı DB transaction'ında; reducer saf ve sürümlüdür. Checkpoint S, commit edilmiş `store_seq <= S` durumunu temsil eder; replay S'den sonraki kayıtlarla başlar. Aynı transaction'daki çoklu olayların sırası da sabittir. Saat, rastgele ID, network veya disk okuması reducer içinde yapılmaz; sonuçları event payload'ına yazılır. Checksum/hash-chain veya eşdeğer sequence/payload integrity kontrolü bulunur; bu host admin'e karşı mutlak tamper-proof iddiası değildir.
 
 Blob: temp write → hash/length → backend durable publish/flush/directory sync → DB ref commit. Crash orphan bırakabilir; eksik committed blob bırakmamalıdır. Filesystem/hardware durability sınırı ölçülür. DB atomikliği dış dosya/API etkisini kapsamaz; [SQLite Atomic Commit](https://sqlite.org/atomiccommit.html) kendi transaction sınırını anlatır.
 
 GC task/checkpoint/receipt/delivery/backup/export refs ve active reader/publication pin'leriyle mark-and-sweep yapar. Retention metadata/payload için ayrıdır; silinen payload unavailable tombstone olur. Sensitive deletion summary/index/cache/candidate/support kopyalarını da kapsar. Eksik receipt kaynağı completion'dan çıkarılır.
 
-Canlı WAL DB backup'ı yalnız sqlite dosyasını kopyalamaz; backup API veya doğrulanmış quiescent snapshot kullanır. DB+blob set restore ile test edilir. Migration öncesi space/version/backup kontrolü; yarım migration için recoverable/read-only yol; desteklenmeyen downgrade mevcut store'u değiştirmez.
+Canlı WAL DB backup'ı yalnız sqlite dosyasını kopyalamaz; [SQLite backup API](https://sqlite.org/backup.html) veya doğrulanmış quiescent snapshot kullanır. Backup başlangıcından DB snapshot'ındaki bütün blob refs listelenip pin edilene kadar GC ile publication/delete koordine edilir. Backup manifest'i DB sequence/schema, gerekli blob hash/size listesi ve deletion watermark taşır; eksik blob varken backup tamamlandı sayılmaz. DB+blob set temiz store'a restore ile test edilir. Migration öncesi space/version/backup kontrolü; yarım migration için recoverable/read-only yol; desteklenmeyen downgrade mevcut store'u değiştirmez.
+
+Digest içerik bütünlüğü/tekilleştirme anahtarıdır, erişim yetkisi değildir. Her ref project/task/sensitivity scope'u taşır; aynı hash farklı task'larda mevcut olsa da lookup/hydrate izin denetimi ister. Retention checkpoint'in replay için gerekli payload manifest'ini dikkate alır. Gerekli payload silinmişse checkpoint yalnız tarihsel inceleme içindir; eksiksiz resume/replay iddiası yapılamaz.
 
 
 ### 11.3 Nesne eşlemeleri, event kataloğu ve çalışma aralıkları
@@ -535,7 +576,7 @@ Evidence invalidation event'i old/current source IDs, etkilenen claims, dependen
 
 ```text
 execution_state:
-  CREATED → SCOPING → READY → RUNNING → VERIFYING → TERMINATED
+  CREATED → SCOPING → READY → RUNNING → VERIFYING → DELIVERING → TERMINATED
                                  ↑         |
                                  └─────────┘ bounded repair
 
@@ -550,6 +591,9 @@ quality_verdict:
 
 criterion_verdict:
   PENDING | PASS | FAIL | UNKNOWN | WAIVED
+
+fulfillment_status:
+  PENDING | SATISFIED | CONFLICTED | UNKNOWN | FAILED
 ```
 
 TERMINATED nötr çalışma state'idir; FINISHED sonucu tek başına başarı değildir. CANCELLED restore değildir. Bütçe duruşunda candidate kalır. BLOCKED typed kullanıcı/ortam/erişim/unknown effect nedeni taşır; problemin zor olması tek başına block değildir.
@@ -557,15 +601,17 @@ TERMINATED nötr çalışma state'idir; FINISHED sonucu tek başına başarı de
 | Geçiş | Precondition | Kalıcı sonuç |
 |---|---|---|
 | Create→Scoping | Durable input, scope identity | Input/spec önerisi, capture intent |
-| Scoping→Ready | Çalışılabilir hedef, kriter, backend, izin, bütçe | Spec/baseline/environment |
+| Scoping→Ready | Çalışılabilir hedef, en az bir kriter, protected check origin, backend, izin, bütçe | Spec/baseline/environment ve check origin |
 | Ready→Running | Current generation/epoch ve admission | Run/operation intents |
 | Running→Verifying | Freeze ve korunan check set | Candidate ve verification plan |
 | Verifying→Running | Bounded repair uygun | Failure/hypothesis, yeni candidate |
-| Verifying→Terminated | Final quality/report hesaplandı | Outcome/receipts/delivery binding |
+| Verifying→Delivering | Candidate quality hesaplandı; teslim yetkisi ve policy uygun | Quality binding ve delivery intent |
+| Delivering→Terminated | Teslim sonucu kesin ve final report durable | Outcome/quality/fulfillment ve receipt bağları |
+| Delivering→Ready/Waiting | Birleşim değişti, conflict veya gerekli approval var | Yeni candidate/admissibility ya da typed request |
 | Active→Pausing | User barrier durable | Yeni admission stop, drain/cancel |
 | Pausing→Paused | Open effects uzlaşıldı veya unknown kaydedildi | Checkpoint/process state |
 | Nonterminal→Recovering | Lock/generation ve store integrity | Reconciliation |
-| Recovering→Ready/Waiting | Workspace/spec/policy/env/budget uzlaştı | Fresh context veya blocker |
+| Recovering→Scoping/Ready/Waiting/Blocked | Workspace/spec/policy/env/budget uzlaştı | Eksik scope, fresh context veya typed blocker |
 
 
 Yasal kesinti geçişleri de kernel tarafından denetlenir:
@@ -573,18 +619,19 @@ Yasal kesinti geçişleri de kernel tarafından denetlenir:
 | Geçiş | Koşul |
 |---|---|
 | Her kalıcı nonterminal state → RECOVERING | Kernel crash/daemon loss veya tespit edilen kesinti sonrası lock/generation yenilenmesi |
-| RUNNING/VERIFYING/PAUSING → WAITING_USER | Açık typed request/barrier; yeni consequential admission durur |
-| RUNNING/VERIFYING → WAITING_RESOURCE | Geçici backend/provider/quota kaynağı yok; intents korunur |
-| WAITING_USER/RESOURCE/BLOCKED → READY | Blocker gerçekten çözüldü; current binding/authority yeniden denetlendi |
-| RUNNING/VERIFYING/WAITING → PAUSING → PAUSED | Admission stop; açık effects uzlaştı veya unknown kayıtlı |
+| SCOPING/READY/RUNNING/VERIFYING/DELIVERING/PAUSING → WAITING_USER | Açık typed request/barrier; etkilenen consequential admission durur |
+| SCOPING/READY/RUNNING/VERIFYING/DELIVERING → WAITING_RESOURCE/BLOCKED | Geçici kaynak yok veya typed erişim/ortam/unknown effect engeli; intents korunur |
+| WAITING_USER/WAITING_RESOURCE/BLOCKED → SCOPING/READY | Blocker çözüldü; eksik spec varsa SCOPING, aksi halde current binding ile READY |
+| SCOPING/READY/RUNNING/VERIFYING/DELIVERING/WAITING_USER/WAITING_RESOURCE/BLOCKED → PAUSING → PAUSED | Admission stop; açık effects uzlaştı veya unknown kayıtlı |
+| PAUSED → RECOVERING → SCOPING/READY/WAITING_USER/WAITING_RESOURCE/BLOCKED | Explicit resume; spec/workspace/authority/process/budget yeniden uzlaştırılır |
 | Nonterminal → TERMINATED(CANCELLED) | Cancel kabulü, child process quiescence veya unresolved effect'in açık kaydı |
 | Nonterminal → TERMINATED(FAILED/BUDGET_EXHAUSTED) | Typed failure veya admission bütçe sınırı; güvenli checkpoint |
 
-`execution_state=TERMINATED` ancak `terminal_outcome` atanmışsa geçerlidir. Outcome ve quality bağımsızdır; FINISHED asla VERIFIED'i otomatik doğurmaz. Final verification/delivery predicate VERIFYING sırasında değerlendirilir; başarılı final verdict ve TERMINATED/FINISHED geçişi aynı metadata transaction'ında commit edilir. Böylece tamamlanma için önce tamamlanmış olma döngüsü kurulmaz.
+`execution_state=TERMINATED` ancak `terminal_outcome` atanmışsa geçerlidir. Outcome, quality ve fulfillment bağımsızdır; FINISHED asla VERIFIED'i otomatik doğurmaz. VERIFYING kaliteyi hesaplar; DELIVERING gerekli paketi veya dış teslimi tamamlar. CANDIDATE_ONLY'de DELIVERING yalnız yerel teslim manifest'ini yayınlar. Final report, fulfillment ve TERMINATED/FINISHED aynı metadata transaction'ında kaydedilir; DB commit'i dış teslimin yerine geçmez. Gerekli unresolved approval/effect varsa strict success oluşmaz; uygun waiting/blocker durumuna geçilir. Kısıtlı sonucu teslim ederek bitirme kararı açık scope/stop policy'sine bağlanır, otomatik başarı değildir.
 
-Planning optional SCOPING/RUNNING alt akışıdır. Terminal task'a yeni kapsam/resume yeni attempt/spec revision olur; eski final receipt tarihi korunur. Quality ile canlı workspace eşitliği ayrıdır: “candidate doğrulandı; workspace farklı” mümkün.
+Planning optional SCOPING/RUNNING alt akışıdır. Terminal task'a resume yeni attempt açar; kapsam değişiyorsa ayrıca spec revision gerekir. Eski outcome/receipt değiştirilmez; yeni attempt RECOVERING ile başlar. Quality ile canlı workspace eşitliği ayrıdır: “candidate doğrulandı; workspace farklı” mümkün. Tarihsel verdict korunur; kaynak silinmesi/policy değişimi sonrası mevcut admissibility ayrıca gösterilir ve yeni başarı kararında eski tarihsel verdict kullanılamaz.
 
-Pending request ID, ilgili action/spec, seçenekler, etkilenen kapsam ve resume condition taşır. Düşük riskli açık işte gereksiz onay yoktur. User mesajı sessiz hedef değişimi yapmaz; steering/queue/revision ilişkisi kaydedilir.
+Pending request ID, task/attempt, ilgili immutable action/spec/policy digest'i, seçenek/response schema, etkilenen kapsam, expiry ve resume condition taşır. Cevap §22.3'teki bağlı command üzerinden gelir; `resume` kendi başına approval değildir. Düşük riskli açık işte gereksiz onay yoktur. User mesajı sessiz hedef değişimi yapmaz; steering/queue/revision ilişkisi kaydedilir.
 
 
 ## 13. Workspace ve değişiklik protokolü
@@ -597,7 +644,7 @@ Candidate başlangıcı yalnız HEAD checkout değildir; izinli kapsamda mevcut 
 
 Git worktree altyapı seçeneğidir. Bazı ref/config alanları ortaktır; bu nedenle host `.git` yazma yetkisi worker'a verilmez. Bu paylaşım [Git worktree belgesinde](https://git-scm.com/docs/git-worktree) açıklanır. İlk güvenli backend, gerektiğinde bağımsız copy/overlay veya kontrollü worktree export kullanır.
 
-Capture atomik FS primitive'i varsa ATOMIC; yoksa writer quiescence ve tekrarlı manifest kontrolüyle QUIESCENT/BEST_EFFORT olur. İstikrarsız capture retry limitini aşarsa INCONSISTENT ve bekleme/conflict döner. Size/mtime hash yerine geçmez. Kaynak byte'ları, path türü, mode, symlink ve case semantics korunur; text dönüşümü açık format işlemi olmalıdır.
+Capture atomik FS primitive'i varsa ATOMIC; kanıtlanmış writer quiescence varsa QUIESCENT olur. Yalnız tekrarlı manifest eşitliği BEST_EFFORT'tur; iki tarama arasında değiştirilip geri alınan kaynak veya karışık zamanlı görüntü ihtimalini dışlamaz. İstikrarsız capture retry limitini aşarsa INCONSISTENT ve bekleme/conflict döner. Size/mtime hash yerine geçmez. Kaynak byte'ları, path türü, mode, symlink ve case semantics korunur; text dönüşümü açık format işlemi olmalıdır.
 
 ### 13.2 Proposal ve patch transaction
 
@@ -632,7 +679,7 @@ Birden fazla dosya candidate'da yazılırken crash olabilir. Journal/before/afte
 
 ### 13.3 Live apply ve restore
 
-Apply `baseline B`, `candidate C`, `current target U` üç yönlü karşılaştırır. U'daki bağımsız kullanıcı değişikliği korunur. Ortak path veya semantik conflict candidate'a dönüp yeniden çözülür; “son yazan kazanır” yoktur. Hedef branch/HEAD/index/preimage değişimi ayrıca kontrol edilir.
+Apply `baseline B`, `candidate C`, `current target U` üç yönlü karşılaştırır. U'daki bağımsız kullanıcı değişikliği korunur. Aynı path'e dokunulması tek başına conflict değildir; ayrık hunk'lar güvenli üç yönlü merge'e adaydır. Metinsel precondition veya saptanan contract/semantik conflict candidate'a dönüp çözülür; metinsel merge başarısı semantik uyum kanıtı değildir ve yeni birleşim yeniden doğrulanır. Hedef branch/HEAD/index/preimage değişimi ayrıca kontrol edilir.
 
 Normal FS'te çok dosyalı apply dış editor'a atomik görünmez. Ön/son hash, file-by-file intent ve receipt ile recovery vardır. Hash kontrolü ile write arasında dış writer yarışı kapanmalıdır; advisory lock işbirliği yapmayan editor'a karşı yeterli değildir. Güçlü exclusive access sağlayamayan backend, kayıpsız concurrent auto-apply vaat edemez; güvenli varsayılan candidate/patch teslimidir. Kullanıcı izin verse de teknik assurance uydurulmaz.
 
@@ -649,7 +696,7 @@ Tool call ile operation aynı şey değildir: provider call ID protokol kimliği
 | Sınıf | Örnek | Retry/recovery |
 |---|---|---|
 | Saf immutable read | Blob/range okuma | Güvenli tekrar; scope yine kontrol edilir |
-| Disposable computation | İzole test/static check | Yeni attempt; önceki sonuç korunur |
+| Disposable computation | Dış yazı/ortak mutable state/credential etkisi olmayan izole test/static check | Önceki process tree quiescent veya karantinada; yeni attempt ve scratch, eski sonuç korunur |
 | Kontrollü yerel write | Base/read-set bağlı patch | Before/after uzlaştır; kör ikinci apply yok |
 | Doğrulanmış idempotent dış işlem | Destekli idempotency-key | Aynı mantıksal key, sonuç query/reconcile |
 | Belirsiz dış/yerel etki | Migration, push, non-idempotent API | UNKNOWN_OUTCOME; query veya yetkili karar |
@@ -676,7 +723,7 @@ Kendi DB'sine idempotency key yazmak uzak sağlayıcının idempotent olması de
 
 1. User/project/store lock ve yeni kernel generation alınır; eski generation fence edilir.
 2. Schema/journal sequence/payload/blob integrity ve migration durumu kontrol edilir.
-3. Açık operations taranır; PID tek başına yeterli değildir, process start identity ve supervisor/backend task ID eşlenir.
+3. Açık operations taranır; PID tek başına yeterli değildir, process start identity ve supervisor/backend task ID eşlenir. `RECONCILED` kaydı resolved outcome, kanıt ve reconciler actor taşır; yalnız bu etikete geçmek SUCCEEDED anlamına gelmez.
 4. Sandbox/process yaşamı doğrulanır; orphan child cleanup veya karantina uygulanır.
 5. Local before/after ve external reconciliation ile outcome belirlenir.
 6. Canlı workspace, spec, policy, check definition ve environment değişimleri çıkarılır.
@@ -715,10 +762,11 @@ Approval `approval_id, actor, scope, effect_class, target, args_constraint, expi
 
 - Güçlü Linux profile non-root/rootless, namespaces, read-only base, capability/seccomp sınırı ve resource controls kullanır; kullanılan primitive/version capability matrisiyle kaydedilir.
 - Ağ default deny'dır. Destination/typed operation/proxy enforcement DNS/IPv6/loopback/link-local/metadata service/redirect/rebinding ve Unix socket yollarını kapsar. Broad allowed endpoint yine egress kanalıdır; veri policy'si ayrıca uygulanır.
-- Docker/host agent/credential sockets ve host `.git` writable verilmez. Controlled Git operations host gate'inden; hooks/config/external filters untrusted kabul edilerek yapılır.
-- Secret genel model context/env/log'a eklenmez. Gerekli tool için short-lived scoped handle; stdout/stderr/artifact/support dump redaction ve access control gerekir.
+- Docker/host agent/credential sockets ve host `.git` writable verilmez. Controlled Git operations host gate'inden geçer. Host Git read komutları da sanitized env/config, kapalı pager, hooks, fsmonitor, external diff/textconv/filter ve credential-helper davranışıyla çalışır; desteklenmeyen repo extension/helper gereksinimi sandbox'a yöneltilir veya reddedilir. Yalnız `status/diff/log` adını allowlist'e almak yeterli değildir; initial discovery/capture da bu sınırdadır.
+- Secret genel model context/env/log'a eklenmez. Gerekli tool için short-lived scoped handle; stdout/stderr/artifact/support dump redaction ve access control gerekir. Credential alan untrusted process secret'ı okuyabilir: handle kullanımı onu process'ten gizlemez. Böyle işlem yalnız gereken secret/destination/effect ile, tercihen credential'ı repo koduna vermeyen broker üzerinden yürür. Bilinmeyen tool output'u ve secret-bearing artifact en kısıtlı input sensitivity/egress kapsamını devralır; redaction veya encoding taraması tek başına declassification kanıtı değildir.
 - Untrusted tool result/system instruction/memory ayrı trust etiketiyle bağlama alınır; kendiliğinden user/system yetkisi kazanmaz.
-- Tool risk/effect kernel registry'de tanımlıdır; model/MCP `readOnlyHint` veya açıklaması güvenlik kanıtı değildir.
+- Tool risk/effect kernel registry'de tanımlıdır; model/MCP `readOnlyHint` veya açıklaması güvenlik kanıtı değildir. Package install, test ve migration sınıfı isimden belirlenmez: izin verilen ağ, credential, fixture DB ve shared cache yazıları effect descriptor'a dahil edilir. Dış yazı ihtimali taşıyan test disposable computation sınıfına giremez.
+- Terminal/TUI'da untrusted log/path escape edilir; OSC clipboard/hyperlink, cursor/control sequence ve sahte approval UI üretilemez. Ham byte artifact ayrı erişim yolunda tutulur; JSONL string'leri geçerli biçimde encode edilir.
 - Backend eksik capability'de fail-closed veya kullanıcı tarafından açık kısıtlı profil; silent host execution fallback yoktur.
 
 Landlock gibi primitive'lerin ABI ve sınırlamaları backend seçimine bağlıdır; tek başına bütün egress/process assurance sayılmaz. [Linux Landlock belgesi](https://docs.kernel.org/userspace-api/landlock.html) bu sınırların resmi kaynağıdır.
@@ -773,7 +821,7 @@ Her sonuç source/hash/snapshot/trust/applicability/coverage/truncated metadata 
 serialized_input_tokens + output_budget + protocol_safety_margin <= model_limit
 ```
 
-Input içinde system/task/source/recent/schema zaten sayılmışsa schema ikinci kez eklenmez. Provider token-count semantiği conformance'ta tanımlanır. Usage unknown ise güvenli estimator payı vardır. Provider truncation default kapalıdır; kabul ediliyorsa açık policy ve manifest gerektirir.
+Bu eşitsizlik ortak context limiti olan profil içindir; varsa ayrı input ve max-output sınırları da denetlenir. Reasoning/opaque continuation/image/tool-schema token'larının hangi limite dahil olduğu adapter conformance'ında tanımlanır. Input içinde system/task/source/recent/schema zaten sayılmışsa schema ikinci kez eklenmez. Provider token-count semantiği conformance'ta tanımlanır. Usage unknown ise güvenli estimator payı vardır. Provider truncation default kapalıdır; kabul ediliyorsa açık policy ve manifest gerektirir.
 
 Zorunlu içerik sığmazsa constraint kesilmez: smaller bounded task, izinli larger model veya CONTEXT_TOO_SMALL. Privacy/model lock aşılamaz. Dinamik slot bütçeleri task phase/model/uncertainty/failure/coverage sinyaliyle ayarlanır; sabit yüzde ürün kuralı değildir.
 
@@ -887,7 +935,7 @@ Her node input/output contract, read/write scope, acceptance refs, required chec
 
 İlk ürün tek writer; sonra read-only discovery/review; ardından ayrı isolated candidate writers. Bütün merge/promotion seri integration queue'dan geçer; merge yeni snapshot ve verification'dır. Format/lockfile/migration/DB/cache/port/shared API mutex'leri açık scope'tur. Symbol ownership koordinasyon ipucudur; sandbox sınırı path/process'tir.
 
-AgentLease goal/criteria/paths/symbols/read/write/tool capabilities/context/token/time budget/parent evidence/output schema/base/policy/generation/expiry/renewal taşır. TTL monotonic, revoke ve crash reclaim kernel'de; stale generation output audit'te kalabilir ama publish edilemez.
+AgentLease goal/criteria/paths/symbols/read/write/tool capabilities/context/token/time budget/parent evidence/output schema/base/policy/generation/clock-domain/expiry/renewal taşır. TTL aynı clock domain'de monotonic; suspend sırasında süre davranışı backend profilinde test edilir. Kernel generation değişince eski lease'ler yenilenmiş sayılmaz: process reconcile/karantina ve yeni admission gerekir. Başka boot/host'un monotonic sayıları karşılaştırılmaz; remote worker TTL yetkili coordinator tarafından doğrulanır. Stale generation output audit'te kalabilir ama publish edilemez.
 
 Spawn yalnız bağımsızlık, contract, rezervasyon ve expected critical-path kazancı varsa olur. İlk parallel recursion depth 1; max slots konfigürasyonlu, parent global budget'a tabidir. Deadlock prevention lock ordering, bounded wait ve cancellation gerekir. Sınırsız agent sohbeti yerine typed blackboard Observation/Claim/Decision/Hypothesis/Warning/Dependency/Proposal/TestResult/Contract taşır.
 
@@ -898,6 +946,8 @@ Global ledger API para birimi/maliyet, input/output/reasoning tokens, wall time,
 Reservation tek DB transaction'ında kalan sınırı denetler. `reserve → charge/settle → release`; aynı kalan miktar iki child'a verilemez. Parent reservation'ın alt bölümü child'a tahsis edilir, yeni bağımsız bütçe oluşmaz. Provider fiyat/version ve usage source kaydedilir.
 
 Çağrı upper-bound output ve conservative input/price ile admit edilir. Usage partial/unknown ise reservation risk hesabında korunur. Timeout sonrası fatura sıfır varsayılmaz. Kesin/tahmini/reserved/unknown maliyet UI'da ayrıdır. Eksik sağlayıcı usage ile billing için mutlak hard cap iddiası yoktur; yeni admission stop edilir. Pause bekleme süresi ile active runtime ve wall-clock budget'ın tanımı config'te açıktır.
+
+İş bütçesi ile sınırlı kontrol rezervi ayrıdır. Bütçe tükenmesi yeni model/retrieval/repair işini durdurur; cancel, drain, receipt yazma ve bounded reconciliation için önceden ayrılmış süre/disk/işlem kapasitesi kullanılabilir ve toplam maliyette görünür. Bu rezerv yeni coding attempt'i finanse edemez. Disk low-watermark'ında yeni admission durur; kontrol rezervi de yetmezse fail-closed/read-only recovery olur, kaydedilmemiş sonuç başarılı gösterilmez. Usage kesinleşmeyen tutar settlement geldiğinde bir kez güncellenir; `charged`, `reserved`, `unknown` aynı tüketimi iki kez toplamamalıdır. Provider query mümkün değilse reservation kendiliğinden sıfırlanmaz; yetkili muhafazakâr write-off/limit revision kaydı gerekir.
 
 Watchdog repeated action/error/read/retrieval fingerprints, failure hypothesis, open obligations, yeni test bilgisi, blocker çözümü, deadlock ve token/time burn izler. Edit sayısı tek ilerleme ödülü değildir. Aynı koşulda tekrar başarısız action önce reassess; strategy change ve bounded retry; sonra typed blocker veya budget stop. Default retry eşiği fixture/eval'de sürümlenen policy'dir, correctness garantisi değildir. HTTP Retry-After/backoff jitter yalnız güvenli retry class'ta kullanılır.
 
@@ -916,39 +966,61 @@ Watchdog repeated action/error/read/retrieval fingerprints, failure hypothesis, 
 
 Baseline ilgili mevcut test arızası/ortam/scope'u kaydeder. Preexisting failure sessiz yok sayılmaz; ilgili yeni requirement hala doğrulanmalıdır. Tüm suite typo için otomatik şart değildir; araştırma dokümanı kod testine zorlanmaz.
 
-CheckDefinition yetkili kaynaktan gelir ve immutable digest ile korunur. Agent repo testleri ekleyebilir/değiştirebilir; diff ve zayıflatma değerlendirmesi gerekir. Required check silme/skip/expected result gevşetme normal repair değildir. Yeni test eski protected criterion'ın yerini otomatik almaz.
+İlk candidate mutation'dan önce SCOPING→READY sınırında ham gereksinim, mevcut acceptance policy ve ilgili baseline check'lerinden protected check origin kaydedilir. CheckDefinition yalnız komut metni değildir: test kodu, discovery/selection kuralları, runner/adapter sürümü, config, setup/fixture, yardımcı modül ve beklenen davranışın yürütme bağımlılıklarını bağlar. Bu kapsam çıkarılamıyorsa conservative geniş kapsam veya UNKNOWN gerekir. Mevcut repo testi baseline provenance taşır; sırf başlangıçta bulunduğu için bağımsız güvenlik oracle'ı sayılmaz. Protected beklenti/test-runner girdileri ile test edilen production source ayrı manifest rolleridir: production source değişimi normal candidate değişikliğidir; testin kabul beklentisini sessiz değiştirme yetkisi vermez.
+
+Agent repo testleri ekleyebilir/değiştirebilir; eski/yeni check manifest ve requirement coverage farkı kernel tarafından değerlendirilir. Required check silme, discovery'yi sıfırlama, skip/expected result gevşetme normal repair değildir. Bilinçli davranış değişiminde eski beklenti uygun scope revision ile değişebilir; orijinal beklenti ve gerekçe saklanır, eski testin yeni davranışta sonsuza dek geçmesi istenmez. Yeni agent testi eski protected criterion'ın yerine otomatik geçmez. İlk freeze öncesi ve sonrası aynı koruma geçerlidir.
 
 ### 21.2 Frozen verification ortamı
 
-RUNNING→VERIFYING geçişi criterion coverage'a bağlı protected CheckSet'i freeze eder. Verify.run yalnız bu set'in ID/digest'ini kabul eder; required check silme, skip veya expected result zayıflatma yetkili scope revision olmadan reddedilir. Repo test editi protected check set'e doğrudan yazamaz.
+RUNNING→VERIFYING geçişi, mutation öncesi protected origin ve yalnız yetkili revision'larından türeyen final CheckSet'i freeze eder. Verify.run yalnız bu set'in ID/digest'ini kabul eder; required check silme, skip veya expected result zayıflatma yetkili scope revision olmadan reddedilir. Repo test editi protected check set'e doğrudan yazamaz.
 
-Freeze writer ve pending mutation'ları kapatır. Immutable candidate disposable execution copy'ye alınır; source/check başlangıç digest'i doğrulanır. Gerekli build output/temp/cache ayrı scratch alanıdır. Source mutation engellenir veya kontrol sonunda integrity ile saptanır; mutation varsa receipt başarısız/UNKNOWN'dır, candidate PASS sayılmaz. Generator source üretiyorsa bu verification öncesi ayrı proposal/candidate freeze işidir.
+Freeze candidate writer'larını ve pending mutation'ları kapatır; bütün ilgili process tree'lerinin quiescence'ı runner tarafından doğrulanır. Immutable candidate disposable execution copy'ye alınır; source/check başlangıç digest'i doğrulanır. Verification boyunca candidate source ve protected check closure OS/backend seviyesinde read-only olmalıdır. Yalnız ön/son hash eşitliği geçici değiştirip geri alma saldırısını engellemez; bu sınırı enforce edemeyen backend strong verification üretmez. Bitimde integrity kontrolü ek savunmadır.
 
-Receipt exit/signal/timeout/runner/check/invocation/environment/candidate/spec, selected test/skip/rerun ve artifacts taşır. Stdout “PASS” parse etmek tek doğruluk kanıtı değildir. Dış fixture non-reproducible ise scope/unknown explicit'tir.
+Build output/temp/cache ayrı, attempt'a özel scratch alanıdır. Shared mutable cache/DB/fixture kullanılacaksa ayrı mutex/effect ve environment binding gerekir; içeriği doğrulanamıyorsa ilgili receipt UNKNOWN'dır. Çalışan testin kendi fixture DB'si disposable olabilir; dış/ortak DB yazısı ayrıca yetkilendirilir. Generator source üretiyorsa bu verification öncesi ayrı proposal/candidate freeze işidir. Süreç kendini veya child'ını arka planda bırakırsa root exit=0 tamamlanma değildir; process tree drain/kill ve sonuç uzlaşması gerekir. Candidate, check veya environment'a etkisi bilinmeyen process varken PASS yayınlanmaz.
+
+Receipt exit/signal/timeout/runner/check/invocation/environment/candidate/spec, discovered/executed tests, selected test/skip/rerun ve artifacts taşır. PASS için beklenen discovery/coverage sözleşmesi, trusted runner completion ve izinli result protocol birlikte sağlanır; exit=0 veya stdout “PASS” tek başına yeterli değildir. Repo kodu receipt dosyasına/kanalına yazamaz. Sıfır test ancak test dışı check olarak açık tanımlıysa kabul edilir; test check'inde beklenmedik zero discovery UNKNOWN/FAIL'dir. Kritik kriterlerde candidate process'in ürettiği başarı beyanı bağımsız gözlem sayılmaz; korunan dış observer/suite veya scoped insan kabulü gerekir. Dış fixture non-reproducible ise scope/unknown explicit'tir.
 
 Trust levels mevcut proje testi, yeni agent testi, bağımsız protected suite, insan kabulüdür; eşit sayılmaz. Kritik security/data loss/migration kriteri yalnız aynı LLM judge ile PASS olamaz. Flaky rerun tüm attempts'i kaydeder; best run seçilmez. Missing environment/check UNKNOWN veya BLOCKED; model PASS yapamaz.
 
 ### 21.3 Completion predicate
 
 ```text
-VERIFIED(candidate, spec, environment, policy) iff
-  goal coverage review has no unresolved required omission
+QUALITY_VERIFIED(subject, spec, environment, policy) iff
+  required intent/source spans are available with valid integrity
+  AND at least one required criterion exists
+  AND goal coverage review has no unresolved required omission
   AND every required criterion has an admissible PASS receipt
   AND required regression/invariant gates pass
-  AND receipt candidate/spec/check/environment bindings are valid
-  AND current policy admits evidence and delivery
-  AND candidate digest still equals frozen checked digest
-  AND no pending writer or unverified candidate mutation exists
+  AND receipt subject/candidate/spec/check/environment bindings are valid
+  AND current policy admits evidence
+  AND subject and source manifest digests still equal frozen checked digests
+  AND source/check integrity was enforced for the full verification interval
+  AND no pending writer or relevant live child process exists
   AND no UNKNOWN_OUTCOME effect intersects candidate, verification environment,
-      required checks, delivery target or another required obligation
-  AND frozen capture is ATOMIC/QUIESCENT or has successful final recapture proof
+      required checks or a required quality constraint
+  AND frozen verification input is an immutable coherent manifest
   AND active protected check_set digest and required constraint bindings match
-  AND delivery_policy is satisfied (CANDIDATE_ONLY or required confirmed delivery)
-  AND no required pending approval or constraint is unresolved
-  AND no required conflict, stale precondition or policy violation is unresolved
+  AND no required quality conflict, stale precondition or policy violation remains
+
+FULFILLMENT_SATISFIED(task, attempt) iff
+  required report/artifact manifest is durably published and accessible
+  AND delivery_policy is satisfied (CANDIDATE_ONLY or confirmed required delivery)
+  AND delivered content is bound to the reported candidate/artifact and quality
+  AND no required delivery approval, conflict, policy violation or UNKNOWN_OUTCOME remains
+
+STRICT_SUCCESS(task, attempt) iff
+  execution_state = TERMINATED AND terminal_outcome = FINISHED
+  AND quality_verdict = VERIFIED AND fulfillment_status = SATISFIED
+  AND no unresolved required obligation remains
 ```
 
-BEST_EFFORT capture tek başına final VERIFIED olamaz; freeze sonrası stable exact manifest re-capture ve source integrity check'i admissibility proof olarak gerekir. INCONSISTENT her zaman reddedilir. Unknown effect scope'u bilinmiyorsa intersecting kabul edilir. Candidate kalite raporu ile task fulfillment ayrıdır: delivery_policy LIVE_APPLY_REQUIRED ise yalnız test edilmiş candidate task'ı VERIFIED yapmaz; confirmed apply/current target binding gerekir. Default CANDIDATE_ONLY teslimde candidate paketinin tamamlanması yeterlidir.
+`subject`, kod görevi için frozen candidate; inceleme/tasarım için frozen work-product artifact + kaynak manifest'idir. Final durum raporu bu sonucu paketler; kendi başarı etiketini kendi kanıtı olarak kullanamaz.
+
+BEST_EFFORT live capture tek başına o anda tutarlı bir user workspace görüntüsü alındığını kanıtlamaz. İzinli scope'un exact byte'ları immutable candidate'a materialize edilir, writer'lar durdurulur ve verification bu sabit manifest üzerinde yapılırsa candidate doğrulanabilir; canlı workspace'in tarihsel atomikliği iddia edilemez. Eksik gerekli kaynak, INCONSISTENT manifest veya belirsiz filesystem semantics kabul edilmez. Live target ayrıca apply precondition'larıyla uzlaştırılır. Unknown effect scope'u bilinmiyorsa intersecting kabul edilir.
+
+Quality teslimden bağımsız hesaplanır. LIVE_APPLY_REQUIRED için candidate VERIFIED olsa da apply beklerken fulfillment PENDING/CONFLICTED/UNKNOWN olabilir ve CLI 0/strict success oluşmaz. Apply yeni birleşim üretirse bu içerik yeniden candidate olarak doğrulanır; eski quality yeni hedefe taşınmaz. CANDIDATE_ONLY'de changeset/report paketi durable yayınlanınca fulfillment sağlanabilir. Sonradan isteğe bağlı apply ayrı DeliveryReceipt üretir, tarihsel task sonucunu yeniden yazmaz.
+
+Salt inceleme/tasarım görevinde kaynak baseline değişmeden kalabilir; doğrulanan çıktı frozen report artifact'ı, kaynak manifest'i ve kapsam kriterleridir. Çıktının kendisi de receipt/artifact digest'ine bağlanır; zorla kod değişikliği veya kod testi istenmez. Başlangıç zaten istenen durumu karşılıyorsa gerekçeli no-op aynı requirement checks ve raporla teslim edilebilir. Boş requirement listesi, eksik ham niyet veya yalnız model final iddiası vacuous PASS üretemez; eksik niyet için kullanıcıdan kapsamın yeniden kurulması gerekir.
 
 Goal coverage review model yorumunun eksiksizlik garantisi değildir; critical scope kaynak/bağımsız check/insanla güçlendirilir. Bir criterion human_review ise scoped yetkili insan receipt'i olabilir.
 
@@ -956,7 +1028,9 @@ Policy epoch dispatch fencing içindir. Receipt executed epoch'i immutable kalı
 
 Spec revision değişirse requirement bağları yeniden incelenir. Aynı semantiği koruyan kriter reuse ancak explicit equivalence/admissibility kaydıyla; varsayılan conservative invalidation'dır. Source değişmiş final candidate'a eski PASS taşınmaz.
 
-Waiver actor/scope/spec/candidate/gerekçe ile ayrı verdict'tir; PASS'e dönüşmez ve strict benchmark success değildir. Final report requirement matrix, current candidate/environment, PASS/FAIL/UNKNOWN/WAIVED/skips/baseline, diff, unresolved risk/effect, usage ve delivery status içerir.
+Waiver actor/scope/spec/candidate/gerekçe ile ayrı verdict'tir; PASS'e dönüşmez ve strict benchmark success değildir. Current admissibility ile değerlendirilen required criterion/gate FAIL veya doğrulanmış invariant ihlali varsa quality FAILED olur. FAIL yok, en az bir gerekli criterion/gate açık veya UNKNOWN ise PARTIAL (hiç admissible sonuç yoksa UNVERIFIED) olur. Bütün gerekli kriterler PASS veya yetkili WAIVED, en az biri WAIVED ve waive edilemeyen guard'lar sağlamsa ACCEPTED_WITH_WAIVER; hepsi PASS ve predicate geçiyorsa VERIFIED olur. Kriterler PASS görünse bile integrity/coverage/process guard'ı UNKNOWN ise VERIFIED olmaz; aynı PARTIAL/UNVERIFIED kuralı uygulanır. Kernel güvenlik invariant'ı ve izin ihlali waive edilemez. Eksik ortam için önce ilgili waiting/blocker gösterilir; bu, otomatik quality PASS veya terminal failure değildir.
+
+Final report requirement matrix, current candidate/artifact/environment, PASS/FAIL/UNKNOWN/WAIVED/skips/baseline, diff, unresolved risk/effect, usage, fulfillment ve teslim status içerir. Yayınlanmış tarihsel rapor değişmez; sonradan kanıt unavailable/stale olduğunda current admissibility ayrı gösterilir. Başarılı final transaction §12'de strict success'in ön koşullarını doğrular; yukarıdaki terminal predicate commit edilmiş sonucu tanımlar.
 
 
 ### 21.4 Uçtan uca kabul örneği: refresh token rotation
@@ -995,6 +1069,8 @@ viber diff TASK [--candidate ID]
 viber apply TASK --candidate ID
 viber restore TASK --checkpoint ID
 viber steer TASK "..."
+viber requests TASK
+viber respond TASK --request ID --response-file PATH
 viber attach TASK [--after SEQ]
 viber explain TASK --item ID
 viber inspect TASK --at SEQ
@@ -1011,14 +1087,14 @@ Exit codes `run/resume` görev yürütme invocation'ları içindir:
 
 | Kod | Anlam |
 |---|---|
-| 0 | Strict VERIFIED final result |
-| 2 | PARTIAL/UNVERIFIED/ACCEPTED_WITH_WAIVER final result |
+| 0 | FINISHED + quality VERIFIED + fulfillment SATISFIED; strict success |
+| 2 | FINISHED; quality FAILED dışındaki strict success olmayan kısıtlı final result |
 | 3 | Gerekli user/resource/approval/block nedeniyle invocation devam edemedi |
 | 4 | Runtime/task failure; quality FAILED de kapsamıyla raporlanır |
 | 5 | Budget exhausted |
 | 130 | Cancellation/interrupted invocation |
 
-`status/diff/inspect/doctor/export` gibi kontrol komutlarında 0 komutun başarıyla cevap verdiğini ifade eder; task'ın VERIFIED olduğunu ifade etmez. Structured result her zaman lifecycle/outcome/quality alanlarını ayrı içerir. CLI 3 task'ı terminal failure yapmaz. Detached launch başarılıysa control invocation 0 ve task ID döner; tamamlanma daha sonra izlenir.
+`status/diff/inspect/doctor/export/requests/respond` gibi kontrol komutlarında 0 komutun başarıyla cevap verdiğini ifade eder; task'ın strict success olduğunu ifade etmez. Structured result her zaman lifecycle/outcome/quality/fulfillment alanlarını ayrı içerir. Birden fazla durum mevcutsa run/resume exit önceliği CANCELLED/interrupted=130, BUDGET_EXHAUSTED=5, FAILED veya final quality FAILED=4, nonterminal bekleme=3, strict success=0, diğer FINISHED=2 şeklindedir. Önceki attempt'in VERIFIED olması yeni cancelled attempt'i 0 yapmaz. CLI 3 task'ı terminal failure yapmaz. Detached launch başarılıysa control invocation 0 ve task ID döner; tamamlanma daha sonra izlenir.
 
 ### 22.2 TUI davranışı
 
@@ -1057,7 +1133,9 @@ Temel slash yüzeyi `/plan /diff /status /pause /resume /model /queue /restore`;
 }
 ```
 
-Stdout yalnız JSONL; insan logu stderr. Envelope sürümlü; event replay at-least-once olabilir, event ID/seq ile client dedup eder. Cursor reconnect contiguous sequence veya retention gap bildirimi verir; silently skip yok. Büyük payload inline değil policy-controlled artifact ref'tir. Yavaş/kopuk client kernel'i bloklamaz; bounded buffer ve cursor replay vardır.
+Stdout yalnız JSONL; insan logu stderr. Envelope sürümlü; event replay at-least-once olabilir, event ID/seq ile client dedup eder. Cursor reconnect retained history içinde contiguous sequence verir; retention gap varsa earliest available cursor ve current state snapshot ref'i ile açık resync gerekir, silently skip yok. İlerleme text_delta gibi geçici stream öğeleri ayrı stream cursor taşır; durable task event'iymiş gibi kayıpsız replay sözü verilmez. Büyük payload inline değil policy-controlled artifact ref'tir. Yavaş/kopuk client kernel'i bloklamaz; bounded buffer ve cursor replay vardır.
+
+Headless client `requests` ile bekleyen isteği alır; `respond` command'ı `command_id, task_id, request_id, attempt, expected_spec_version, expected_policy_digest, action_digest, response` taşır. Kernel actor yetkisini, response schema'yı ve current binding'i denetler; expired/superseded istek STALE_REQUEST olur. Approval eylemi otomatik tamamlamaz; current admission tekrar gerekir. Aynı command_id + aynı payload, aynı kayıtlı sonucu döndürür; farklı payload COMMAND_ID_CONFLICT olur. Dedup kaydı retention süresince tutulur, eski command'ın garantisi sona ermişse effect reconcile edilmeden yeniden yürütülmez. Onay olmadan exit 3 dönmek task'ı silmez; CI görünür request ID ile sonra devam edebilir.
 
 Supervisor IPC user ACL'li Unix socket/named pipe, peer identity ve protocol handshake kullanır. Yerel herkese açık TCP default değildir. Uzaktan API Faz G ayrı auth/tenant/scope tasarımıdır. UI doğrudan DB yazamaz; command/event API kullanır.
 
@@ -1087,7 +1165,7 @@ Araç envelope'u `request_id, task_id?, spec_version?, snapshot_id/base_snapshot
 | workspace.apply_live/restore | candidate/checkpoint, target_preimage | Ayrı delivery policy ve containment | Delivery receipt veya typed conflict |
 | task/plan/context propose | typed candidate objects | User intent/current spec | Kernel validation; izin/kriter otomatik değişmez |
 
-Tool sonucu `status, data/artifact_refs, observation_refs, warnings, coverage, error?` taşır. Error `code, message, retryable, retry_class, affected_scope, required_action` biçimindedir. Asgari code'lar: STALE_BASE, CONFLICT, POLICY_DENIED, APPROVAL_REQUIRED, UNSUPPORTED_CAPABILITY, CONTEXT_TOO_SMALL, BUDGET_UNAVAILABLE, RESOURCE_WAIT, TIMEOUT, UNKNOWN_OUTCOME, ARTIFACT_UNAVAILABLE, STORE_INTEGRITY_ERROR, PROVIDER_PROTOCOL_ERROR.
+Tool sonucu `status, data/artifact_refs, observation_refs, warnings, coverage, error?` taşır. Error `code, message, retryable, retry_class, affected_scope, required_action` biçimindedir. Asgari code'lar: STALE_BASE, CONFLICT, POLICY_DENIED, APPROVAL_REQUIRED, UNSUPPORTED_CAPABILITY, CONTEXT_TOO_SMALL, BUDGET_UNAVAILABLE, RESOURCE_WAIT, TIMEOUT, UNKNOWN_OUTCOME, ARTIFACT_UNAVAILABLE, STORE_INTEGRITY_ERROR, PROVIDER_PROTOCOL_ERROR, STALE_REQUEST, COMMAND_ID_CONFLICT.
 
 Schema-valid tool arguments güvenli/semantik doğru sayılmaz; kernel effect/path/precondition kontrolü ayrıca gerekir. Bounded output truncation açık metadata ve artifact cursor verir. Tool exception terminal task failure olmak zorunda değildir; retry class ve remaining obligations belirler.
 
@@ -1110,7 +1188,11 @@ OFF/LOCAL_ONLY/ANONYMIZED_TELEMETRY/OPT_IN_TRAINING/ENTERPRISE_POLICY kullanıc�
 
 Delete önce active processes/leases/intents için quiescence veya cancellation/reconciliation yapar; çalışan worker silinen store'a yazmaya devam edemez. UNKNOWN_OUTCOME/recovery için gerekli minimal kayıt silinirse recovery kaybı açık olmalıdır. Varsayılan garbage collection bu kayıtları pin eder; explicit privacy deletion yetkisi raw/sensitive içeriği silebilir, redacted tombstone mümkünse korunur ve dış etki artık geri kazanılabilir diye sunulmaz. Quiescence sağlanamazsa hard deletion bekletilir; raw sensitive payload için ayrı redaction/deletion yolu kernel operasyon kaydının asgari durum bütünlüğünü korur. Explicit irreversible deletion mevcut user/policy yetkisine tabidir; otomatik retention aynı eylem değildir.
 
-Retention raw payload ve metadata için ayrı; delete blob/index/vector/summary/checkpoint/candidate/cache/crash/support bundle türevlerini kapsar. Export edilmiş veya remote provider'da tutulmuş verinin yerel delete ile geri alınması vaat edilmez; kontrol sınırı gösterilir. Encryption keys repo/source'da olmaz; OS credential store/key management kullanılır. Disk encryption threat model'e uygun ayrı capability'dir; public hash redaction yerine geçmez.
+Retention raw payload ve metadata için ayrı; delete blob/index/vector/summary/checkpoint/candidate/cache/crash/support bundle ve yönetilen backup türevlerini kapsar. Raw input/log/secret-bearing event verisi silinebilir payload'da tutulur; kalıcı journal envelope'u bu içeriği yeniden barındırmaz. Yetkili deletion event'i digest/tombstone ile integrity zincirini açıklanabilir tutar; silinmiş payload replay ile yeniden uydurulmaz.
+
+Task silme o scope'un erişim/ref'lerini kaldırır. Aynı blob başka izinli scope'ta pin'liyse fiziksel içerik bütünüyle silindi denmez; content-wide silme ayrıca bu kapsamları kapsayan yetki ve deletion manifest'i gerektirir. Backup purge/şifreli key imhası destekleniyorsa doğrulanır; kalan yönetilen kopyalar tamamlanana kadar deletion PENDING/PARTIAL gösterilir. Restore güncel deletion kayıtlarını uygulamadan eski payload'ları erişime açamaz. Güncel deletion watermark bulunamayan eski backup otomatik trusted restore edilemez; recovery sınırı açıklanır. OS/disk fiziksel kalıntılarının yokluğu ayrıca desteklenmiş capability olmadıkça garanti edilmez.
+
+Export edilmiş veya remote provider'da tutulmuş verinin yerel delete ile geri alınması vaat edilmez; kontrol sınırı gösterilir. Encryption keys repo/source'da olmaz; OS credential store/key management kullanılır. Disk encryption threat model'e uygun ayrı capability'dir; public hash redaction yerine geçmez.
 
 ### 23.3 Tool kernel ve extension noktaları
 
@@ -1188,11 +1270,25 @@ Sürüm release'inde test raporu, supported capability matrix, store/protocol ve
 
 ## 26. Bütün kodlama fazları
 
-Bu bölüm Viber’in (tarihsel belgelerdeki adıyla Harness) uygulanabilir teslim sırasıdır. Fazlar takvim veya ekip kapasitesi tahmini değildir; her fazın çıkış koşulları sağlanmadan sonraki fazın varsayılan özelliği açılmaz. Bu belgede geçen tüm sayısal değerler başlangıç önerisi veya release hedefidir; ölçülmüş performans iddiası değildir.
+Bu bölüm Viber’in uygulanabilir teslim sırasıdır. Fazlar takvim veya ekip kapasitesi tahmini değildir; her fazın çıkış koşulları sağlanmadan sonraki fazın varsayılan özelliği açılmaz. Performans/adoption sayıları ölçülmemiş HEDEF'tir; zorunlu capability sayısı, protokol sınırı ve kritik testlerin %100 geçmesi bağlayıcı kabul şartıdır.
+
+B'nin teknik önizlemesi dahil, çalışan her özellik aşağıdaki güvenlik tabanına uyar:
+
+| İlk çalışan çekirdekte zorunlu | Sonraki fazda gelişen taraf |
+|---|---|
+| Ham niyet, check origin, boş kriter reddi ve candidate/artifact-bound verdict | C context seçimi, D rapor/TUI ergonomisi |
+| Bounded context/token preflight, zorunlu input/policy korunması | C stable prefix, compaction ve ince ayarlı packing |
+| Snapshot/env/check değişiminde conservative evidence invalidation | C dependency bazlı seçici invalidation |
+| Durable input barrier, pause/resume/cancel, bağlı request/response | D steering composer, queue, detach/attach |
+| Egress/sensitivity gate, telemetry/training OFF, asgari retention/delete | D kapsamlı privacy/export/onboarding UX |
+| Process tree izolasyonu, scratch ayrımı, source/check read-only verification | D platform/provider hardening |
+| Store owner, checkpoint/replay, kontrol rezervi ve unknown effect reconciliation | C history paging, D supervisor yönetimi |
+
+B'de bir capability yoksa açık unsupported döner; korumasız fallback kullanıma açılmaz. Özellik optimizasyonu adoption gate'i geçemese bile bu asgari doğruluk sınırları korunur.
 
 ### Faz A — Riskli varsayımları ve sözleşmeleri doğrulama
 
-Ön koşul: Yoktur. Faz başlamadan ADR 001–008, destek matrisi, tehdit modeli ve bu PRD’nin gereksinim kimlikleri taslak olarak dondurulur.
+Ön koşul: Yoktur. Faz başlamadan ADR 001–013, destek matrisi, tehdit modeli ve bu PRD’nin gereksinim kimlikleri taslak olarak dondurulur.
 
 İş paketleri:
 
@@ -1214,11 +1310,12 @@ Testler; crash sonrası ilk dosya yazımı, kullanıcı editinden sonra stale pa
 
 İş paketleri:
 
-- Tek writer kernel, input journal, event sequence, state machine, writer lock, policy epoch, fencing token ve atomik metadata transaction’ını uygula.
+- Store başına tek writer kernel, input journal, global/task event sequence, state machine, writer lock, policy epoch, fencing token ve atomik metadata transaction’ını uygula. İlk foreground sürüm tek aktif task ile başlayabilir; ikinci CLI aynı owner'a bağlanır.
 - Baseline/candidate snapshot, operation intent/receipt, retry sınıfı, budget reserve/settle/release ledger ve recovery durumlarını uygula.
 - Model adapter, lexical search, read receipt, patch transaction ve sandbox process araçlarını kernel capability gate’inden geçir.
-- Requirement → check → receipt → verdict zincirini kur. Receipt candidate snapshot, requirement version, environment fingerprint, policy epoch ve check-definition digest’e bağlı olmalıdır.
-- `viber run`, `status`, `diff`, `pause`, `resume`, `cancel`, `inspect`, `apply`, `restore` ve JSONL headless akışını aynı kernel API’si üzerinden sun. Lifecycle sonucu ile CLI exit code ayrı alanlardır.
+- Mutation öncesi protected origin → requirement/check closure → receipt → quality/fulfillment zincirini kur. Receipt candidate/artifact snapshot, requirement version, environment fingerprint, policy epoch ve check-definition digest’e bağlı olmalıdır. §21'in read-only verification ve process quiescence koşulları ilk sürümde zorunludur.
+- `viber run`, `status`, `diff`, `pause`, `resume`, `cancel`, `inspect`, `requests`, `respond`, `apply`, `restore`, asgari `delete` ve JSONL headless akışını aynı kernel API’si üzerinden sun. Lifecycle, kalite, fulfillment ve CLI exit code ayrı alanlardır. Unsupported apply backend'i patch teslim eder.
+- Asgari token preflight, conservative freshness, input barrier, privacy/egress gate, kontrol rezervi ve retention/deletion contract'ını uygula; bunları C/D'ye erteleme.
 - Sahte model ve fault injection ile deterministic replay ve recovery testleri ekle.
 
 Dikey demo; orta boy bir değişiklik sırasında süreç öldürülmeli, kullanıcı dosya değiştirmeli, resume edilmeli, eski patch reddedilmeli ve yeni candidate yeniden doğrulanmalıdır. Harici etkinin sonucu bilinmiyorsa kör retry yapılmaz; reconciliation veya `UNKNOWN_OUTCOME` üretilir. Test çıktısında PASS yazması, güvenilir runner receipt’i olmadan doğrulama sayılmaz.
@@ -1237,7 +1334,7 @@ Benimseme ölçütü: tek agent baseline’ı tekrarlanabilir recovery ve candid
 
 Testler uzun görev/resume kohortu, context overflow, malformed history, stale evidence, lockfile değişimi, bozuk index, watcher kaybı, provider değişimi ve summary başarısızlığını kapsar. Çıkış kapısı; zorunlu kural kaybı, eski evidence’ın current fact olarak kullanılması ve kısa görevlerde kabul edilemez latency regresyonu olmamasıdır.
 
-Benimseme ölçütü: aynı model ve bütçede hedef kohortta verified success, recovery, insan rework ve maliyet birlikte iyileşiyorsa context katmanı varsayılan yapılır. Yalnız prompt token azalması yeterli değildir.
+Benimseme ölçütü: aynı model ve bütçede §27'nin bağımsız başarı/maliyet adoption kuralı ve önceden belirlenen recovery/insan rework/latency non-regression sınırları geçerse context optimizasyonu varsayılan yapılır. Asgari correctness tabanı zaten zorunludur; yalnız prompt token azalması yeterli değildir.
 
 ### Faz D — Günlük kullanım ve beta
 
@@ -1247,7 +1344,7 @@ Benimseme ölçütü: aynı model ve bütçede hedef kohortta verified success, 
 
 Testler kurulum, doctor, reconnect, event cursor, exit code, privacy egress, retention deletion, conflict recovery, offline profil ve kullanıcı editlerinin korunmasını kapsar. Pilot başlangıçta **öneri olarak** 5–10 geliştiriciyle yürütülebilir; bu istatistiksel başarı kanıtı değildir.
 
-Çıkış kapısı: kurulum ve temel komut sözleşmesi kararlı, reconnect kayıpsız, privacy ayarları gerçek egress’i etkiliyor, unsupported backend açıkça gösteriliyor ve apply/restore sessiz overwrite yapmıyordur. Benimseme ölçütü; kısa görevlerde belirgin baseline yavaşlaması, anlaşılamayan recovery ve zorunlu onay artışı görülmemesidir.
+Çıkış kapısı: kurulum ve temel komut sözleşmesi kararlı, retained durable events için reconnect kayıpsız ve retention gap açık, privacy ayarları gerçek egress’i etkiliyor, unsupported backend açıkça gösteriliyor ve apply/restore sessiz overwrite yapmıyordur. Benimseme ölçütü; kısa görevlerde belirgin baseline yavaşlaması, anlaşılamayan recovery ve zorunlu onay artışı görülmemesidir.
 
 ### Faz E — Repository intelligence deneyleri
 
@@ -1263,7 +1360,7 @@ Testler bozuk index, kaçırılmış watcher, unsupported language, `not_found` 
 
 Ön koşul: tek agent baseline’ı güvenilir, metrikleri kararlı ve verification receipt’leri bağımsızca incelenebilir olmalıdır.
 
-Önce salt okuma worker’ları; sonra izole candidate writer’ları; ardından lease expiry, generation/fencing token ve tek integration queue uygulanır. Her merge yeni candidate snapshot ve yeni verification gerektirir. Model routing sticky seçimle başlar; phase-level switch maliyet, cache kaybı, context taşıma ve ek çağrılarla birlikte ölçülmeden varsayılan yapılmaz. Recursion başlangıçta depth 1 ile sınırlıdır.
+Önce scoped lease, clock-domain/expiry, generation/fencing ve ortak budget admission uygulanır; ardından salt okuma worker'ları açılır. İzole candidate writer'ları açılmadan önce mutex ve tek integration queue tamamlanır. Her merge yeni candidate snapshot ve yeni verification gerektirir. Model routing sticky seçimle başlar; phase-level switch maliyet, cache kaybı, context taşıma ve ek çağrılarla birlikte ölçülmeden varsayılan yapılmaz. Recursion başlangıçta depth 1 ile sınırlıdır.
 
 Testler shared API/lockfile/migration conflict’i, lease’i dolan worker, atomik bütçe rezervasyonu, merge sonrası yeniden doğrulama, reviewer bağımsızlığı ve router fallback’i kapsar.
 
@@ -1289,12 +1386,12 @@ Bu tablo faz başlıklarını somut kodlama paketlerine dönüştürür. Paket t
 | A3 Sandbox spike | A1 | FS/network/process/resource backend profile | Gerçek escape/child/cancellation suite |
 | A4 Provider spike | A1 | İki protocol ve bir local tool round-trip | IDs, streaming cut, usage/continuation |
 | A5 Fixture/language ADR | A2–A4 | Fake model, fault runner, test repos, Rust/Go kararı | Reproducible spike manifests |
-| B1 Store/reducer | A1/A5 | Journal/projection/blob publication, migrations | Reducer replay, disk/blob/crash boundaries |
-| B2 Kernel admission | B1/A3 | State machine, epoch/generation, gate/lock | Illegal transition ve old authority reddi |
-| B3 Resource/operation | B2 | Reservation, intents, effects, start identity | Concurrent reserve ve unknown outcome |
+| B1 Store/reducer | A1/A5 | Store owner, sequence/reducer/checkpoint, blob publication, backup/migration, asgari retention/delete | Replay, GC/backup/delete ve disk/blob/crash boundaries |
+| B2 Kernel admission | B1/A3 | State machine, secure command IPC, input barrier, epoch/generation, gate/lock, privacy/egress | Illegal transition, old authority ve unauthorized egress reddi |
+| B3 Resource/operation | B2 | Reservation/kontrol rezervi, intents/effects, process tree start identity | Concurrent reserve, disk/budget stop ve unknown outcome |
 | B4 Candidate tools | B1–B3/A2 | Read/list/search, proposals, patch/freeze | Read-set/phantom/conflict/partial write |
-| B5 Verification | B4 | Protected checks, receipt/admissibility/verdict | Wrong candidate/test source/skip reddi |
-| B6 Recovery CLI | B1–B5/A4 | Run/status/diff/pause/resume/cancel/inspect/JSONL | Kill–user edit–resume vertical demo |
+| B5 Verification | B4 | Mutation öncesi protected origin/closure, read-only check, quality/fulfillment | Wrong candidate, zero test, child process ve test weakening reddi |
+| B6 Recovery CLI | B1–B5/A4 | Run/status/diff/pause/resume/cancel/inspect/requests/respond/JSONL, bounded context | Kill–user edit–resume; stale response ve command dedup |
 | B7 Delivery primitive | B4/B6 | Conservative apply/restore core API | Preimage ve file-by-file recovery |
 | C1 Context compiler | B6 | Slots, hard filters, token preflight, manifest | Required constraints/protocol blocks korunur |
 | C2 Typed checkpoint | B1/B6 | Durable task snapshot/history paging | Reducer/checkpoint equality |
@@ -1328,44 +1425,51 @@ Bu tablo faz başlıklarını somut kodlama paketlerine dönüştürür. Paket t
 
 ## 27. Benchmark protokolü ve metrikler
 
-İki karşılaştırma ayrıdır. Harness etkisinde aynı model sürümü, reasoning/decoding ayarı, tool yeteneği, environment ve bütçe kullanılır; yalnız harness bileşeni değiştirilir. Baseline, güçlü bir tool loop + transcript + bounded summary + aynı doğrulama araçlarından oluşur. Ürün etkisinde rakipler önerilen ayarlarıyla karşılaştırılır ve sonuç harness’e nedensel pay olarak yazılmaz.
+İki karşılaştırma ayrıdır. Harness etkisinde aynı model sürümü, reasoning/decoding ayarı, tool yeteneği, environment ve bütçe kullanılır; yalnız harness bileşeni değiştirilir. Baseline, güçlü bir tool loop + transcript + bounded summary + aynı doğrulama araçlarından oluşur. Güvenlik/effect sınırı ve bağımsız final evaluator bütün kollarda ortaktır; baseline'ın Viber'e özel VERIFIED etiketi üretmesi gerekmez. Ürün etkisinde rakipler önerilen ayarlarıyla karşılaştırılır ve sonuç harness’e nedensel pay olarak yazılmaz.
 
-Başlangıç veri kümesi **öneri olarak** 120 görevdir: 30 kısa/açık değişiklik, 30 çok dosyalı bug/feature, 20 migration/refactor, 20 compaction/resume, 20 eksik test/bozuk ortam/belirsiz istek. Repo’lar ve mümkünse görev tarihleri development/validation/holdout olarak ayrılır. History yalnız başlangıç zamanından önceki izinli veriyi görür; çözüm patch’i, sonraki issue yorumu ve etiketler gizlenir. İlk tarama önceden sabitlenmiş bir run/task ile yapılır. Karar kohortlarında **öneri olarak** en az üç tekrar yapılır; en iyi run seçilmez. Primary tek-run success ve repeated-run sonuçları ayrı raporlanır. Tekrarlı deneyde her task'ın PASS indicator ortalaması alınır, task'lar eşit ağırlıkla aggregate edilir; herhangi bir run geçti diye task PASS sayılmaz.
+Başlangıç veri kümesi **öneri olarak** 120 görevdir: 30 kısa/açık değişiklik, 30 çok dosyalı bug/feature, 20 migration/refactor, 20 compaction/resume çözüm görevi ve 20 eksik test/bozuk ortam/belirsiz istek kontrolü. Son 20 kontrolün beklenen davranışı (clarify, safe block, doğru UNKNOWN veya izinli repair) deneyden önce tanımlanır; Safe Handling Rate ayrı ölçülür. Bunlar çözülen kod görevi sayısını şişirmez. Çözüm kohortuna atanıp sonradan environment/timeout/unsupported nedeniyle bitirilemeyen görev ise ana paydadan çıkarılmaz. Repo’lar ve mümkünse görev tarihleri development/validation/holdout olarak ayrılır. History yalnız başlangıç zamanından önceki izinli veriyi görür; çözüm patch’i, sonraki issue yorumu ve etiketler gizlenir. İlk tarama önceden sabitlenmiş bir run/task ile yapılır. Karar kohortlarında **öneri olarak** en az üç tekrar yapılır; en iyi run seçilmez. Primary tek-run success ve repeated-run sonuçları ayrı raporlanır. Tekrarlı deneyde her task'ın PASS indicator ortalaması alınır, task'lar eşit ağırlıkla aggregate edilir; herhangi bir run geçti diye task PASS sayılmaz.
 
 Her run manifest’i model/provider/endpoint, adapter, prompt, kernel, tool, dependency, image, dataset, pricing sürümü, seed, token, para birimi, yerel compute, süre, retry ve privacy profilini içermelidir. Görev manifest’i requirement sürümü, başlangıç snapshot’ı, kabul kriterleri, beklenen check tanımları ve görev kohortunu içermelidir. Sonuçlar JSONL olarak run, task, attempt, operation, receipt ve artifact seviyelerinde saklanır.
 
 Ana metrikler:
 
 ```text
-Verified Success Rate = strict VERIFIED task sayısı / tüm atanmış task sayısı
-Cost per Verified Task = başarısızlar dahil toplam run maliyeti / strict VERIFIED task sayısı
-False Verified Rate = bağımsız kontrolde başarısız VERIFIED run / tüm VERIFIED run
+Independent Verified Success Rate = bağımsız kabulü geçen çözüm run sayısı / tüm atanmış çözüm run sayısı
+Strict Viber Success Rate = bağımsız kabulü geçen STRICT_SUCCESS çözüm run sayısı / tüm atanmış çözüm run sayısı
+Cost per Independently Verified Run = başarısızlar dahil çözüm kohortu maliyeti / bağımsız kabulü geçen çözüm run sayısı
+False Verified Rate = bağımsız kalite kontrolünde başarısız quality=VERIFIED run / tüm quality=VERIFIED run
+False Success Rate = bağımsız teslim/kabulü geçemeyen STRICT_SUCCESS run / tüm STRICT_SUCCESS run
+Safe Handling Rate = beklenen güvenli davranışı sağlayan kontrol run sayısı / tüm atanmış kontrol run sayısı
 Recovery Success = tutarlı şekilde recovery olan uygulanabilir injected case / tüm uygulanabilir injected case
 Stale Admission Rate = bilinen geçersiz bağla kabul edilen consequential operation / kontrol edilen operation
 Human Rework = teslimden kabul edilmiş changeset’e kadar ölçülen inceleme+düzeltme süresi
 ```
 
-Sıfır VERIFIED görevinde cost-per-verified tanımsızdır. Sıfır gözlenen false VERIFIED sıfır gerçek risk olarak sunulmaz; payda ve güven aralığı belirtilir. Ek metrikler: time-to-first-useful-change, verification latency, recovery latency, context overflow, constraint retention, index fallback, budget overshoot, conflict rate, event loss ve unauthorized egress count. Quality, latency ve cost erken tek skora sıkıştırılmaz; Pareto görünümü ve görev hedefi kullanılır.
+Tekrar sayısı tüm task'larda eşitse run oranı task başına PASS ortalamasına eşittir; eşit değilse önceden tanımlanan task ağırlığı kullanılır. Primary tek-run ve repeated-run paydaları karıştırılmaz. Sıfır bağımsız başarılı çözümde cost-per-verified tanımsızdır. Sıfır quality=VERIFIED beyanında False Verified Rate tanımsızdır; sıfır gözlenen yanlış beyan sıfır gerçek risk olarak sunulmaz; payda ve güven aralığı belirtilir. Ek metrikler: time-to-first-useful-change, verification latency, recovery latency, context overflow, constraint retention, index fallback, budget overshoot, conflict rate, event loss ve unauthorized egress count. Quality, latency ve cost erken tek skora sıkıştırılmaz; Pareto görünümü ve görev hedefi kullanılır.
 
-Ablation sırası: `B0` güçlü basit loop; `B1` typed task/checkpoint; `B2` snapshot-bound observation/verification; `B3` context compiler/compaction; `B4` symbol/graph; `B5` history/semantic/reranker; `B6` bounded multi-agent; `B7` model routing. Her adımın etkileşimleri ayrıca ölçülür; güvenlik sınırları deney için gevşetilmez.
+Ablation kimlikleri teslim paketi B1–B7 ile karışmaması için `ABL-0` güçlü basit loop; `ABL-1` typed task/checkpoint; `ABL-2` agent'a sunulan snapshot-bound observation/verification; `ABL-3` context compiler/compaction; `ABL-4` symbol/graph; `ABL-5` history/semantic/reranker; `ABL-6` bounded multi-agent; `ABL-7` model routing'dir. Her adımın etkileşimleri ayrıca ölçülür. Ortak sandbox, kullanıcı veri koruması ve bağımsız exact-candidate evaluator ablate edilmez; yalnız ajan çalışma stratejisi/bilgi yüzeyi değişir.
 
-İstatistiksel sonuçlar repo bazlı eşleştirilmiş farklarla ve belirsizlik aralıklarıyla raporlanır. Küçük örneklemde “üstünlük kanıtlanmadı” denir. Yeni özelliğin varsayılan olması için **başlangıç politika hedefi olarak** aynı bütçede en az 5 yüzde puanı verified-success artışı veya verified-success’te en fazla 2 puan kayıpla toplam maliyette en az %20 azalma aranır. Belirsizlik aralığı bu farkı ayırt etmiyorsa özellik deneysel kalır.
+İstatistiksel sonuçlar aynı task/run koşullarını eşleştirerek, repo kümelenmesini koruyan önceden seçilmiş belirsizlik yöntemiyle raporlanır. Güven düzeyi başlangıçta %95; yöntem, tekrar sayısı, cohort, karşılaştırma sayısı ve stopping rule holdout açılmadan manifest'e yazılır. Küçük örneklemde “üstünlük kanıtlanmadı” denir; üç tekrar yeterli istatistiksel güç garantisi değildir. Yeni özelliğin varsayılan olması için **başlangıç politika hedefi olarak** aynı bütçede bağımsız başarı farkının alt güven sınırı en az +5 yüzde puanı; veya farkın alt sınırı en az -2 puan ve toplam maliyet oranının üst sınırı en fazla 0,80 olmalıdır. Yalnız point estimate kapıyı açmaz. Güvenlik hard-stop'ları, latency/rework için önceden kaydedilen non-regression sınırları ve etkilenen cohort'ların sonucu ayrıca geçmelidir.
+
+Hidden evaluation acceptance, model/worker'ın değiştiremeyeceği ayrı evaluator alanındadır. Final değerlendirme sırasında referans çözüm patch'i, hidden expected output veya holdout feedback ajana verilmez; deneme sonrasında seçilen en iyi çıktı raporlanmaz. Viber self-report ve evaluator sonucu ayrı saklanır. Belirsiz evaluator sonucu başarı sayılmaz; altyapı hatası nedeniyle dışlama ancak önceden tanımlı, iki kola simetrik uygulanmış kural ve yayımlanan sayı ile mümkündür.
+
+Maliyet model/worker/reviewer/compactor çağrıları, başarısız retry, index üretim/bakımı, koordinasyon/merge, yerel compute ve verification'ı kapsar. Cold-start ve amortize kullanım ayrı senaryodur; amortizasyon paydası önceden seçilir. Ortak bağımsız evaluator maliyeti her iki kol için ayrıca raporlanır. Billing unknown ve eksik insan rework gözlemi sıfır kabul edilmez; missing oranı ve maliyet belirsizliği gösterilir.
 
 
 ### 27.1 Model kapasitesi ve harness katkısını ayırma
 
-Model-independent deney küçük-local, orta API ve frontier model gruplarını aynı tasks/environment/tool capabilities'de sınar. Her modelin kendi güçlü B0 baseline'ı ve Viber varyantı eşleştirilir; context/output budget model limitine uygun kaydedilir. Model×harness etkileşimi ayrıca raporlanır; farklı provider fiyatı/model kalitesi tek “harness etkisi” sayılamaz.
+Model-independent deney küçük-local, orta API ve frontier model gruplarını aynı tasks/environment/tool capabilities'de sınar. Her modelin kendi güçlü ABL-0 baseline'ı ve Viber varyantı eşleştirilir; context/output budget model limitine uygun kaydedilir. Model×harness etkileşimi ayrıca raporlanır; farklı provider fiyatı/model kalitesi tek “harness etkisi” sayılamaz.
 
 ```text
-HarnessGain(model) = Success(Viber, model) - Success(B0, model)
+HarnessGain(model)    = Success(Viber, model) - Success(ABL-0, model)
 
-CapacityGap(B0)    = Success(B0, frontier) - Success(B0, small)
-CapacityGap(Viber) = Success(Viber, frontier) - Success(Viber, small)
+CapacityGap(ABL-0)    = Success(ABL-0, frontier) - Success(ABL-0, small)
+CapacityGap(Viber)    = Success(Viber, frontier) - Success(Viber, small)
 
-GapReduction      = CapacityGap(B0) - CapacityGap(Viber)
+GapReduction         = CapacityGap(ABL-0) - CapacityGap(Viber)
 ```
 
-GapReduction için paired repository/cohort belirsizlik aralığı, toplam maliyet, latency ve recovery birlikte gösterilir. Frontier sonucu kötüleştiği için gap küçülüyorsa “küçük modeli telafi ettik” denmez; small model'in absolute gain'i ve frontier non-regression ayrıca gerekir. Baseline gap sıfır/negatifse compensation ratio anlamlı değildir; raw farklar gösterilir. Model kilidi/privacy yüzünden unsupported görevler paydadan çıkarılmaz; ayrı sonucu vardır.
+`Success` burada aynı bağımsız kabul oracle'ını geçen çözüm oranıdır. GapReduction için paired repository/cohort belirsizlik aralığı, toplam maliyet, latency ve recovery birlikte gösterilir. Frontier sonucu kötüleştiği için gap küçülüyorsa “küçük modeli telafi ettik” denmez; small model'in absolute gain'i ve frontier non-regression ayrıca gerekir. Baseline gap sıfır/negatifse compensation ratio anlamlı değildir; raw farklar gösterilir. Model kilidi/privacy yüzünden unsupported görevler paydadan çıkarılmaz; ayrı sonucu vardır.
 
 ### 27.2 Tanısal metrik kataloğu
 
@@ -1377,7 +1481,7 @@ Ranking deney telemetry'si exactness, lexical/semantic score, graph/failing-test
 
 ## 28. Zorunlu hata ve saldırı senaryoları
 
-Aşağıdaki 24 özgün senaryo release test kümesinin parçasıdır:
+Aşağıdaki 38 senaryo release test kümesinin parçasıdır. 1–24 kimlikleri korunmuştur; 25–38 sürüm 1.1 düzeltmelerinin kabulüdür:
 
 1. İlk dosya yazıldıktan sonra crash: yarım operation tanınır, yanlış publish olmaz.
 2. API yan etkisi oldu ve response kayboldu: kör retry yapılmaz; idempotency/reconciliation veya `UNKNOWN_OUTCOME`.
@@ -1390,7 +1494,7 @@ Aşağıdaki 24 özgün senaryo release test kümesinin parçasıdır:
 9. Worktree’den sibling dizine kaçış: OS sınırı engeller; path string kontrolü tek savunma değildir.
 10. Junction/symlink/case alias kaçışı: gerçek hedefte izin uygulanır.
 11. Test script’i ağ veya dış dosya erişimi denedi: process tree sınırı uygulanır.
-12. Test sahte PASS metni bastı: trusted runner ve exit sonucu olmadan receipt yoktur.
+12. Test sahte PASS metni veya exit=0 üretti: discovery/expected-result contract ve korunan runner kanalı olmadan admissible PASS yoktur.
 13. Agent test/acceptance listesini azalttı: spec değişikliği ve yeni sürüm gerekir.
 14. Bozuk index veya kaçırılmış watcher: source revalidate ve direct-read fallback.
 15. Tool-call JSON stream yarıda kesildi: eksik çağrı yürütülmez, attempt korunur.
@@ -1401,8 +1505,24 @@ Aşağıdaki 24 özgün senaryo release test kümesinin parçasıdır:
 20. Disk dolu, blob bozuk veya schema migration yarım kaldı: tutarsız checkpoint ile devam edilmez.
 21. Daemon iki kez başladı: tek writer sahipliği ve generation korunur.
 22. Restore sırasında kullanıcı yeni edit yaptı: üç yönlü conflict; geniş reset yok.
-23. JSONL istemcisi koptu veya yavaşladı: kernel sürer, cursor ile kayıpsız reconnect olur.
+23. JSONL istemcisi koptu veya yavaşladı: kernel sürer; retained durable history cursor ile kayıpsız döner, retention gap açık resync verir.
 24. Telemetry kapalı: model için izinli egress dışında telemetry/training gönderilmez.
+25. C/D özellikleri kapalı B önizlemesi: context overflow, sensitive source, revision ve env değişimi asgari guard'ları aşamaz; optimizasyon kapalı diye koruma kapanmaz.
+26. Agent ilk verification'dan önce test/helper/config'i zayıflattı veya test discovery'yi sıfırladı: mutation öncesi origin ve closure farkı yakalanır; silent PASS yoktur.
+27. Test source'u değiştirip bitmeden geri aldı: verification boyunca read-only sınır yazıyı engeller; yalnız eşit ön/son hash kabul edilmez.
+28. Candidate VERIFIED fakat gerekli live apply conflict/unknown: kalite görünür kalır, fulfillment sağlanmaz, strict success/exit 0 oluşmaz; merge sonrası yeni içerik yeniden kontrol edilir.
+29. Reboot, suspend, clock rollback veya farklı host'tan eski worker: clock-domain/generation uzlaşmadan eski lease admit/publish edilemez.
+30. İki project CLI aynı store'a veya iki alias aynı hedefe geldi: tek store owner ve doğru target/repo mutex'i korunur; eski owner fence edilmeden yeni writer yoktur.
+31. Test parent'ı exit=0, child hâlâ çalışıyor veya shared cache/fixture değişti: quiescence ve environment bağları doğrulanmadan PASS yoktur; side-effect test disposable retry sayılmaz.
+32. PAUSED task headless resume edildi; approval yanıtı stale veya aynı command_id farklı payload ile tekrarlandı: legal recovery, STALE_REQUEST ve COMMAND_ID_CONFLICT; kör execute yoktur.
+33. Work budget/disk low-watermark tükendi: yeni iş durur, bounded control reserve cancel/receipt/recovery'yi destekler; unknown usage sıfırlanmaz ve ikinci kez charge edilmez.
+34. Task deletion sonrası shared blob ve eski backup restore edildi: yetkisiz scope erişimi geri dönmez, yönetilen kopyalar/purge durumu doğru raporlanır; silinen raw input replay ile diriltilmez.
+35. Çok task'lı event sırası, aynı transaction'da birden çok event ve yarım checkpoint: store_seq/task_seq ayrımı ve doğru sınırdan reducer replay aynı typed state digest'ini verir.
+36. Ham niyet silindi veya required criteria boş; ayrıca geçerli analysis/no-op görevi: ilk ikisi VERIFIED olamaz, analysis/no-op kendi frozen artifact/kriterleriyle teslim edilebilir.
+37. Agent kendi finalini VERIFIED ilan etti ama hidden evaluator reddetti; kontrol görevi doğru block oldu: ilkinde false verdict kaydedilir, ikincisi safe handling'dir; çözüm success paydası/sonucu değiştirilmez.
+38. Host Git helper/config, terminal OSC ve secret-bearing tool output egress denedi: sanitized execution, UI escaping ve sensitivity/egress gate aşılmaz.
+
+Bu senaryoların fixture ID'leri paket kabulüne bağlanır; özellik henüz uygulanmadıysa ilgili test açıkça NOT_IMPLEMENTED'dir ve geçti diye gösterilmez. Kararlı A–D sürümü kapsamındaki tüm guard'lar zorunludur; F/G'ye özgü senaryolar ilgili capability açılmadan geçmelidir.
 
 Ek zorunlu senaryolar: olmayan path’in aranması `known_absent` ile `not_found` ayrımını korumalıdır; test kaynağı candidate dışında değişirse check-definition ve source digest uyuşmazlığı receipt’i geçersiz kılmalıdır; eşdeğer gate denetimi bulunmayan provider server tool, model isteği hazırlanırken etkinleştirilmemelidir; repository config’i capability veya egress escalation kaynağı olamaz; SQLite/metadata yedeği ve restore yarım migration sonrasında doğrulanabilir olmalıdır. Ayrıca generated output’un beklenmeyen geniş yazısı, flaky test rerun’ı, unsupported backend, model switch ve final testten sonra candidate edit’i ayrı test kimlikleriyle izlenir.
 
@@ -1410,7 +1530,7 @@ Kritik güvenlik, veri kaybı, stale admission, policy bypass ve yanlış VERIFI
 
 ## 29. Release, riskler ve karar kayıtları
 
-Release sırası: Faz A spike kabulü; Faz B kernel RC; Faz B tek-agent release; Faz C continuity deneysel sürümü; Faz D beta; Faz E retrieval feature release; Faz F kontrollü deney; Faz G opt-in preview. Her aşamada zorunlu koruma testleri kalite veya maliyet benchmark’ından önce gelir.
+Release sırası: Faz A spike kabulü; Faz B kernel RC ve kontrollü teknik önizleme; Faz C continuity deneysel sürümü; Faz D beta ve A–D kabul kapıları sonrası ilk kararlı sürüm; Faz E retrieval feature release; Faz F kontrollü deney; Faz G opt-in preview. Her aşamada zorunlu koruma testleri kalite veya maliyet benchmark’ından önce gelir.
 
 Aşağıdaki koşullar hard-stop’tur: kullanıcı dosyası kaybı; eski policy, epoch veya fencing token ile yeni yetki; capability/policy bypass; farklı snapshot’a ait receipt ile `VERIFIED`; belirsiz dış etkinliğin kör tekrarı; zorunlu kriterin sessiz silinmesi; privacy kısıtlı endpoint’e fallback; tutarsız checkpoint ile devam. Bu koşullardan biri daha iyi benchmark sonucu uğruna kabul edilemez.
 
@@ -1426,6 +1546,11 @@ Her mimari değişiklik kısa ADR ile kaydedilir. Başlangıç kararları:
 - ADR 006: Başlangıçta tek model ve tek writer; ablation fayda gösterirse routing/paralellik açılır.
 - ADR 007: Model, harness ve policy sürümlü eval; benchmark protokolü değişirse sonuçlar yeni sürümle ayrılır.
 - ADR 008: Windows istemcisi ile execution backend’i ayrı capability profilleridir; native eşdeğer testleri geçmeden aynı güvenlik rozeti verilmez.
+- ADR 009: Check origin mutation öncesi korunur; verification source/check closure'ı read-only, sonuç kanalı protected ve process tree quiescent olmalıdır.
+- ADR 010: Candidate/artifact quality, task fulfillment ve terminal outcome ayrıdır; run/resume görev invocation'larında yalnız birleşik strict success CLI 0 üretir.
+- ADR 011: Store başına tek metadata owner, global/task sequence ayrımı ve clock-domain/generation bağlı lease; SQLite transaction veya persist edilmiş monotonic sayı yeterli authority değildir.
+- ADR 012: Silinebilir payload ve minimum journal envelope ayrılır; shared refs/backup/delete/restore birlikte scope ve integrity kontrolü taşır.
+- ADR 013: Benchmark kendi VERIFIED beyanıyla puanlanmaz; bağımsız evaluator, çözüm/kontrol kohortları ve önceden kayıtlı uncertainty/adoption kuralı kullanılır.
 
 Ayrıca şu kararlar açıkça kaydedilir: model bağımsızlığı ile external-agent adapter ayrımı; apply’nin candidate reference’tan ayrılması; `UNKNOWN_OUTCOME` ve waiver semantiği; read-set/write-set kapsamı; retry/idempotency sınıfları; policy epoch ve fencing davranışı; privacy eksenlerinin (`remote_inference`, provider, telemetry, training, retention, sensitive paths, cross-project memory) bağımsızlığı; schema migration ve backup/restore stratejisi; unsupported dil/backend fallback’i; eval veri cutoff’u ve retention süresi.
 
@@ -1456,7 +1581,7 @@ Zorunlu release başlangıç güvenlik kriterleri sabittir. Cohort optimization 
 
 ### 30.1 Birleştirilen kapsamın denetimi
 
-Başlangıç envanteri altı Markdown dosyası ve 4.279 satırdır: AGENTS (7), README (18), idea (3.202), mimari inceleme (294), ürün mimarisi v2 (515), uygulama/eval planı (243). Dosyalar bütün olarak okunmuş; ilk vizyon, mimari sözleşme ve teslim/eval ayrı incelemelerle çapraz kontrol edilmiştir.
+Sürüm 1.0 birleştirme kaydı altı Markdown dosyası ve 4.279 satırlık başlangıç envanteri bildirir: AGENTS (7), README (18), idea (3.202), mimari inceleme (294), ürün mimarisi v2 (515), uygulama/eval planı (243). Bu sayılar güncel checkout ölçümü değildir. Sürüm 1.1 incelemesi yetkili PRD'nin tamamını, kendi iç sözleşmelerini ve birincil kaynak bağlantılarını esas alır; tarihsel belgelerin yeniden okunduğu veya çalışan uygulamanın doğrulandığı iddia edilmez.
 
 Aşağıdaki harita eski belgeleri uygulama bağımlılığı yapmaz; hangi vizyonun burada karşılandığını gösteren audit kaydıdır.
 
@@ -1489,7 +1614,7 @@ Geniş özellikler kaybolmamıştır; ölçüm koşullu fazlara yerleştirilmiş
 
 ### 30.2 Doğrulanmış araştırma dayanakları
 
-Kaynak erişim tarihi 5 Ekim 2026'dır. Birincil yayın/abstract ve resmi teknik sözleşmeler kontrol edilmiştir; bütün deneyler yeniden üretilmiş, rakip kaynakları bütünüyle denetlenmiş veya Viber performansı ölçülmüş değildir. Aşağıdaki dersler tasarım çıkarımlarıdır. Çalışmaların farklı dataset/model/budget kazanımları toplanıp ürün başarısı diye sunulamaz.
+Bağlantı ve bibliyografik kimlik kontrolü 7 Ekim 2026'da yenilenmiştir; birincil yayın/abstract ve resmi teknik sözleşmeler tasarım dayanaklarıdır; bütün deneyler yeniden üretilmiş, rakip kaynakları bütünüyle denetlenmiş veya Viber performansı ölçülmüş değildir. Aşağıdaki dersler tasarım çıkarımlarıdır. Çalışmaların farklı dataset/model/budget kazanımları toplanıp ürün başarısı diye sunulamaz.
 
 | Birincil kaynak | Alınan ders | Kanıt sınırı |
 |---|---|---|
@@ -1507,12 +1632,13 @@ Kaynak erişim tarihi 5 Ekim 2026'dır. Birincil yayın/abstract ve resmi teknik
 | [Getting Better at Working With You: Compiling User Corrections into Runtime Enforcement for Coding Agents — arXiv:2606.13174](https://arxiv.org/abs/2606.13174) | Correction→runtime rule yaklaşımı | Doğal dilin hatasız policy'ye dönüşmesi değildir |
 | [TRACE: TRajectory Attribution for Automated Context Engineering — arXiv:2608.09153](https://arxiv.org/abs/2608.09153) | Trajectory/context fault attribution | Her olumsuz sonucun context hatası olduğunu kanıtlamaz |
 
-ArXiv kaynakları bu tabloda preprint kimliğiyle, ICLR/ACL kaynakları yayın kaydıyla belirtilir; bibliyografik statü başarı garantisi değildir. İki ayrı TRACE çalışması başlık ve kimliğiyle ayrılmıştır.
+ArXiv kaynakları bu tabloda preprint kimliğiyle, ICLR/ACL kaynakları yayın kaydıyla belirtilir; bibliyografik statü başarı garantisi değildir. TRACE adı üç farklı çalışmada kullanılır: compression için 2608.06503, correction enforcement için 2606.13174 ve trajectory attribution için 2608.09153. Başlık/kimlikleri ayrı tutulur; sonuçları birbirine aktarılmaz.
 
 Resmi uygulama sözleşmeleri:
 
-- [SQLite WAL](https://sqlite.org/wal.html) ve [Atomic Commit](https://sqlite.org/atomiccommit.html): journal durability ve atomiklik sınırı.
-- [Git worktree](https://git-scm.com/docs/git-worktree): workspace ayrılığı ve shared metadata.
+- [SQLite WAL](https://sqlite.org/wal.html), [Atomic Commit](https://sqlite.org/atomiccommit.html) ve [Backup API](https://sqlite.org/backup.html): transaction, durability ve DB snapshot sınırı; blob/yedek koordinasyonu Viber sözleşmesidir.
+- [Git worktree](https://git-scm.com/docs/git-worktree) ve [Git configuration environment](https://git-scm.com/docs/git): shared metadata ve config kaynakları; sanitized host execution Viber'ın ek korumasıdır.
+- [Monotonic clock sözleşmesi — Python time](https://docs.python.org/3/library/time.html#time.monotonic): clock'un referans noktası taşınabilir kalıcı zaman kimliği değildir; Viber lease'leri ayrıca generation/clock-domain ile bağlar. Bu kaynak core için Python seçimi anlamına gelmez.
 - [Docker rootless](https://docs.docker.com/engine/security/rootless/) ve [Linux Landlock](https://docs.kernel.org/userspace-api/landlock.html): execution primitive'lerinin kapsamı.
 - [OpenAI Function Calling](https://developers.openai.com/api/docs/guides/function-calling): canonical tool round-trip/protocol continuation.
 - [Claude Tool Use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview): client/server execution ayrımı.
@@ -1540,7 +1666,9 @@ Claude Code, Codex, OpenCode ve Gemini CLI'dan ilham alan interactive/headless, 
 | Checkpoint | Journal'dan türeyen typed state snapshot'ı |
 | Compaction | Anlatı/near-history çalışma setini bounded hale getirme |
 | Changeset | Baseline'a göre incelenebilir patch/metadata ve delivery paketi |
-| VERIFIED | Tanımlı kriterleri exact candidate/ortam için doğrulanmış kalite |
+| VERIFIED | Tanımlı kriterleri exact candidate/artifact/ortam için doğrulanmış kalite; teslim başarısı ayrı |
+| Fulfillment | Spec'in gerekli rapor ve teslim yükümlülüklerinin karşılanması |
+| Strict success | FINISHED + VERIFIED + SATISFIED ve açık gerekli yükümlülük kalmaması |
 | UNKNOWN_OUTCOME | Etkinin gerçekleşip gerçekleşmediği kesinleşmemiş operation |
 | Waiver | Yetkili kapsam kabulü; criterion PASS veya strict success değildir |
 
@@ -1551,20 +1679,21 @@ Kodlama sırasında yeni karar bu PRD'deki invariant'ı veya gereksinimi değiş
 | Paket grubu / sorumlu modül | FR/NFR kapsamı | Zorunlu kabul fixture/gate |
 |---|---|---|
 | A1/A5 contracts/eval | FR-01/02/23/24, NFR-07/10 | Schema/protocol vectors; Faz A ADR |
-| A2/B4/B7/D4 workspace | FR-03/04/05/21, NFR-01/03 | §28: 1/3/4/5/22, phantom/read-set/live apply |
-| A3/B2 runner/policy | FR-07/08/20, NFR-02/04 | §28: 6/9/10/11/19/21, old authority |
+| A2/B4/B7/D4 workspace | FR-03/04/05/10/21, NFR-01/03 | §28: 1/3/4/5/22, phantom/read-set/live apply |
+| A3/B2 runner/policy | FR-07/08/19/20, NFR-02/04/05/09 | §28: 6/9/10/11/19/21/25/30/38, old authority/egress |
 | A4/D1 models | FR-24/18, NFR-04/05 | §28: 15/18, malformed/cancel/continuation |
-| B1/C2 store | FR-06/13, NFR-01/07/11 | §28: 1/2/20, backup/GC/migration |
-| B3/F1/F2 resource/scheduler | FR-09/33/34/35, NFR-02/06 | §28: 7/8, lease/mutex/budget/crash |
-| B5 verification | FR-11, NFR-03 | §28: 3/12/13, frozen CheckSet/source mutation |
-| B6/D2/D3 cli/kernel | FR-12/19/22/25, NFR-10 | §28: 6/21/23, headless/pause/steering |
-| C1/C3/C4/C5 context | FR-14/15/16/17/18, NFR-06/09/12 | §28: 4/14/16/17, paired continuation |
-| D5 privacy/onboarding | FR-23/26/38, NFR-05/11 | §28: 18/24, offline/delete/export/config |
+| B1/C2 store | FR-06/13/26, NFR-01/07/11 | §28: 1/2/20/30/34/35, backup/GC/migration/delete |
+| B3/F1/F2 resource/scheduler | FR-09/33/34/35, NFR-02/06 | §28: 7/8/29/31/33, lease/mutex/budget/crash |
+| B5/B7 verification/delivery | FR-11/21, NFR-03 | §28: 3/12/13/26/27/28/31/36, CheckSet/quality/fulfillment |
+| B2/B6/D2/D3 cli/kernel | FR-12/19/22/25, NFR-10 | §28: 6/21/23/28/30/32, headless/pause/steering |
+| B6/C1/C3/C4/C5 context | FR-14/15/16/17/18, NFR-06/09/12 | §28: 4/14/16/17/25, preflight/paired continuation |
+| B1/B2/D5 privacy/onboarding | FR-23/26/38, NFR-05/09/11 | §28: 18/24/25/34/38, offline/delete/export/config |
 | D6/E1/E2 repo | FR-27/28/31, NFR-09/12 | Missing edge/unsupported/missed-impact ablation |
 | E3/E4/E5 retrieval | FR-29/30, NFR-05/09/12 | Cutoff/leakage/stale-index/egress/total cost |
 | E6 generation/eval | FR-32, NFR-03/12 | Protected build/behavior/blueprint cohort |
 | F3/F4 model fabric | FR-36/37, NFR-04/12 | Switch/cache/opaque worker/merge reverify |
 | G1/G2 learning | FR-39/40, NFR-09/11/12 | Rule/skill scope, shadow/rollback, invariant |
 | G3/G4 team/data | FR-41/42, NFR-02/05/11 | Tenant/auth/consent/license/remote recovery |
+| A5/B5/D7 eval/release | FR-11, NFR-03/08/12 | §28: 37, bağımsız evaluator, cohort ve adoption manifest'i |
 
-NFR-08 Faz D7 reference performance manifest'iyle değerlendirilir. ADR 001–008 çekirdek paketlerin tamamına uygulanır; 29'daki additional decisions ilgili backend/retrieval/learning gate'inde kapanır. §28 sıra numaraları sabit test family kimlikleridir; implementasyonda her family altındaki fixture'lar kalıcı test ID kazanır. Coverage yalnız test isimlerinin varlığıyla değil beklenen davranışın gözlenmesiyle kapatılır.
+NFR-08 Faz D7 reference performance manifest'iyle değerlendirilir. ADR 001–013 çekirdek paketlerin tamamına uygulanır; 29'daki additional decisions ilgili backend/retrieval/learning gate'inde kapanır. §28 sıra numaraları sabit test family kimlikleridir; implementasyonda her family altındaki fixture'lar kalıcı test ID kazanır. Coverage yalnız test isimlerinin varlığıyla değil beklenen davranışın gözlenmesiyle kapatılır.
