@@ -32,3 +32,13 @@ jobs:
       - name: Encoding fuzz
         if: runner.os == 'Linux'
         run: go test ./internal/contracts -run '^$' -fuzz FuzzStrictDecode -fuzztime 10s
+      - name: Git index fuzz
+        if: runner.os == 'Linux'
+        run: go test ./internal/workspace -run '^$' -fuzz FuzzGitIndex -fuzztime 10s
+      - name: Offline Docker engineering profile
+        if: runner.os == 'Linux'
+        env:
+          VIBER_DOCKER_TEST_IMAGE: golang:1.27.1-bookworm@sha256:8d48e12ec56735e9358640898b9d9b9fcca110612ed8a5567438c0a1baa24e66
+        run: |
+          docker pull "$VIBER_DOCKER_TEST_IMAGE"
+          go test -count=1 ./internal/runner ./internal/cli

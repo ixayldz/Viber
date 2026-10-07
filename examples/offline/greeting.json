@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "id": "read-greeting",
+          "name": "fs_read",
+          "arguments": {
+            "path": "hello.txt"
+          }
+        }
+      ],
+      "usage_known": true,
+      "input_tokens": 128,
+      "output_tokens": 24
+    },
+    {
+      "tool_calls": [
+        {
+          "id": "update-greeting",
+          "name": "candidate_propose",
+          "arguments": {
+            "read_set": [
+              {
+                "path": "hello.txt",
+                "kind": "FILE",
+                "digest": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+              }
+            ],
+            "changes": [
+              {
+                "path": "hello.txt",
+                "before_digest": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                "after_bytes": "aGVsbG8sIFZpYmVyCg==",
+                "delete": false
+              }
+            ]
+          }
+        }
+      ],
+      "usage_known": true,
+      "input_tokens": 192,
+      "output_tokens": 64
+    },
+    {
+      "text": "The isolated candidate greeting was updated. Protected checks and goal coverage have not been established.",
+      "usage_known": true,
+      "input_tokens": 128,
+      "output_tokens": 32
+    }
+  ]
+}

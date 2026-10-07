@@ -144,6 +144,9 @@ func (s TaskSpec) Validate() error {
 }
 
 type TaskState struct {
+	DocumentDigest          string         `json:"document_digest,omitempty"`
+	BaselineDigest          string         `json:"baseline_digest,omitempty"`
+	CandidateDigest         string         `json:"candidate_digest,omitempty"`
 	SchemaVersion           int            `json:"schema_version"`
 	TaskID                  string         `json:"task_id"`
 	SpecVersion             int64          `json:"spec_version"`
@@ -174,6 +177,8 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
+	DocumentDigest      string         `json:"document_digest,omitempty"`
+	SnapshotDigest      string         `json:"snapshot_digest,omitempty"`
 	InputID             string         `json:"input_id,omitempty"`
 	SpecVersion         int64          `json:"spec_version,omitempty"`
 	State               ExecutionState `json:"state,omitempty"`
@@ -190,14 +195,32 @@ type Entry struct {
 	Size int64  `json:"size"`
 	Mode uint32 `json:"mode"`
 }
+type GitIndexEntry struct {
+	Path        string `json:"path"`
+	ObjectID    string `json:"object_id"`
+	Mode        uint32 `json:"mode"`
+	IntentToAdd bool   `json:"intent_to_add"`
+}
+type GitState struct {
+	GitDir              string          `json:"git_dir"`
+	CommonDir           string          `json:"common_dir"`
+	HeadRef             string          `json:"head_ref"`
+	HeadObject          string          `json:"head_object"`
+	ObjectFormat        string          `json:"object_format"`
+	IndexDigest         string          `json:"index_digest"`
+	IndexPresent        bool            `json:"index_present"`
+	Entries             []GitIndexEntry `json:"entries"`
+	IgnoreSourcesDigest string          `json:"ignore_sources_digest"`
+}
 type Snapshot struct {
-	SchemaVersion int      `json:"schema_version"`
-	Digest        string   `json:"manifest_digest"`
-	Root          string   `json:"canonical_root"`
-	Consistency   string   `json:"capture_consistency"`
-	Entries       []Entry  `json:"entries"`
-	Exclusions    []string `json:"exclusions"`
-	Directories   []string `json:"directories"`
+	Git           *GitState `json:"git,omitempty"`
+	SchemaVersion int       `json:"schema_version"`
+	Digest        string    `json:"manifest_digest"`
+	Root          string    `json:"canonical_root"`
+	Consistency   string    `json:"capture_consistency"`
+	Entries       []Entry   `json:"entries"`
+	Exclusions    []string  `json:"exclusions"`
+	Directories   []string  `json:"directories"`
 }
 type ReadCondition struct {
 	Path   string `json:"path"`

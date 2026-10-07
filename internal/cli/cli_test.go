@@ -21,7 +21,7 @@ func TestDoctorJSONAndHonestUnsupportedRun(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.ReleaseReady || d.Telemetry || d.TrainingExport || d.ProcessSandbox != "NOT_IMPLEMENTED" {
+	if d.ReleaseReady || d.Telemetry || d.TrainingExport || d.ProcessSandbox != "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING" {
 		t.Fatal("false assurance", d)
 	}
 	if stderr.Len() != 0 {

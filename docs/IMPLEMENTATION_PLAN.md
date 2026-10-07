@@ -6,7 +6,7 @@ Yetkili sözleşme: [PRD 1.1](../prd.md). Tarih: 7 Ekim 2026. Bu plan PRD'yi de�
 
 İlk kararlı ürün A–D kapsamıdır. E–G ölçümle açılan deneylerdir. Üretime hazır kabulü kod yüzdesi değildir: bütün zorunlu güvenlik/veri/verification testleri, platform/provider conformance, restore, paketleme ve kullanıcı kabul kanıtları gerekir.
 
-Başlangıç checkout'u yalnız PRD içeriyordu. İlk dilim engineering CLI, sözleşmeler, saf reducer, policy, context preflight, snapshot/proposal spike, konservatif verification predicate ve SQLite journal temeli kurar. Gerçek coding agent, sandbox, provider, apply/restore ve TUI henüz teslim edilmez. A çıkış kapısı kapalıdır; B preview ve kararlı sürüm yayımlanamaz.
+Başlangıç checkout'u yalnız PRD içeriyordu. 0.2.0-dev offline engineering dilimi artık durable fixture agent, Git capture, immutable artifact store, sınırlı Docker broker, provider protocol adapters, scoped requests/respond, tarihsel replay, changeset export ve store backup/restore içerir. Protected verification, real endpoint/streaming, live apply, secure IPC ve TUI tamamlanmadı. A çıkış kapısı kapalıdır; B preview ve kararlı sürüm yayımlanamaz.
 
 ## Mimari
 
@@ -31,17 +31,17 @@ flowchart LR
 
 Bağımlılıklar: contracts ← kernel/policy/context/workspace/verify; store → contracts + saf kernel; cli birleştirir. Workspace ayrılığı OS izolasyonu değildir. SQLite dış etkiyi atomik yapmaz. Store owner, candidate writer ve target mutex ayrıdır.
 
-| Modül | İlk dilim | Sonraki teslim |
+| Modül | 0.2.0-dev durumu | Sonraki teslim |
 |---|---|---|
 | contracts | Typed spec/event/proposal/receipt, strict JSON, canonical v1 digest | Tam PRD schemas/export/migration |
 | kernel | Saf lifecycle, sequence/replay, input barrier | Owner command API/scheduler/attempt recovery |
-| store | OS lock, WAL/FULL journal, event+projection transaction, command dedup/checkpoint | Blobs/ACL/backup/retention/deletion/migration |
-| workspace | Bounded exact-byte snapshot; negative read-set; immutable preview | Git index/common-dir, materialization, patch journal, apply/restore |
-| policy | Restriction intersection, effect/epoch/generation/egress gate | Scoped approval, broker, target/handle enforcement |
+| store / artifact / fileguard | OS lock/private ACL, WAL/FULL journal, CAS blobs, command dedup, historical replay, snapshot backup/fresh restore | Power-loss/retention/deletion/migration/quotas |
+| workspace | Native Git index/common-dir/ignore capture, exact-byte read sets, immutable preview/materialization | Atomic capture assurance, live apply/restore |
+| policy / agent | Restriction intersection, scoped one-shot approval, durable intent/reserve/receipt, native fixture loop | IPC admission, steering revision, full budget/control reserve |
 | context | Mandatory preflight ve optional bounded packing | Provider tokenizer/protocol blocks/manifest/compaction |
 | verify | Conservative receipt guards; quality/fulfillment ayrımı | Protected OS runner/observer/artifact integrity |
-| cli | doctor/snapshot/proposal-check/version | run/status/diff/pause/resume/requests/respond/JSONL/TUI |
-| runner/models/repo/supervisor/eval | Explicit backlog | A3/A4/B/D acceptance ile açılır |
+| cli / delivery | Offline run/status/diff/controls, requests/respond, historical inspection/events, exact changeset export, store backup/restore | Protected verification UX, live apply/restore, streaming JSONL/TUI |
+| runner / model | Offline Docker broker ve OpenAI/Anthropic/Ollama nonstream protocol fixtures | Full conformance, real endpoint/streaming, supervisor/eval |
 
 ## Paket sırası ve kabul
 
@@ -93,7 +93,7 @@ E1–E6: symbol resolver → resolved graph → cutoff history → semantic → 
 
 TCB kernel/store/gate/adapter/backend/protected runner. Repo/model/test/build/install/Git helper/plugin/MCP/output untrusted. Network default deny; telemetry/training/cross-project OFF. Repo preferences izin genişletemez. Secret OS handle; credential alan process egress/sensitivity bağını miras alır. Git discovery bile sanitized env/config gerektirir.
 
-Şimdiki snapshot preview BEST_EFFORT regular-file scope'tur; symlink/special/invalid path fail-closed. Hostile directory replacement için actual-handle OS enforcement henüz yoktur. Developer preview sandbox diye sunulmaz. Windows ACL, backup/delete ve blob publication conformance kapanmadan store hassas production veri için supported değildir.
+Şimdiki snapshot preview BEST_EFFORT regular-file scope'tur; symlink/special/invalid path fail-closed. Hostile directory replacement için actual-handle OS enforcement henüz yoktur. Developer preview sandbox diye sunulmaz. Private Windows ACL, blob publication ve snapshot backup uygulanmıştır; platform power-loss/ACL conformance ve delete/retention kapanmadan store hassas production veri için supported değildir.
 
 ## Test ve release
 
@@ -110,10 +110,10 @@ Version pin: toolchain/SQLite/schema/reducer/protocol/backend image/adapter/effe
 
 Release artifact: capability/test manifest, versions, migrations/rollback, licenses/SBOM/checksum/signature, benchmark paydaları/unknowns, residual risks. Run/resume exit 0 yalnız strict success; control command 0 task başarısı değildir.
 
-## İlk dilimin bitişi ve sonraki iş
+## Güncel ilerleme ve kritik yol
 
-CLI build; doctor doğru unsupported bilgisi; exact-byte snapshot/coverage; proposal preview no host mutation; stale/phantom/scope/fencing denial; journal replay/checkpoint/dedup; missing/wrong evidence asla VERIFIED. Bunlar yalnız ilk dilimdir; A–D stable gate kapanmış sayılmaz.
+0.2.0-dev fixture akışı: raw intent → bounded model fixture → native tools → isolated immutable candidate → scoped user response → explicit UNVERIFIED delivery → exact changeset export. Owner restart, unknown usage, historical replay ve fresh store restore fixture testleri vardır. A2/A3/A4 ve B1/B3/B4/B6/B7/C2 parçaları uygulanmıştır; hiçbir paket yalnız bu parçalarla tam kabul almış sayılmaz.
 
-Sonraki kritik işler A2 Git capture/materialization ve A3 gerçek Linux sandbox; ardından A4 provider round-trip, B1 storage hardening ve B2 owner IPC/admission. Production kabul [release kaydı](RELEASE_GATES.md) ile takip edilir.
+Sıradaki kritik sıra: A3 tam escape/egress/fencing conformance ve A4 streaming/endpoint kabulü; B1 retention/delete/migration/control reserve; B2 secure owner IPC + durable steering; B5 protected test closure/observer + goal coverage; C compiled context/compaction; D platform packaging/TUI/pilot. Gerçek inference kullanıcı kararıyla şimdilik ertelendi; offline fixtures ile bu bağımlılıklar test edilebilir kısımlara ayrılır.
 
-Ölçülen ilk dilim sonuçları [doğrulama kaydında](VALIDATION.md) tutulur. Bu kayıt kararlı release kabulü değildir.
+Çalıştırma adımları [geliştirme rehberinde](DEVELOPMENT.md), test kapsamı [doğrulama kaydında](VALIDATION.md), açık kapılar [release kaydında](RELEASE_GATES.md) tutulur.

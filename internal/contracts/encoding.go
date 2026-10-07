@@ -275,6 +275,9 @@ func validateUnicode(v reflect.Value, depth int) error {
 }
 
 func validateShape(value any, t reflect.Type, depth int) error {
+	if t == reflect.TypeFor[json.RawMessage]() {
+		return nil
+	} // document syntax/canonical limits were already validated
 	if depth > 64 {
 		return fmt.Errorf("schema nesting exceeds 64")
 	}

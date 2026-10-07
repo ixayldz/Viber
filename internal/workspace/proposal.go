@@ -16,6 +16,9 @@ func Preview(base, current Capture, p c.Proposal, layers []policy.Policy, author
 	if err := VerifyCapture(current); err != nil {
 		return Capture{}, err
 	}
+	if err := GitPrecondition(base, current); err != nil {
+		return Capture{}, err
+	}
 	if base.Snapshot.Root != current.Snapshot.Root {
 		return Capture{}, stale("target identity changed")
 	}
@@ -57,7 +60,7 @@ func Preview(base, current Capture, p c.Proposal, layers []policy.Policy, author
 			}
 			readPaths[r.Path] = true
 		case "ABSENT":
-			if r.Digest != "" || withinExcluded(base.Snapshot, r.Path) || withinExcluded(current.Snapshot, r.Path) {
+			if r.Digest != "" || coverageExcluded(base, r.Path) || coverageExcluded(current, r.Path) {
 				return Capture{}, c.Fail(c.InvalidArgument, "absence outside captured coverage")
 			}
 			if capturedPathExists(base.Snapshot, r.Path) {
@@ -84,7 +87,10 @@ func Preview(base, current Capture, p c.Proposal, layers []policy.Policy, author
 		}
 	}
 	seen := map[string]bool{}
-	next := Capture{Snapshot: current.Snapshot, Contents: map[string][]byte{}}
+	next := Capture{Snapshot: current.Snapshot, Contents: map[string][]byte{}, IndexBytes: append([]byte(nil), current.IndexBytes...), IgnoreSources: map[string][]byte{}}
+	for name, raw := range current.IgnoreSources {
+		next.IgnoreSources[name] = append([]byte(nil), raw...)
+	}
 	next.Snapshot.Entries = append([]c.Entry(nil), current.Snapshot.Entries...)
 	next.Snapshot.Exclusions = append([]string(nil), current.Snapshot.Exclusions...)
 	next.Snapshot.Directories = append([]string(nil), current.Snapshot.Directories...)
@@ -92,7 +98,7 @@ func Preview(base, current Capture, p c.Proposal, layers []policy.Policy, author
 		next.Contents[name] = append([]byte(nil), data...)
 	}
 	for _, change := range p.Changes {
-		if !policy.SafePath(change.Path) || withinExcluded(current.Snapshot, change.Path) {
+		if !policy.SafePath(change.Path) || coverageExcluded(current, change.Path) {
 			return Capture{}, c.Fail(c.PolicyDenied, "invalid or excluded write path")
 		}
 		key := strings.ToLower(change.Path)
@@ -165,6 +171,9 @@ func Preview(base, current Capture, p c.Proposal, layers []policy.Policy, author
 	if len(now) > 10000 || total > 32<<20 {
 		return Capture{}, c.Fail(c.InvalidArgument, "proposal exceeds candidate preview quota")
 	}
+	if err := validateShape(next); err != nil {
+		return Capture{}, err
+	}
 	if err := seal(&next.Snapshot); err != nil {
 		return Capture{}, err
 	}
@@ -190,4 +199,27 @@ func listingAllowed(directory string, layers []policy.Policy) bool {
 		}
 	}
 	return true
+}
+
+func coverageExcluded(capture Capture, p string) bool {
+	if withinExcluded(capture.Snapshot, p) {
+		return true
+	}
+	if capture.Snapshot.Git == nil {
+		return false
+	}
+	rules, err := compileIgnores(capture.IgnoreSources)
+	if err != nil {
+		return true
+	}
+	for _, entry := range capture.Snapshot.Git.Entries {
+		if entry.Path == p {
+			return false
+		}
+	}
+	return ignored(rules, p, false)
+}
+
+func ListingAllowed(directory string, layers []policy.Policy) bool {
+	return listingAllowed(directory, layers)
 }

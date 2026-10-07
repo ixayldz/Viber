@@ -1,5 +1,5 @@
 // Package store is the initial single-owner SQLite journal foundation.
-// Backup, private Windows ACL, blob publication and privacy deletion are not
+// Full power-loss conformance, migrations and privacy deletion are not
 // shipped yet; this package is not a supported production metadata service.
 package store
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/kernel"
 	_ "modernc.org/sqlite"
 )
@@ -26,6 +27,7 @@ type Store struct {
 	db         *sql.DB
 	lock       *os.File
 	generation int64
+	directory  string
 }
 type Command struct {
 	ID              string         `json:"command_id"`
@@ -48,6 +50,15 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if err != nil {
 		return nil, err
 	}
+	privateRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if err = fileguard.Private(privateRoot); err != nil {
+		privateRoot.Close()
+		return nil, err
+	}
+	privateRoot.Close()
 	lock, err := acquireLock(filepath.Join(root, "owner.lock"))
 	if err != nil {
 		return nil, err
@@ -116,7 +127,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, lock: lock}
+	s := &Store{db: db, lock: lock, directory: root}
 	if err = s.verifyProjectionsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -181,6 +192,18 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 		var state c.TaskState
 		if err = c.DecodeStrict(result, &state); err != nil {
 			return state, c.Fail(c.StoreIntegrityError, "corrupt command result")
+		}
+		if err = tx.Rollback(); err != nil {
+			return state, err
+		}
+		replayed, err := s.replayToLocked(ctx, command.TaskID, state.TaskSeq)
+		if err != nil {
+			return state, err
+		}
+		actual, _ := c.Digest(state)
+		expected, _ := c.Digest(replayed[command.TaskID])
+		if actual != expected {
+			return state, c.Fail(c.StoreIntegrityError, "command receipt differs from historical journal")
 		}
 		return state, nil
 	}
@@ -274,6 +297,10 @@ func (s *Store) Replay(ctx context.Context, taskID string) (map[string]c.TaskSta
 	return s.replayLocked(ctx, taskID)
 }
 func (s *Store) replayLocked(ctx context.Context, taskID string) (map[string]c.TaskState, error) {
+	return s.replayToLocked(ctx, taskID, 0)
+}
+func (s *Store) replayToLocked(ctx context.Context, taskID string, until int64) (map[string]c.TaskState, error) {
+	var historical *c.TaskState
 	rows, err := s.db.QueryContext(ctx, "SELECT e.store_seq,e.task_id,e.task_seq,e.event_id,e.envelope,e.payload_digest,e.previous_hash,e.event_hash,p.body FROM events e LEFT JOIN payloads p ON p.task_id=e.task_id AND p.digest=e.payload_digest ORDER BY e.store_seq")
 	if err != nil {
 		return nil, err
@@ -317,6 +344,10 @@ func (s *Store) replayLocked(ctx context.Context, taskID string) (map[string]c.T
 			return nil, c.Fail(c.StoreIntegrityError, "journal reducer rejected event")
 		}
 		states[task] = next
+		if task == taskID && next.TaskSeq == until {
+			saved := next
+			historical = &saved
+		}
 		sequence = seq
 		previousHash = hash
 	}
@@ -334,6 +365,12 @@ func (s *Store) replayLocked(ctx context.Context, taskID string) (map[string]c.T
 		return nil, c.Fail(c.StoreIntegrityError, "journal tail missing")
 	}
 	if taskID != "" {
+		if until > 0 {
+			if historical == nil {
+				return nil, c.Fail(c.InvalidArgument, "historical task cursor unavailable")
+			}
+			return map[string]c.TaskState{taskID: *historical}, nil
+		}
 		st, ok := states[taskID]
 		if !ok {
 			return nil, c.Fail(c.InvalidArgument, "task not found")

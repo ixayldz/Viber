@@ -17,17 +17,33 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.1.0-dev"
-const help = `Viber 0.1.0-dev — engineering foundation (not a stable coding agent)
+const Version = "0.2.0-dev"
+const help = `Viber 0.2.0-dev — offline engineering agent (stable release gates closed)
 
 Usage:
+  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--allow-unverified] [--json]
+  viber status|diff|pause|cancel|resume TASK --store PATH [--json]
+  viber store-backup --store PATH --output NEW_PATH [--json]
+  viber store-restore --backup PATH --store NEW_PATH [--json]
+  viber requests TASK --store PATH [--json]
+  viber respond TASK --store PATH --request ID --response-file FILE [--json]
+  viber inspect TASK --store PATH [--at TASK_SEQ] [--json]
+  viber replay TASK --store PATH [--until TASK_SEQ] [--json]
+  viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
+  viber export TASK --store PATH --output NEW_PATH [--json]
   viber version
   viber doctor [--json]
   viber snapshot [--root PATH] [--json]
+  viber sandbox-run --store PATH --task ID --snapshot DIGEST --profile FILE --policy FILE --authority FILE [--json] -- ARGV...
+  viber snapshot-save --root PATH --store PATH --task ID [--git] [--json]
+  viber snapshot-list --store PATH --task ID [--json]
+  viber proposal-materialize --store PATH --base DIGEST --proposal FILE --policy FILE --authority FILE [--json]
   viber proposal-check --root PATH --proposal FILE --policy FILE --authority FILE [--json]
 
 Snapshot and proposal-check are developer previews. They do not write source.
-A3 sandbox and A4 provider conformance are pending; run/resume are unavailable.
+Offline Docker broker and provider protocol fixtures are engineering surfaces.
+Production backend/provider conformance is pending. Offline fixture sessions
+never produce VERIFIED; limited delivery requires --allow-unverified and exits 2.
 The implementation/release plan is in docs/IMPLEMENTATION_PLAN.md.
 `
 
@@ -74,6 +90,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "store-backup", "store-restore":
+		return runStoreBackup(args[0], args[1:], out, errout)
 	case "version":
 		if len(args) != 1 {
 			return report(out, errout, c.Fail(c.InvalidArgument, "version takes no arguments"), false)
@@ -84,9 +102,27 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runDoctor(args[1:], out, errout)
 	case "snapshot":
 		return runSnapshot(args[1:], out, errout)
+	case "sandbox-run":
+		return runSandbox(args[1:], out, errout)
+	case "snapshot-save":
+		return runSnapshotSave(args[1:], out, errout)
+	case "snapshot-list":
+		return runSnapshotList(args[1:], out, errout)
+	case "proposal-materialize":
+		return runProposalMaterialize(args[1:], out, errout)
 	case "proposal-check":
 		return runProposal(args[1:], out, errout)
-	case "run", "resume", "apply", "restore", "pause", "cancel", "status", "inspect", "replay", "requests", "respond", "steer", "attach", "export", "delete":
+	case "requests", "respond":
+		return runRequests(args[0], args[1:], out, errout)
+	case "export":
+		return runExport(args[1:], out, errout)
+	case "run":
+		return runTask(args[1:], out, errout)
+	case "inspect", "replay", "events":
+		return runHistory(args[0], args[1:], out, errout)
+	case "resume", "pause", "cancel", "status", "diff":
+		return runTaskControl(args[0], args[1:], out, errout)
+	case "apply", "restore", "steer", "attach", "delete":
 		jsonMode := false
 		for _, arg := range args {
 			if arg == "--json" {
@@ -118,13 +154,13 @@ func runDoctor(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unexpected arguments"), *jsonMode)
 	}
 	_, gitErr := exec.LookPath("git")
-	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "NOT_IMPLEMENTED", RemoteProviders: "NOT_IMPLEMENTED", LocalProvider: "NOT_IMPLEMENTED", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", RemoteProviders: "OFFLINE_PROTOCOL_FIXTURES", LocalProvider: "LOOPBACK_PROTOCOL_FIXTURES", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4
 		}
 	} else {
-		fmt.Fprintf(out, "Viber %s · %s\nSnapshot/proposal: developer preview · BEST_EFFORT\nSandbox/providers/live apply: unavailable\nStable release: gates closed · telemetry/training: off\n", d.Version, d.Platform)
+		fmt.Fprintf(out, "Viber %s · %s\nSnapshot/proposal: developer preview · BEST_EFFORT\nOffline sandbox: developer profile · providers: fixture conformance · live apply: unavailable\nStable release: gates closed · telemetry/training: off\n", d.Version, d.Platform)
 	}
 	return 0
 }

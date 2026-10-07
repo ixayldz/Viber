@@ -10,6 +10,7 @@ const (
 	UnsupportedCapability Code = "UNSUPPORTED_CAPABILITY"
 	PolicyDenied          Code = "POLICY_DENIED"
 	StaleBase             Code = "STALE_BASE"
+	StaleRequest          Code = "STALE_REQUEST"
 	Conflict              Code = "CONFLICT"
 	StaleAuthority        Code = "STALE_AUTHORITY"
 	ContextTooSmall       Code = "CONTEXT_TOO_SMALL"

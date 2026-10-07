@@ -71,6 +71,18 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			return next, c.Fail(c.StoreIntegrityError, "task must begin with TaskCreated")
 		}
 		next = c.TaskState{SchemaVersion: c.SchemaVersion, TaskID: event.TaskID, SpecVersion: p.SpecVersion, Execution: c.Created, Quality: c.Unverified, Fulfillment: c.FulfillmentPending, PolicyEpoch: 1, KernelGeneration: event.KernelGeneration}
+		if p.RequiredObligations < 0 {
+			return next, c.Fail(c.InvalidArgument, "invalid initial obligations")
+		}
+		next.OpenRequiredObligations = p.RequiredObligations
+		if p.DocumentDigest != "" {
+			if !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.SnapshotDigest) {
+				return next, c.Fail(c.InvalidArgument, "invalid initial durable bindings")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.BaselineDigest = p.SnapshotDigest
+			next.CandidateDigest = p.SnapshotDigest
+		}
 	} else {
 		next = *state
 		next.PendingInputIDs = append([]string{}, state.PendingInputIDs...)
@@ -81,6 +93,32 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		switch event.Type {
+		case "UserResponseRecorded":
+			if event.Actor != "user" || !nonterminal(next.Execution) || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.InputID == "" {
+				return next, c.Fail(c.PolicyDenied, "bound user response required")
+			}
+			next.DocumentDigest = p.DocumentDigest
+		case "SessionRecorded":
+			if event.Actor != "kernel" || !nonterminal(next.Execution) || !c.ValidDigest(p.DocumentDigest) {
+				return next, c.Fail(c.InvalidArgument, "invalid durable session update")
+			}
+			next.DocumentDigest = p.DocumentDigest
+		case "CandidateRecorded":
+			if event.Actor != "kernel" || next.Execution != c.Running || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.SnapshotDigest) {
+				return next, c.Fail(c.PolicyDenied, "candidate publication requires active authority")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.CandidateDigest = p.SnapshotDigest
+			next.Quality = c.Unverified
+		case "LimitedResultFinalized":
+			if event.Actor != "kernel" || next.Execution != c.Delivering || next.InputBarrier || !c.ValidDigest(p.SnapshotDigest) || !c.ValidDigest(next.DocumentDigest) || !c.ValidDigest(p.DocumentDigest) || p.SnapshotDigest != next.CandidateDigest || p.Reason != "EXPLICIT_LIMITED_RESULT_POLICY" || p.Quality != c.Unverified || p.Fulfillment != c.Satisfied {
+				return next, c.Fail(c.PolicyDenied, "limited final transaction preconditions missing")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.Execution = c.Terminated
+			next.Outcome = c.Finished
+			next.Quality = c.Unverified
+			next.Fulfillment = c.Satisfied
 		case "StateTransitioned":
 			if next.Execution == c.Recovering && p.State == c.Recovering && event.KernelGeneration <= next.KernelGeneration {
 				return next, c.Fail(c.StaleAuthority, "recovery requires a renewed generation")

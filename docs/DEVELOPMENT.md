@@ -1,6 +1,8 @@
-# Geliştirme
+# Geliştirme ve offline kullanım
 
-Go 1.27.1. Core tek Go module. Toolchain/dependency caches ve binary Git'e girmez.
+Go 1.27.1; tek Go module. Ürün sürümü 0.2.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+
+## Derleme
 
 ```sh
 go mod download
@@ -8,19 +10,87 @@ go test ./...
 go vet ./...
 go build -trimpath -o bin/viber ./cmd/viber
 ./bin/viber doctor --json
-./bin/viber snapshot --root . --json
 ```
 
-Windows'ta binary adı bin/viber.exe. Bu checkout'ta checksum doğrulanan portable toolchain .tools/go/bin/go.exe altında; cache .cache içinde. scripts/check.ps1 aynı komutları çalıştırır.
+Windows binary adı `bin/viber.exe`. Bu checkout'ta portable toolchain `.tools/go/bin/go.exe`, cache `.cache` altında. `scripts/check.ps1` format/mod/vet/test/build/doctor kontrollerini çalıştırır. Toolchain, cache, binary ve yerel store Git'e girmez.
 
-Snapshot/proposal-check geliştirici preview'udur. Canlı source, index ve Git refs değiştirilmez. Capture iki exact scan olsa da BEST_EFFORT; atomic veya sandbox assurance değildir. Symlink/special/case collision/quota unsupported. Secrets (.env/.pem/.key), tooling/cache ve binary scope'u exclude edilir; bu filtre tüm hassas veriyi bulduğu garantisi değildir. Git ignored capture ve junction race conformance backlog'dadır.
+## Çalışan fixture örneği
 
-Proposal formatı: schema_version=1, id/task_id/spec_version/base_snapshot/policy_epoch/kernel_generation/read_set/changes. FILE read condition blob hash'i, ABSENT boş digest, LISTING directory digest'i taşır. After bytes JSON base64; before_digest exact preimage. policy JSON array her authoritative restriction layer'ı içerir; authority JSON current TaskState'tir. CLI current capture'dan preview oluşturur, eski whole-snapshot proposal'ı konservatif reddeder. Kütüphane ayrı immutable base/current ile bağımsız kullanıcı değişikliklerini koruyabilir; persistent snapshot blobs henüz yoktur.
+```sh
+viber run "Update hello.txt to the fixture greeting" --offline --fixture examples/offline/greeting.json --root examples/offline/source --store ../viber-demo-store --task greeting --allow-unverified --json
+viber status greeting --store ../viber-demo-store --json
+viber diff greeting --store ../viber-demo-store --json
+viber export greeting --store ../viber-demo-store --output ../viber-demo-delivery --json
+```
 
-Canonical v1 sorted JSON object keys, ordered arrays, explicit null, signed 64-bit decimal integer, UTF-8 text. Float/exponent/-0, duplicate fields, unknown typed fields, surrogate escapes, excessive nesting ve trailing documents reddedilir. Null/absent ve array order farklı digest; object field order aynı digest. Metadata domain prefix'i file byte hash'inden ayrıdır. JSON Schema artifact export henüz A1 backlog'dadır.
+İlk komut exit **2** verir: FINISHED / UNVERIFIED / SATISFIED, unresolved required verification obligation korunur. Kaynak dosya ve Git index değişmez. `--allow-unverified` verilmezse görev WAITING_USER (exit 3) durumunda, candidate'a bağlı limited-delivery request üretir. Modelin “verified” yazması kaliteyi değiştirmez.
 
-Store testleri SQLite WAL/FULL, OS owner lock, global/task sequence, event+projection atomic transaction, hash chain/payload integrity, command ID dedup ve checkpoint gösterir. Private Windows ACL, payload deletion, blob durability, backup/restore/migration suite, store quota, secure IPC ve backend fencing tamamlanmadığı için store CLI'de production session olarak açılmaz.
+`export`, değişen dosyaların exact before/after byte'larını, unified `changes.patch`, `report.json` ve en son `manifest.json` üretir. Raw prompt, model continuation ve tüm store export edilmez. Binary candidate değişikliği varsa exact bytes korunur; `patch_complete:false` ile text patch'in eksik kapsamı bildirilir. Export canlı kaynağa apply etmez ve görevin kalitesini yükseltmez. Çıktı yeni bir dizin olmalı; üst dizini önceden var olmalıdır.
 
-Run/resume exit 3 + UNSUPPORTED_CAPABILITY verir. Host shell fallback yok. Kalite predicate'i yalnız trusted kernel/runner facts üzerinde çalışır; bool alanlarını model payload'ından kabul etmek kesinlikle yasaktır. Critical observer, protected runner ve read-only source conformance henüz yoktur.
+Windows'ta derlemeden sonra `scripts/offline-demo.ps1` aynı akışı `.cache` içinde benzersiz store/delivery/backup/restore dizinleriyle çalıştırır.
 
-Testler state/policy/encoding/context/verification/store/workspace/CLI sınırlarında adversarial örneklerdir. Release family tamamlanması docs/RELEASE_GATES.md ile ayrıca takip edilir. Sonraki paket docs/IMPLEMENTATION_PLAN.md'deki A2/A3/A4'tür.
+## Review ve bağlı yanıt
+
+`--autonomy review` her geçerli candidate proposal'ını, exact tool argümanlarıyla bekleyen isteğe dönüştürür. Salt okuma onay gerektirmez. `guided` ve `auto` bu sınırlı offline profilde yalnız native candidate araçlarını kullanır; shell/remote/live-write yetkisi vermez.
+
+```sh
+viber requests greeting --store ../viber-demo-store --json
+viber respond greeting --store ../viber-demo-store --request REQUEST_ID --response-file response.json --json
+viber resume greeting --store ../viber-demo-store --json
+```
+
+Response JSON, request'ten alınan bağları eksiksiz taşır:
+
+```json
+{
+  "command_id": "unique-response-command",
+  "task_id": "greeting",
+  "request_id": "REQUEST_ID",
+  "attempt": 1,
+  "expected_spec_version": 1,
+  "expected_policy_digest": "64_HEX_FROM_REQUEST",
+  "action_digest": "64_HEX_FROM_REQUEST",
+  "response": {"decision": "approve"}
+}
+```
+
+Karar `approve` veya `reject`. Yanıt task/spec/policy/candidate/action/expiry bağını doğrular. Aynı command ID+payload kayıtlı sonucu döndürür; farklı payload COMMAND_ID_CONFLICT olur. Onay tek işleme aittir, sonraki proposal'a yayılmaz. Geçerlilik 24 saat; süresi dolan onay dispatch yetkisi vermez. `resume` onay değildir; `respond` da işlemi otomatik çalıştırmaz. Terminal attempt resume edilemez; yeni task gerekir.
+
+## Recovery ve geçmiş
+
+```sh
+viber pause greeting --store ../viber-demo-store --json
+viber cancel greeting --store ../viber-demo-store --json
+viber inspect greeting --store ../viber-demo-store --at 1 --json
+viber replay greeting --store ../viber-demo-store --until 1 --json
+viber events greeting --store ../viber-demo-store --after 0 --limit 64 --json
+```
+
+Cursor **task_seq**'dir; global journal_seq ile karıştırılmaz. Sıfır inspect/replay için current state demektir. Replay retained journal'ın tüm bütünlüğünü kontrol eder ve dış işlem çalıştırmaz. Event paging 1–256 kayıt döndürür. Kontrol komutu exit 0 yalnız komut başarısıdır.
+
+Admission öncesi intent ve üst sınır token rezervasyonu, işlem sonrası receipt/candidate pointer birlikte kaydedilir. Belirsiz model response/usage veya kesilmiş admitted işlem BLOCKED kalır; rezervasyon silinmez, kör retry yapılmaz. Resume canlı source baseline'ının değiştiğini görürse WAITING_USER olur; otomatik rebase/overwrite yoktur.
+
+Bu sürüm foreground tek owner kullanır; ikinci CLI çalışan owner'a bağlanamaz ve STORE_OWNED alır. Kontrol komutları oturumu açarken owner generation yeniler. Aktif iş sırasında pause/steering için peer-auth IPC/supervisor henüz yoktur. Ctrl+C foreground invocation'ını CANCELLED (130) bitirir; unknown reservations korunur.
+
+## Yedek ve temiz geri yükleme
+
+```sh
+viber store-backup --store ../viber-demo-store --output ../viber-demo-backup --json
+viber store-restore --backup ../viber-demo-backup --store ../viber-demo-restored --json
+```
+
+Yeni çıktı path'i ve mevcut üst dizin gerekir. SQLite WAL dosyası kopyalanmaz; owner kilidi altında [SQLite VACUUM INTO](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause) ile tutarlı DB snapshot'ı alınır. Historical task documents, ham niyet, fixture/response blob'ları ve snapshot closure doğrulanır. Blob/DB dosyaları sync edildikten sonra `backup.json` yayınlanır. Restore bütün digest/size/path/schema sınırlarını doğrular, fresh stage'de replay+closure denetler ve mevcut dizini değiştirmeden yayınlar.
+
+Profil limiti: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Locks, geçici dosyalar ve yeniden üretilebilir candidate materialization kopyalanmaz. Retention/delete henüz olmadığı için `UNSUPPORTED_NO_DELETIONS`, watermark 0 zorunludur; bu, tombstone veya privacy deletion conformance iddiası değildir. Restore pending effect'i veya approval'ı otomatik çalıştırmaz. Yedek aynı makinede, aynı source kimliğiyle kurtarma içindir; başka makinedeki source yolunu otomatik rebinding yapmaz. Backup hash'leri bütünlük kontrolüdür, dışarıdan gelen bir yedeğin kimliğini doğrulayan imza değildir.
+
+## Snapshot ve sandbox sınırları
+
+`snapshot-save --git`, host Git helper/config/filter çalıştırmadan SHA-1/SHA-256 index v2/v3/v4, dirty/staged/untracked bytes, linked worktree metadata, nested .gitignore ve info/exclude okur. Global excludesFile okunmaz. Unmerged/sparse/split index, symlink/gitlink/special/hardlink ve unsupported ignore şekilleri fail-closed olur. Native capture iki tarama yapar ancak **BEST_EFFORT**'tur; atomik historical FS görüntüsü değildir.
+
+Store root Unix 0700 veya Windows user+SYSTEM private DACL kullanır. Snapshot/archive/model authority kernel tarafındadır. Host readonly chmod gerçek sandbox assurance sayılmaz. `sandbox-run` explicit operator profile/policy/authority ile pinned, önceden kurulu Linux Docker image'ında non-root, network none, read-only root/source, private tmpfs ve kaynak limitleri uygular. Docker socket/credential mount edilmez. Output bounded; timeout/cancel sonrası container ağacı temizlenir. Exit 0 ve stdout PASS güçlü verification receipt değildir. Tam escape/egress/fencing/OS power-loss conformance kapıları açıktır.
+
+OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol fixture testleriyle geliştirilmiştir. Kullanıcı tercihiyle gerçek inference yapılmadı; CLI yalnız `--offline --fixture` açar. Streaming, gerçek endpoint kabulü, keychain ve provider loop bağlantısı tamamlanmadı.
+
+## Henüz desteklenmeyenler
+
+Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, secure IPC/supervisor/attach/TUI, steering revision, compaction, migration/retention/delete, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.

@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -138,5 +139,23 @@ func TestStrictShapeRejectsCaseAliasesNullsAndMissingFields(t *testing.T) {
 	var target doc
 	if err := DecodeStrict([]byte(`{"id":"a","version":1}`), &target); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRawMessageKeepsJSONSyntaxAndDoesNotWeakenCanonicalValidation(t *testing.T) {
+	var value struct {
+		Raw   json.RawMessage `json:"raw"`
+		Bytes []byte          `json:"bytes"`
+	}
+	if err := DecodeStrict([]byte(`{"raw":{"path":"a.txt"},"bytes":"YWJj"}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	if string(value.Raw) != `{"path":"a.txt"}` || string(value.Bytes) != "abc" {
+		t.Fatal("RawMessage treated as base64")
+	}
+	for _, raw := range []string{`{"raw":{"x":1.0},"bytes":"YWJj"}`, `{"raw":{"x":1,"x":2},"bytes":"YWJj"}`, `{"raw":{},"bytes":{"not":"base64"}}`} {
+		if err := DecodeStrict([]byte(raw), &value); err == nil {
+			t.Fatal("strict validation weakened", raw)
+		}
 	}
 }

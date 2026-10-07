@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/policy"
 )
 
@@ -28,8 +29,10 @@ func DefaultLimits() Limits {
 }
 
 type Capture struct {
-	Snapshot c.Snapshot        `json:"snapshot"`
-	Contents map[string][]byte `json:"-"`
+	Snapshot      c.Snapshot        `json:"snapshot"`
+	Contents      map[string][]byte `json:"-"`
+	IndexBytes    []byte            `json:"-"`
+	IgnoreSources map[string][]byte `json:"-"`
 }
 
 var excludedDirs = map[string]bool{".git": true, "node_modules": true, ".tools": true, ".cache": true, ".viber": true, ".viber-local": true, ".aws": true, ".ssh": true, ".venv": true, "vendor": true, "dist": true, "build": true, "bin": true}
@@ -73,21 +76,52 @@ func CaptureDirectory(root string, limits Limits) (Capture, error) {
 	}
 	return second, nil
 }
-func scan(root string, limits Limits) (Capture, error) {
+func scan(root string, limits Limits) (Capture, error) { return scanWithGit(root, limits, nil) }
+func scanWithGit(root string, limits Limits, g *gitCapture) (Capture, error) {
+	if limits.MaxFiles <= 0 || limits.MaxFiles > 100000 || limits.MaxFileBytes <= 0 || limits.MaxFileBytes > 64<<20 || limits.MaxTotalBytes <= 0 || limits.MaxTotalBytes > 1<<30 {
+		return Capture{}, c.Fail(c.InvalidArgument, "invalid capture limits")
+	}
+	handle, err := os.OpenRoot(root)
+	if err != nil {
+		return Capture{}, err
+	}
+	defer handle.Close()
+	sources := map[string][]byte{}
+	if g != nil {
+		for name, raw := range g.ignores {
+			sources[name] = append([]byte(nil), raw...)
+		}
+	}
+	var rules []ignoreRule
+	loadIgnore := func(dir string) error {
+		if g == nil {
+			return nil
+		}
+		name := parentIgnoreSource(dir)
+		raw, err := fileguard.ReadRegular(handle, filepath.FromSlash(name), 1<<20)
+		if err == nil {
+			sources[name] = raw
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		rules, err = compileIgnores(sources)
+		return err
+	}
+	if err = loadIgnore("."); err != nil {
+		return Capture{}, err
+	}
 	result := Capture{Snapshot: c.Snapshot{SchemaVersion: c.SchemaVersion, Root: root, Consistency: "BEST_EFFORT", Entries: []c.Entry{}, Exclusions: []string{}, Directories: []string{}}, Contents: map[string][]byte{}}
 	total := int64(0)
 	seen := map[string]bool{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(handle.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if p == root {
+		if p == "." {
 			return nil
 		}
-		relative, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
+		relative := p
+
 		relative = filepath.ToSlash(relative)
 		if !policy.SafePath(relative) {
 			return c.Fail(c.PolicyDenied, "unsafe or nonportable path in capture")
@@ -97,11 +131,25 @@ func scan(root string, limits Limits) (Capture, error) {
 			return c.Fail(c.UnsupportedCapability, "case alias collision")
 		}
 		seen[key] = true
+		if len(seen) > limits.MaxFiles*3 {
+			return c.Fail(c.UnsupportedCapability, "capture entry quota exceeded")
+		}
 		if d.IsDir() && excludedDirs[strings.ToLower(d.Name())] {
 			result.Snapshot.Exclusions = append(result.Snapshot.Exclusions, relative+"/")
 			return filepath.SkipDir
 		}
+		if g != nil && ignored(rules, relative, d.IsDir()) && !gitPathTracked(g, relative) && !(d.IsDir() && gitDirectoryTracked(g, relative)) {
+			result.Snapshot.Exclusions = append(result.Snapshot.Exclusions, relative)
+			if d.IsDir() {
+				result.Snapshot.Exclusions[len(result.Snapshot.Exclusions)-1] += "/"
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
+			if err := loadIgnore(relative); err != nil {
+				return err
+			}
 			if len(result.Snapshot.Directories) >= limits.MaxFiles {
 				return c.Fail(c.UnsupportedCapability, "directory quota exceeded")
 			}
@@ -125,7 +173,7 @@ func scan(root string, limits Limits) (Capture, error) {
 		if info.Size() > limits.MaxFileBytes || info.Size() > limits.MaxTotalBytes-total {
 			return c.Fail(c.UnsupportedCapability, "capture byte quota exceeded")
 		}
-		file, err := os.Open(p)
+		file, err := handle.Open(filepath.FromSlash(p))
 		if err != nil {
 			return err
 		}
@@ -137,6 +185,10 @@ func scan(root string, limits Limits) (Capture, error) {
 		if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 			file.Close()
 			return c.Fail(c.Conflict, "capture path changed")
+		}
+		if err := fileguard.SingleLink(file); err != nil {
+			file.Close()
+			return err
 		}
 		data, readErr := io.ReadAll(io.LimitReader(file, limits.MaxFileBytes+1))
 		closeErr := file.Close()
@@ -161,6 +213,17 @@ func scan(root string, limits Limits) (Capture, error) {
 	})
 	if err != nil {
 		return Capture{}, err
+	}
+	if g != nil {
+		state := g.state
+		state.Entries = append([]c.GitIndexEntry{}, g.state.Entries...)
+		state.IgnoreSourcesDigest, err = c.Digest(sources)
+		if err != nil {
+			return Capture{}, err
+		}
+		result.Snapshot.Git = &state
+		result.IndexBytes = append([]byte(nil), g.index...)
+		result.IgnoreSources = sources
 	}
 	err = seal(&result.Snapshot)
 	return result, err
@@ -193,6 +256,9 @@ func VerifyCapture(capture Capture) error {
 	s.Directories = append([]string(nil), s.Directories...)
 	if s.SchemaVersion != c.SchemaVersion || s.Consistency != "BEST_EFFORT" || !c.ValidDigest(s.Digest) {
 		return c.Fail(c.InvalidArgument, "invalid snapshot")
+	}
+	if err := validateShape(capture); err != nil {
+		return err
 	}
 	expected := s.Digest
 	if err := seal(&s); err != nil {
