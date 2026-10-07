@@ -6,7 +6,7 @@ Yetkili sözleşme: [PRD 1.1](../prd.md). Tarih: 8 Ekim 2026. Bu plan PRD'yi de�
 
 İlk kararlı ürün A–D kapsamıdır. E–G ölçümle açılan deneylerdir. Üretime hazır kabulü kod yüzdesi değildir: bütün zorunlu güvenlik/veri/verification testleri, platform/provider conformance, restore, paketleme ve kullanıcı kabul kanıtları gerekir.
 
-Başlangıç checkout'u yalnız PRD içeriyordu. 0.3.0-dev offline engineering dilimi artık durable fixture agent, Git capture, immutable artifact store, sınırlı Docker broker, provider protocol adapters, scoped requests/respond, tarihsel replay, changeset export, store backup/restore, peer-auth local IPC/aktif kontroller ve durable steering/bound scope revision içerir. Protected verification, real endpoint/streaming, live apply, tam IPC/process fencing conformance/supervisor ve TUI tamamlanmadı. A çıkış kapısı kapalıdır; B preview ve kararlı sürüm yayımlanamaz.
+Başlangıç checkout'u yalnız PRD içeriyordu. 0.4.0-dev offline engineering dilimi artık durable fixture agent, Git capture, immutable artifact store, sınırlı Docker broker, provider protocol adapters, scoped requests/respond, tarihsel replay, changeset export, store backup/restore, peer-auth local IPC/aktif kontroller ve durable steering/bound scope revision, native paging ve mandatory context preflight/manifest içerir. Protected verification, real endpoint/streaming, live apply, tam IPC/process fencing conformance/supervisor ve TUI tamamlanmadı. A çıkış kapısı kapalıdır; B preview ve kararlı sürüm yayımlanamaz.
 
 ## Mimari
 
@@ -31,14 +31,14 @@ flowchart LR
 
 Bağımlılıklar: contracts ← kernel/policy/context/workspace/verify; store → contracts + saf kernel; cli birleştirir. Workspace ayrılığı OS izolasyonu değildir. SQLite dış etkiyi atomik yapmaz. Store owner, candidate writer ve target mutex ayrıdır.
 
-| Modül | 0.3.0-dev durumu | Sonraki teslim |
+| Modül | 0.4.0-dev durumu | Sonraki teslim |
 |---|---|---|
 | contracts | Typed spec/event/proposal/receipt, strict JSON, canonical v1 digest | Tam PRD schemas/export/migration |
 | kernel | Saf lifecycle, sequence/replay, input barrier | Scheduler/new-attempt recovery/process fencing |
 | store / artifact / fileguard | OS lock/private ACL, WAL/FULL journal, CAS blobs, command dedup, historical replay, snapshot backup/fresh restore | Power-loss/retention/deletion/migration/quotas |
 | workspace | Native Git index/common-dir/ignore capture, exact-byte read sets, immutable preview/materialization | Atomic capture assurance, live apply/restore |
 | policy / agent | Restriction intersection, scoped one-shot approval, durable intent/reserve/receipt, native fixture loop | Semantic provider revision, full budget/control reserve |
-| context | Mandatory preflight ve optional bounded packing | Provider tokenizer/protocol blocks/manifest/compaction |
+| context | Mandatory full protocol/raw spec/policy preflight, durable request/manifest; captured native paging | Provider tokenizer/filter/prefix/compaction |
 | verify | Conservative receipt guards; quality/fulfillment ayrımı | Protected OS runner/observer/artifact integrity |
 | cli / delivery | Offline run/status/diff/active controls, owner RPC/serve, steer/revise, requests/respond, historical inspection/events, exact changeset export, store backup/restore | Protected verification UX, live apply/restore, streaming JSONL/TUI |
 | runner / model | Offline Docker broker ve OpenAI/Anthropic/Ollama nonstream protocol fixtures | Full conformance, real endpoint/streaming, supervisor/eval |
@@ -112,7 +112,7 @@ Release artifact: capability/test manifest, versions, migrations/rollback, licen
 
 ## Güncel ilerleme ve kritik yol
 
-0.3.0-dev fixture akışı: raw intent → bounded model fixture → native tools → isolated immutable candidate → scoped user response → explicit UNVERIFIED delivery → exact changeset export. Owner restart, unknown usage, historical replay ve fresh store restore fixture testleri vardır. A2/A3/A4 ve B1/B3/B4/B6/B7/C2 parçaları uygulanmıştır; hiçbir paket yalnız bu parçalarla tam kabul almış sayılmaz.
+0.4.0-dev fixture akışı: raw intent → bounded model fixture → native tools → isolated immutable candidate → scoped user response → explicit UNVERIFIED delivery → exact changeset export. Owner restart, unknown usage, historical replay ve fresh store restore fixture testleri vardır. A2/A3/A4 ve B1/B3/B4/B6/B7/C2 parçaları uygulanmıştır; hiçbir paket yalnız bu parçalarla tam kabul almış sayılmaz.
 
 Sıradaki kritik sıra: A3 tam escape/egress/fencing conformance ve A4 streaming/endpoint kabulü; B1 retention/delete/migration/control reserve; B2 secure owner IPC + durable steering; B5 protected test closure/observer + goal coverage; C compiled context/compaction; D platform packaging/TUI/pilot. Gerçek inference kullanıcı kararıyla şimdilik ertelendi; offline fixtures ile bu bağımlılıklar test edilebilir kısımlara ayrılır.
 

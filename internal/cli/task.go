@@ -24,14 +24,15 @@ import (
 func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool) int {
 	if jsonMode {
 		if err := jsonWrite(out, struct {
-			SchemaVersion int          `json:"schema_version"`
-			State         c.TaskState  `json:"state"`
-			Budget        agent.Budget `json:"budget"`
-			Blocker       string       `json:"blocker"`
-			Summary       string       `json:"untrusted_model_summary"`
-			Candidate     artifact.Ref `json:"candidate"`
-			ReleaseReady  bool         `json:"release_ready"`
-		}{1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
+			Context       *agent.ContextAudit `json:"context,omitempty"`
+			SchemaVersion int                 `json:"schema_version"`
+			State         c.TaskState         `json:"state"`
+			Budget        agent.Budget        `json:"budget"`
+			Blocker       string              `json:"blocker"`
+			Summary       string              `json:"untrusted_model_summary"`
+			Candidate     artifact.Ref        `json:"candidate"`
+			ReleaseReady  bool                `json:"release_ready"`
+		}{doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
 			return 4
 		}
 	} else {

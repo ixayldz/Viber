@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -61,6 +60,7 @@ type Pending struct {
 	Status          string `json:"status"`
 }
 type Document struct {
+	Context          *ContextAudit   `json:"context,omitempty"`
 	Requests         []UserRequest   `json:"requests,omitempty"`
 	SchemaVersion    int             `json:"schema_version"`
 	TaskID           string          `json:"task_id"`
@@ -146,6 +146,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	}
 	if doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion || doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task {
 		return state, doc, c.Fail(c.StoreIntegrityError, "durable task document binding mismatch")
+	}
+	if err = s.validateContext(doc); err != nil {
+		return state, doc, err
 	}
 	if err = doc.Spec.Validate(); err != nil {
 		return state, doc, err
@@ -410,15 +413,23 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 				continue
 			}
 		}
-		request := model.Request{SchemaVersion: 1, ID: newID("model-"), Model: "offline-fixture-v1", Instructions: instructions(doc, state), Messages: doc.Messages, Tools: Tools(), MaxOutputTokens: 512}
-		encoded, err := json.Marshal(request)
+		request, encoded, manifest, err := compileOfflineRequest(doc, state, s.layers(state, doc))
+		if err != nil {
+			var typed *c.Error
+			if errors.As(err, &typed) && typed.Code == c.ContextTooSmall {
+				return s.stop(ctx, state, doc, "CONTEXT_TOO_SMALL: mandatory runtime/raw intent/tool protocol do not fit; no silent truncation or fixture call", c.WaitingResource)
+			}
+			return state, err
+		}
+		reserveInput := manifest.InputTokens + 4096
+		if reserveInput > doc.Budget.MaxInputTokens-doc.Budget.UsedInput || request.MaxOutputTokens > doc.Budget.MaxOutputTokens-doc.Budget.UsedOutput {
+			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "compiled request upper-bound reservation exceeds budget")
+		}
+		requestDigest, err := s.Archive.PutBytes(task, encoded)
 		if err != nil {
 			return state, err
 		}
-		reserveInput := int64(len(encoded)) + 4096
-		if reserveInput > doc.Budget.MaxInputTokens-doc.Budget.UsedInput || request.MaxOutputTokens > doc.Budget.MaxOutputTokens-doc.Budget.UsedOutput {
-			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "model upper-bound reservation exceeds budget")
-		}
+		doc.Context = &ContextAudit{SchemaVersion: 1, Profile: offlineContextProfile, RequestDigest: requestDigest, Manifest: manifest}
 		doc.Budget.ReservedInput = reserveInput
 		doc.Budget.ReservedOutput = request.MaxOutputTokens
 		doc.Budget.Steps++

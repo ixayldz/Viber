@@ -1,18 +1,20 @@
 # Doğrulama kaydı
 
-Tarih: 8 Ekim 2026. Ürün: 0.3.0-dev. Bu sonuçlar offline engineering profiline aittir; PRD A–D üretim kabulü değildir.
+Tarih: 8 Ekim 2026. Ürün: 0.4.0-dev. Bu sonuçlar offline engineering profiline aittir; PRD A–D üretim kabulü değildir.
 
 | Kontrol | Sonuç / kapsam |
 |---|---|
 | gofmt / mod verify / go vet | PASS; pinned module checksums, Windows native ve Linux |
-| Windows test | 187 benzersiz test/alt test PASS (tam tur + son IPC regresyonu); 2 host symlink yetkisi SKIP; 0 FAIL |
+| Windows test | 197 test/alt test PASS (tam tur); 2 host symlink yetkisi SKIP; 0 FAIL |
 | Linux race tests | PASS; tüm paketler, linux/amd64 |
-| Linux strict JSON fuzz | PASS; son turda 23.046 execution, corpus 89 |
-| Linux Git index fuzz | PASS; son turda 253.819 execution, corpus 13 |
+| Linux strict JSON fuzz | PASS; bu oturumdaki 0.3 turunda 23.046 execution, corpus 89; encoding code değişmedi |
+| Linux Git index fuzz | PASS; bu oturumdaki 0.3 turunda 253.819 execution, corpus 13; index decoder değişmedi |
 | Windows binary / offline demo | PASS; fixture→candidate→export→backup→fresh restore→historical replay |
 | Linux binary / doctor | PASS; linux/amd64 |
 | macOS tüm paket + CLI cross-build | PASS; darwin/arm64; test binary'leri de çapraz derlendi; /bin/true ile runtime yürütme atlandı, native macOS smoke yapılmadı |
 | Gerçek Docker engineering tests | PASS; Windows host/Linux engine; readonly root/source, non-root, network-none, forged PASS+exit7, timeout child cleanup |
+| Native paging | PASS; binary candidate/CRLF/split Unicode exact reassembly, 520 files + empty directory/exclusions, 71 matches/long-line hydration, stale query/candidate/policy cursor |
+| Compiled context | PASS; mandatory full protocol/spec/policy, overflow öncesi sıfır fixture call/reservation, durable manifest/request restore, missing request/altered manifest/unpaired protocol reddi |
 | Yerel owner IPC | PASS; Windows named pipe ve Linux Unix peer kimliği/PID; ayrı CLI süreci, stale generation/PID, frame kotası, response kaybı, uzun Unix path private socket |
 | Aktif kontrol ve steering | PASS; concurrent status/pause/cancel, Ctrl+C pause, command dedup, raw barrier, spec/epoch revision, eski onay reddi, input backup/restore |
 | Provider adapters | PASS; offline OpenAI/Anthropic vectors ve loopback Ollama fixtures; gerçek inference yapılmadı |
@@ -34,6 +36,8 @@ Davranış kanıtları:
 - Snapshot backup CAS+SQLite closure'ını birleştirir; manifest son yayınlanır. Corrupt/missing/unfinished/traversal/duplicate/schema/watermark/journal/reference saldırıları target yayınlamaz.
 - Fresh restore mevcut store/source'u değiştirmez; pending reservation/approval bağları korunur. Model/tool effect çalıştırılmaz.
 - Historical inspect/replay gerçek task cursor'unu verir ve full retained journal denetler. Event paging task/global sequence'yi ayırır.
+- Paging partial range'i explicit tutar; cursor current candidate/policy'ye bağlıdır. Excluded source/search kapsamı universal absence olarak sunulmaz.
+- Offline compiled context bütün mandatory protocol/spec/policy'yi korur; overflow çalışma çağrısından önce WAITING_RESOURCE olur. Manifest/request blob closure restore sırasında denetlenir.
 - Export exact before/after bytes + patch + report + manifest taşır. Binary text patch coverage açıkça false; source/task quality değişmez.
 - Model VERIFIED, stdout PASS, exit0 ve limited-result approval güçlü kalite üretmez. Offline delivery exit2 ve açık required obligation taşır.
 - Policy/epoch/generation/barrier intersection ve strict canonical JSON testleri korunur. Kontrol komutları boş/yanlış store'da DB başlatmaz.
@@ -43,3 +47,4 @@ go-winio v0.6.2 bağımlılığı eklendikten sonra govulncheck v1.8.0 yeniden �
 Açık kabul: tam sandbox escape/egress/fencing/clock; real provider+streaming; semantic spec/goal review; protected check closure/observer; complete budget/control reserve; tam IPC hostile-principal/process fencing/supervisor/provider steering conformance; live apply/restore concurrency; retention/delete/tombstone/migration/OS power-loss; platform install/signature/SBOM, native macOS smoke ve independent benchmark/pilot. [Release kaydı](RELEASE_GATES.md) kapıları kapalı tutar.
 
 Yerel kanıt dosyaları (Git'e girmez): .cache/windows-owner-tests.jsonl, .cache/windows-owner-final-tests.jsonl, .cache/linux-owner-validation.txt, .cache/linux-owner-final-validation.txt, .cache/owner-vulncheck.txt ve .cache/offline-owner-demo.jsonl. Yeni binary bin/viber.exe, Linux ve darwin/arm64 binary'leri .cache altındadır.
+0.4 son doğrulama kayıtları: .cache/windows-context-tests.jsonl, .cache/linux-context-validation.txt ve .cache/offline-context-demo.jsonl. Windows binary 0.4.0-dev; son offline demo .cache/demo-e755db1ed48f45da8166bb0758453b81 altında. Önceki owner/fuzz/vulnerability kayıtları bu oturumdaki ayrı kanıtları korur. Native macOS testi yapılmadı; /bin/true kullanılan cross-compile çıktısı runtime PASS sayılmaz.

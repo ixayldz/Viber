@@ -157,6 +157,7 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 			doc.Requests[i].Status = "STALE"
 		}
 	}
+	doc.Context = nil
 	doc.FixtureDigest = fixtureDigest
 	doc.FixtureCursor = 0
 	doc.Messages = []model.Message{}

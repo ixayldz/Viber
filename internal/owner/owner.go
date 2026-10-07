@@ -18,13 +18,14 @@ import (
 )
 
 type View struct {
-	State        c.TaskState  `json:"state"`
-	Budget       agent.Budget `json:"budget"`
-	Blocker      string       `json:"blocker"`
-	Summary      string       `json:"untrusted_model_summary"`
-	FinalReady   bool         `json:"final_ready"`
-	Candidate    artifact.Ref `json:"candidate"`
-	ReleaseReady bool         `json:"release_ready"`
+	Context      *agent.ContextAudit `json:"context,omitempty"`
+	State        c.TaskState         `json:"state"`
+	Budget       agent.Budget        `json:"budget"`
+	Blocker      string              `json:"blocker"`
+	Summary      string              `json:"untrusted_model_summary"`
+	FinalReady   bool                `json:"final_ready"`
+	Candidate    artifact.Ref        `json:"candidate"`
+	ReleaseReady bool                `json:"release_ready"`
 }
 type Cursor struct {
 	Sequence int64 `json:"task_seq"`
@@ -110,7 +111,7 @@ func (o *Owner) close() error {
 }
 func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, error) {
 	state, doc, err := o.Session.Inspect(ctx, task, sequence)
-	return View{State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+	return View{Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
 func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	o.control.Lock()
@@ -144,7 +145,7 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	if completed {
 		o.mu.Unlock()
 		_, doc, err := o.Session.Inspect(ctx, task, state.TaskSeq)
-		return View{State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+		return View{Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 	}
 	runCtx, cancel := context.WithCancel(o.ctx)
 	active := &activeRun{task: task, cancel: cancel, done: make(chan struct{})}

@@ -57,7 +57,7 @@ func ownerCall(ctx context.Context, directory, task, command, id string, payload
 	return response.Result, true, nil
 }
 func resultView(out, errout io.Writer, view owner.View, jsonMode bool) int {
-	return taskResult(out, errout, view.State, agent.Document{Budget: view.Budget, Blocker: view.Blocker, FinalSummary: view.Summary, FinalReady: view.FinalReady, Candidate: view.Candidate}, jsonMode)
+	return taskResult(out, errout, view.State, agent.Document{Context: view.Context, Budget: view.Budget, Blocker: view.Blocker, FinalSummary: view.Summary, FinalReady: view.FinalReady, Candidate: view.Candidate}, jsonMode)
 }
 func runServe(args []string, out, errout io.Writer) int {
 	f := flags("serve", errout)

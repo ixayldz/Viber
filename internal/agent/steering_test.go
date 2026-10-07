@@ -69,7 +69,7 @@ func TestSteeringBarrierRevisionInvalidatesApprovalAndPreservesBudgetOrigin(t *t
 	if revised.SpecVersion != 2 || revised.PolicyEpoch != 2 || revised.InputBarrier || revised.Execution != c.Paused || revised.Quality != c.Unverified || revised.OpenRequiredObligations != 2 {
 		t.Fatal(revised)
 	}
-	if after.Budget != before.Budget || after.Spec.ProtectedOrigin != before.Spec.ProtectedOrigin || after.Candidate != before.Candidate || after.AllowUnverified || len(after.Spec.Requirements) != 2 || after.Requests[0].Status != "STALE" {
+	if after.Budget != before.Budget || after.Spec.ProtectedOrigin != before.Spec.ProtectedOrigin || after.Candidate != before.Candidate || after.AllowUnverified || after.Context != nil || len(after.Spec.Requirements) != 2 || after.Requests[0].Status != "STALE" {
 		t.Fatal("revision widened authority or discarded original scope")
 	}
 	raw, err := s.Archive.GetBytes(options.TaskID, after.Spec.Inputs[1].Digest)

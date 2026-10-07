@@ -1,6 +1,6 @@
 # Release kanıt kaydı
 
-PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.3.0-dev offline engineering profili içindir.
+PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.4.0-dev offline engineering profili içindir.
 
 | Family | Guard | Uygulanan kanıt / eksik taraf | Tam release |
 |---|---|---|---|
@@ -11,7 +11,7 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 7–11 | Lease/budget/process/FS isolation | Offline Docker readonly/non-root/no-network/timeout cleanup; resource/fencing/escape matrisi eksik | PARTIAL |
 | 12–13 | Forged PASS/check weakening | Model/stdout PASS kalite yükseltemez; protected observer/check closure eksik | PARTIAL |
 | 14–15 | Index/partial model stream | Native Git index v2/v3/v4/SHA-256/worktree; incomplete response reddi; SSE eksik | PARTIAL |
-| 16 | Context overflow | Bounded preflight/transport/native tool limits; full compiled manifest eksik | PARTIAL |
+| 16 | Context overflow | Mandatory full protocol/spec/policy preflight, durable manifest/request closure, exact-byte source/list/search paging; provider tokenizer/compaction eksik | PARTIAL |
 | 17 | Compaction policy | Compactor yok | NOT_IMPLEMENTED |
 | 18 | Privacy fallback | Restriction intersection, no remote fixture loop, redirect/proxy deny; full lineage eksik | PARTIAL |
 | 19 | Plugin isolation | Plugin runtime yok | NOT_IMPLEMENTED |

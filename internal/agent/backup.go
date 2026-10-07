@@ -110,6 +110,9 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 		if doc.SchemaVersion != 1 || doc.TaskID != ref.TaskID || doc.Spec.TaskID != ref.TaskID || doc.Baseline.TaskID != ref.TaskID || doc.Candidate.TaskID != ref.TaskID {
 			return nil, c.Fail(c.StoreIntegrityError, "historical task document binding mismatch")
 		}
+		if err = s.validateContext(doc); err != nil {
+			return nil, err
+		}
 		if err = doc.Spec.Validate(); err != nil {
 			return nil, err
 		}

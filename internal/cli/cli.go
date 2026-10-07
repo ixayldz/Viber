@@ -17,8 +17,8 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.3.0-dev"
-const help = `Viber 0.3.0-dev — offline engineering agent (stable release gates closed)
+const Version = "0.4.0-dev"
+const help = `Viber 0.4.0-dev — offline engineering agent (stable release gates closed)
 
 Usage:
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--allow-unverified] [--json]

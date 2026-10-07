@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.3.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.4.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
 
 ## Derleme
 
@@ -109,6 +109,19 @@ Revision JSON:
 ```
 
 İlk pending input explicit current bindings ile çözülür. Spec ve policy epoch yükselir; önceki source-span requirements/protected origin, candidate ve kullanılan/reserved bütçe korunur. Yeni required criterion eklenir. Eski request/onaylar ve model continuation geçersizleşir; limited delivery yeniden explicit onay gerektirir. Başka pending input varsa bariyer devam eder. Unknown effect scope revision ile silinmez. Fresh fixture, kullanıcı tercihindeki offline planning girdisidir; gerçek modelin yeni talimatı planlaması yerine geçmez. `revise` coding çalıştırmaz.
+
+## Native paging ve context sınırı
+
+Native fs_read/file/list/search yanıtları explicit coverage ve next_cursor taşır. Read default 16 KiB/en çok 64 KiB; list 64/256; search 32/128 kayıt. Cursor aynı tool/path veya query/limit/candidate/policy ile kullanılır; source veya authority değişince STALE_BASE olur. Cursor izin yerine geçmez; pending input yeni read admission'ını da durdurur.
+
+fs_read exact_bytes base64 verisi authoritative'dir. content yalnız geçerli UTF-8 segmentte görünür; split rune/binary replacement yapılmaz. offset ile random hydration için candidate_digest zorunludur. File read condition tüm dosyanın precondition hash'idir; page coverage ayrıca bildirilir. Binary baseline dosyaları mevcut capture profilinde excluded kalır; binary candidate proposal byte'ları sayfalanabilir.
+
+fs_list FILE/DIRECTORY/EXCLUDED kayıtlarını birlikte sayfalar. Bir sayfada olmayan dosya yokluk kanıtı değildir. fs_search 2048-byte excerpt ile match/line/excerpt byte offsets taşır; excerpt_complete:false uzun satırın tamamının görülmediğini belirtir. Arama yalnız captured policy scope'u tarar, excluded dosyalarda yokluk iddia etmez.
+
+Offline context profili bütün raw intent/spec/restrictions/tools/paired history'yi mandatory tutar. 512 KiB conservative byte upper bound, 512 output reserve, 4096 margin vardır; gerçek provider tokenizer değildir. Sığmayan required context WAITING_RESOURCE + CONTEXT_TOO_SMALL olur; fixture dispatch, steps ve reservation ilerlemez. Context kırpılmaz.
+
+Successful preflight request'i ve manifest'i durable saklanır. run/status JSON'daki context alanı profile, estimate, included/omitted IDs ve request/manifest digest'lerini gösterir; raw request metni yayınlanmaz. Eksik request blob'u veya değişmiş manifest load/backup'ı reddeder. Scope revision yeni context gerektirir. Compaction/production provider count ve semantic goal coverage halen tamamlanmadı.
+
 
 ## Yedek ve temiz geri yükleme
 
