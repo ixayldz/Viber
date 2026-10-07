@@ -17,8 +17,8 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.2.0-dev"
-const help = `Viber 0.2.0-dev — offline engineering agent (stable release gates closed)
+const Version = "0.3.0-dev"
+const help = `Viber 0.3.0-dev — offline engineering agent (stable release gates closed)
 
 Usage:
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--allow-unverified] [--json]
@@ -31,6 +31,9 @@ Usage:
   viber replay TASK --store PATH [--until TASK_SEQ] [--json]
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
+  viber serve --store PATH [--json]
+  viber steer TASK "RAW INSTRUCTION" --store PATH [--command-id ID] [--json]
+  viber revise TASK --store PATH --revision-file FILE [--json]
   viber version
   viber doctor [--json]
   viber snapshot [--root PATH] [--json]
@@ -90,6 +93,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "serve":
+		return runServe(args[1:], out, errout)
 	case "store-backup", "store-restore":
 		return runStoreBackup(args[0], args[1:], out, errout)
 	case "version":
@@ -122,7 +127,9 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runHistory(args[0], args[1:], out, errout)
 	case "resume", "pause", "cancel", "status", "diff":
 		return runTaskControl(args[0], args[1:], out, errout)
-	case "apply", "restore", "steer", "attach", "delete":
+	case "steer", "revise":
+		return runSteering(args[0], args[1:], out, errout)
+	case "apply", "restore", "attach", "delete":
 		jsonMode := false
 		for _, arg := range args {
 			if arg == "--json" {

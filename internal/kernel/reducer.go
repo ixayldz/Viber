@@ -89,10 +89,14 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && (event.Type != "StateTransitioned" || p.State != c.Recovering) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		switch event.Type {
+		case "ControlAcknowledged":
+			if event.Actor != "kernel" || p.DocumentDigest != next.DocumentDigest || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) {
+				return next, c.Fail(c.PolicyDenied, "control receipt requires unchanged durable binding")
+			}
 		case "UserResponseRecorded":
 			if event.Actor != "user" || !nonterminal(next.Execution) || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.InputID == "" {
 				return next, c.Fail(c.PolicyDenied, "bound user response required")
@@ -140,7 +144,26 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 				return next, c.Fail(c.PolicyDenied, "unresolved input barrier")
 			}
 			next.Execution = p.State
+		case "SpecRevised":
+			if event.Actor != "user" || !next.InputBarrier || p.SpecVersion != next.SpecVersion+1 || p.PolicyEpoch != next.PolicyEpoch+1 || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.RequiredObligations < next.OpenRequiredObligations || p.RequiredObligations < 1 || next.Execution == c.Terminated || active(next.Execution) {
+				return next, c.Fail(c.PolicyDenied, "scope revision requires a quiescent barrier and current bindings")
+			}
+			pending, err := resolveInput(next.PendingInputIDs, p.InputID)
+			if err != nil {
+				return next, err
+			}
+			next.PendingInputIDs = pending
+			next.SpecVersion = p.SpecVersion
+			next.PolicyEpoch = p.PolicyEpoch
+			next.DocumentDigest = p.DocumentDigest
+			next.Quality = c.Unverified
+			next.Fulfillment = c.FulfillmentPending
+			next.OpenRequiredObligations = p.RequiredObligations
+			next.Execution = c.Paused
 		case "InputRecorded":
+			if p.InputDigest != "" && (event.Actor != "user" || !c.ValidDigest(p.InputDigest) || p.InputBytes <= 0 || p.InputBytes > 64<<10 || p.InputID != event.ID) {
+				return next, c.Fail(c.InvalidArgument, "invalid raw steering binding")
+			}
 			if !nonterminal(next.Execution) {
 				return next, c.Fail(c.InvalidArgument, "terminal task requires a new attempt")
 			}

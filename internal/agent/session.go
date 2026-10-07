@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -152,6 +153,11 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	if err = doc.Budget.Validate(); err != nil {
 		return state, doc, err
 	}
+	for _, id := range state.PendingInputIDs {
+		if _, err := s.pendingInput(context.Background(), task, id); err != nil {
+			return state, doc, err
+		}
+	}
 	for _, input := range doc.Spec.Inputs {
 		raw, err := s.Archive.GetBytes(task, input.Digest)
 		if err != nil || int64(len(raw)) != input.ByteLength {
@@ -179,7 +185,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 	if state.Execution == c.Terminated {
 		return state, c.Fail(c.InvalidArgument, "terminal task requires a new attempt")
 	}
-	if state.KernelGeneration != s.Journal.Generation() {
+	if state.KernelGeneration != s.Journal.Generation() || state.Execution == c.Paused {
 		return s.transition(ctx, state, c.Recovering, "", "renewed owner generation")
 	}
 	return state, nil
@@ -199,7 +205,7 @@ type StartOptions struct {
 func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
+	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
 	}
 	absolute, err := filepath.Abs(options.Root)
@@ -272,58 +278,10 @@ func (s *Session) stop(ctx context.Context, state c.TaskState, doc Document, rea
 	if err != nil {
 		return state, err
 	}
+	if state.Execution == execution {
+		return state, nil
+	}
 	return s.transition(ctx, state, execution, "", reason)
-}
-func (s *Session) Controls(ctx context.Context, task, action string) (c.TaskState, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, doc, err := s.Load(ctx, task)
-	if err != nil {
-		return state, err
-	}
-	if state.Execution == c.Terminated {
-		if action == "cancel" && state.Outcome == c.Cancelled {
-			return state, nil
-		}
-		return state, c.Fail(c.InvalidArgument, "task already terminal")
-	}
-	state, err = s.recover(ctx, state)
-	if err != nil {
-		return state, err
-	}
-	if doc.Pending != nil {
-		doc.Pending.Status = "UNKNOWN"
-		doc.UnknownEffect = true
-		state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
-		if err != nil {
-			return state, err
-		}
-	}
-	switch action {
-	case "cancel":
-		return s.transition(ctx, state, c.Terminated, c.Cancelled, "explicit user cancel; unresolved effects retained")
-	case "pause":
-		if state.Execution == c.Paused {
-			return state, nil
-		}
-		// RECOVERING is not a legal direct PAUSING origin; reconciliation first.
-		if state.Execution == c.Recovering {
-			state, err = s.transition(ctx, state, c.Ready, "", "control reconciliation")
-			if err != nil {
-				return state, err
-			}
-		}
-		state, err = s.transition(ctx, state, c.Pausing, "", "admission stopped")
-		if err != nil {
-			return state, err
-		}
-		if _, err = s.Journal.Checkpoint(ctx, task); err != nil {
-			return state, err
-		}
-		return s.transition(ctx, state, c.Paused, "", "native tools drained; unknowns retained")
-	default:
-		return state, c.Fail(c.InvalidArgument, "unknown task control")
-	}
 }
 func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c.TaskState, error) {
 	requestIndex := -1
@@ -366,9 +324,7 @@ func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c
 	return s.record(ctx, state, doc, "LimitedResultFinalized", c.EventPayload{SnapshotDigest: doc.Candidate.SnapshotDigest, Quality: c.Unverified, Fulfillment: c.Satisfied, Reason: "EXPLICIT_LIMITED_RESULT_POLICY"})
 }
 
-func (s *Session) Run(ctx context.Context, task string) (c.TaskState, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, error) {
 	state, doc, err := s.Load(ctx, task)
 	if err != nil {
 		return state, err
@@ -432,11 +388,7 @@ func (s *Session) Run(ctx context.Context, task string) (c.TaskState, error) {
 	for {
 		doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()
 		if ctx.Err() != nil {
-			state, err = s.record(context.Background(), state, doc, "SessionRecorded", c.EventPayload{})
-			if err != nil {
-				return state, err
-			}
-			return s.transition(context.Background(), state, c.Terminated, c.Cancelled, "interrupted foreground invocation")
+			return state, ctx.Err()
 		}
 		if doc.Budget.Steps >= doc.Budget.MaxSteps || doc.Budget.ToolCalls >= doc.Budget.MaxToolCalls || doc.Budget.ActiveMillis >= doc.Budget.MaxActiveMillis {
 			state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})

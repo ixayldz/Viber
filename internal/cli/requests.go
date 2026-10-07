@@ -28,16 +28,54 @@ func runRequests(command string, args []string, out, errout io.Writer) int {
 	if task == "" || *directory == "" || command == "respond" && (*requestID == "" || *responsePath == "") || command == "requests" && (*requestID != "" || *responsePath != "") {
 		return report(out, errout, c.Fail(c.InvalidArgument, "task/store and bound response flags required"), *jsonMode)
 	}
-	session, err := agent.OpenExisting(context.Background(), *directory)
+	var response agent.UserResponse
+	id, err := resolveCommandID("")
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	defer session.Close()
-	if command == "requests" {
-		requests, err := session.Requests(context.Background(), task)
+	var payload any
+	if command == "respond" {
+		if err = readJSON(*responsePath, &response); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		if response.TaskID != task || response.RequestID != *requestID {
+			return report(out, errout, c.Fail(c.StaleRequest, "response task/request binding mismatch"), *jsonMode)
+		}
+		id, err = resolveCommandID(response.CommandID)
 		if err != nil {
 			return report(out, errout, err, *jsonMode)
 		}
+		payload = response
+	}
+	raw, routed, err := ownerCall(context.Background(), *directory, task, command, id, payload)
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
+	}
+	var requests []agent.UserRequest
+	var state c.TaskState
+	if routed {
+		if command == "requests" {
+			err = c.DecodeStrict(raw, &requests)
+		} else {
+			err = c.DecodeStrict(raw, &state)
+		}
+	} else {
+		var session *agent.Session
+		session, err = agent.OpenExisting(context.Background(), *directory)
+		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		defer session.Close()
+		if command == "requests" {
+			requests, err = session.Requests(context.Background(), task)
+		} else {
+			state, err = session.Respond(context.Background(), response)
+		}
+	}
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
+	}
+	if command == "requests" {
 		if *jsonMode {
 			if err = jsonWrite(out, requests); err != nil {
 				return 4
@@ -47,20 +85,7 @@ func runRequests(command string, args []string, out, errout io.Writer) int {
 				fmt.Fprintf(out, "%s %s %s · candidate %s · action %s\n", strconv.QuoteToASCII(r.ID), r.Kind, r.Status, r.Candidate, r.ActionDigest)
 			}
 		}
-		return 0
-	}
-	var response agent.UserResponse
-	if err = readJSON(*responsePath, &response); err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
-	if response.TaskID != task || response.RequestID != *requestID {
-		return report(out, errout, c.Fail(c.StaleRequest, "response task/request binding mismatch"), *jsonMode)
-	}
-	state, err := session.Respond(context.Background(), response)
-	if err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
-	if *jsonMode {
+	} else if *jsonMode {
 		if err = jsonWrite(out, state); err != nil {
 			return 4
 		}

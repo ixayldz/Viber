@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.2.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.3.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
 
 ## Derleme
 
@@ -70,7 +70,45 @@ Cursor **task_seq**'dir; global journal_seq ile karıştırılmaz. Sıfır inspe
 
 Admission öncesi intent ve üst sınır token rezervasyonu, işlem sonrası receipt/candidate pointer birlikte kaydedilir. Belirsiz model response/usage veya kesilmiş admitted işlem BLOCKED kalır; rezervasyon silinmez, kör retry yapılmaz. Resume canlı source baseline'ının değiştiğini görürse WAITING_USER olur; otomatik rebase/overwrite yoktur.
 
-Bu sürüm foreground tek owner kullanır; ikinci CLI çalışan owner'a bağlanamaz ve STORE_OWNED alır. Kontrol komutları oturumu açarken owner generation yeniler. Aktif iş sırasında pause/steering için peer-auth IPC/supervisor henüz yoktur. Ctrl+C foreground invocation'ını CANCELLED (130) bitirir; unknown reservations korunur.
+Bu sürüm peer-authenticated yerel owner kullanır. Çalışan `run`/ `resume` sırasında ikinci CLI `status`, `diff`, `pause`, `cancel`, `inspect`, `replay`, `events`, `requests` ve `respond` komutlarını aynı owner'a gönderir. Yeni writer açılmaz. Host effects/export/backup için IPC registry yoktur; aktif owner varken bu komutlar STORE_OWNED alır.
+
+```sh
+viber serve --store ../viber-demo-store --json
+# Ayrı terminal:
+viber status greeting --store ../viber-demo-store --json
+viber resume greeting --store ../viber-demo-store --command-id run-001 --json
+viber pause greeting --store ../viber-demo-store --command-id pause-001 --json
+```
+
+`serve` mevcut store için foreground owner açar; otomatik daemon/detach değildir. Windows user SID'li named pipe, Unix UID/PID doğrulamalı local socket kullanılır; TCP yoktur. Descriptor ve response owner ID/generation ile bağlıdır. Aynı command ID tarihsel sonucu döndürür; farklı komuta reuse çatışmadır. Gönderilmiş komutun response'u kaybolursa UNKNOWN_OPERATION_OUTCOME döner; otomatik retry/fallback yapılmaz. Önce status/events ile reconcile edilir. Admission receipt var ama completion yoksa aynı resume ID yeniden çalıştırılmaz. Ulaşılamayan eski descriptor OS owner kilidi altında açılarak toparlanabilir.
+
+Ctrl+C foreground invocation'ını PAUSED bırakır ve exit 130 döner. Owner kapanışı da admission durdurup bounded pause/drain yapar. Unknown reservations korunur; cancel ayrı, açık CANCELLED komutudur. Terminal task eski outcome'u değiştirerek resume edilemez.
+
+## Ham steering ve scope revision
+
+```sh
+viber steer greeting "Yeni talimatın exact ham metni" --store ../viber-demo-store --command-id input-001 --json
+viber revise greeting --store ../viber-demo-store --revision-file revision.json --json
+viber resume greeting --store ../viber-demo-store --command-id revised-run-001 --json
+```
+
+Steering önce ham input blob'unu ve journal barrier'ını kalıcı yapar, sonra aktif native loop'u duraklatır. Semantik onay veya implicit resume değildir. Aynı steering command ID tekrar etki yaratmaz. Pending input çözülmeden work admission kapalıdır.
+
+Revision JSON:
+
+```json
+{
+  "command_id": "scope-001",
+  "task_id": "greeting",
+  "input_id": "input-001",
+  "expected_spec_version": 1,
+  "expected_policy_epoch": 1,
+  "expected_candidate": "64_HEX_FROM_STATUS",
+  "fixture_bytes": "BASE64_OF_FRESH_OFFLINE_FIXTURE"
+}
+```
+
+İlk pending input explicit current bindings ile çözülür. Spec ve policy epoch yükselir; önceki source-span requirements/protected origin, candidate ve kullanılan/reserved bütçe korunur. Yeni required criterion eklenir. Eski request/onaylar ve model continuation geçersizleşir; limited delivery yeniden explicit onay gerektirir. Başka pending input varsa bariyer devam eder. Unknown effect scope revision ile silinmez. Fresh fixture, kullanıcı tercihindeki offline planning girdisidir; gerçek modelin yeni talimatı planlaması yerine geçmez. `revise` coding çalıştırmaz.
 
 ## Yedek ve temiz geri yükleme
 
@@ -93,4 +131,4 @@ OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol 
 
 ## Henüz desteklenmeyenler
 
-Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, secure IPC/supervisor/attach/TUI, steering revision, compaction, migration/retention/delete, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.
+Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, tam IPC platform conformance/supervisor/attach/TUI, provider semantic steering, compaction, migration/retention/delete, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.

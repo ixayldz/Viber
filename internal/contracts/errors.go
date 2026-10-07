@@ -17,6 +17,7 @@ const (
 	StoreIntegrityError   Code = "STORE_INTEGRITY_ERROR"
 	StoreOwned            Code = "STORE_OWNED"
 	CommandIDConflict     Code = "COMMAND_ID_CONFLICT"
+	UnknownOutcome        Code = "UNKNOWN_OPERATION_OUTCOME"
 )
 
 type Error struct {

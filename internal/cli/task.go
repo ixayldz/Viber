@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -17,7 +16,9 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/ipc"
 	"github.com/ixayldz/Viber/internal/kernel"
+	"github.com/ixayldz/Viber/internal/owner"
 )
 
 func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool) int {
@@ -127,27 +128,33 @@ func runTask(args []string, out, errout io.Writer) int {
 	budget := agent.DefaultBudget()
 	budget.MaxSteps = *steps
 	budget.MaxToolCalls = *tools
-	state, err := session.Create(ctx, agent.StartOptions{Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	state, err = session.Run(ctx, *task)
+	host, err := owner.Open(context.Background(), *directory, session)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	_, doc, err := session.Load(context.Background(), *task)
+	defer host.Close()
+	id, err := resolveCommandID("")
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	if exit := taskResult(out, errout, state, doc, *jsonMode); exit != 0 {
+	view, err := host.Run(ctx, *task, id)
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
+	}
+	if exit := resultView(out, errout, view, *jsonMode); exit != 0 {
 		return exit
 	}
-	return kernel.InvocationExit(state, ctx.Err() != nil)
+	return kernel.InvocationExit(view.State, ctx.Err() != nil)
 }
 func runTaskControl(command string, args []string, out, errout io.Writer) int {
 	task, args := promptFirst(args)
 	f := flags(command, errout)
 	directory := f.String("store", "", "private session store")
+	commandID := f.String("command-id", "", "stable command ID for reconciliation and deduplication")
 	jsonMode := f.Bool("json", false, "structured result")
 	if err := f.Parse(args); err != nil {
 		return 4
@@ -158,78 +165,47 @@ func runTaskControl(command string, args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "one task ID required"), *jsonMode)
 	}
 	if task == "" || *directory == "" {
-		report(out, errout, c.Fail(c.UnsupportedCapability, "task and explicit --store required for offline engineering sessions"), *jsonMode)
-		if command == "resume" {
-			return 3
-		}
-		return 4
+		return report(out, errout, c.Fail(c.InvalidArgument, "task and explicit store required"), *jsonMode)
+	}
+	id, err := resolveCommandID(*commandID)
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	session, err := agent.OpenExisting(ctx, *directory)
+	raw, routed, err := ownerCall(ctx, *directory, task, command, id, nil)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	defer session.Close()
-	var state c.TaskState
-	switch command {
-	case "resume":
-		state, err = session.Run(ctx, task)
-	case "pause", "cancel":
-		state, err = session.Controls(ctx, task, command)
-	default:
-		state, err = session.State(ctx, task)
+	var result any
+	if routed {
+		if command == "diff" {
+			var changes []owner.DiffChange
+			err = c.DecodeStrict(raw, &changes)
+			result = changes
+		} else {
+			var view owner.View
+			err = c.DecodeStrict(raw, &view)
+			result = view
+		}
+	} else {
+		session, openErr := agent.OpenExisting(ctx, *directory)
+		if openErr != nil {
+			return report(out, errout, openErr, *jsonMode)
+		}
+		defer session.Close()
+		host, openErr := owner.Open(context.Background(), *directory, session)
+		if openErr != nil {
+			return report(out, errout, openErr, *jsonMode)
+		}
+		defer host.Close()
+		result, err = host.Handle(ctx, ipc.Request{ID: id, TaskID: task, Command: command, Payload: []byte("null")})
 	}
-	if err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
-	_, doc, err := session.Load(context.Background(), task)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
 	if command == "diff" {
-		before, err := session.Archive.Get(doc.Baseline)
-		if err != nil {
-			return report(out, errout, err, *jsonMode)
-		}
-		after, err := session.Archive.Get(doc.Candidate)
-		if err != nil {
-			return report(out, errout, err, *jsonMode)
-		}
-		type change struct {
-			Path    string `json:"path"`
-			Before  string `json:"before_digest"`
-			After   string `json:"after_digest"`
-			Deleted bool   `json:"deleted"`
-		}
-		paths := map[string]bool{}
-		for name := range before.Contents {
-			paths[name] = true
-		}
-		for name := range after.Contents {
-			paths[name] = true
-		}
-		names := []string{}
-		for name := range paths {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		changes := []change{}
-		for _, name := range names {
-			old, oldOK := before.Contents[name]
-			next, nextOK := after.Contents[name]
-			oldHash, nextHash := "", ""
-			if oldOK {
-				oldHash = c.HashBytes(old)
-			}
-			if nextOK {
-				nextHash = c.HashBytes(next)
-			}
-			if oldOK == nextOK && oldHash == nextHash {
-				continue
-			}
-			changes = append(changes, change{Path: name, Before: oldHash, After: nextHash, Deleted: !nextOK})
-		}
+		changes := result.([]owner.DiffChange)
 		if *jsonMode {
 			if err = jsonWrite(out, changes); err != nil {
 				return 4
@@ -241,11 +217,12 @@ func runTaskControl(command string, args []string, out, errout io.Writer) int {
 		}
 		return 0
 	}
-	if exit := taskResult(out, errout, state, doc, *jsonMode); exit != 0 {
+	view := result.(owner.View)
+	if exit := resultView(out, errout, view, *jsonMode); exit != 0 {
 		return exit
 	}
 	if command == "resume" {
-		return kernel.InvocationExit(state, ctx.Err() != nil)
+		return kernel.InvocationExit(view.State, ctx.Err() != nil)
 	}
 	return 0
 }

@@ -177,8 +177,11 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
+	CommandError        *Error         `json:"command_error,omitempty"`
 	DocumentDigest      string         `json:"document_digest,omitempty"`
 	SnapshotDigest      string         `json:"snapshot_digest,omitempty"`
+	InputDigest         string         `json:"input_digest,omitempty"`
+	InputBytes          int64          `json:"input_bytes,omitempty"`
 	InputID             string         `json:"input_id,omitempty"`
 	SpecVersion         int64          `json:"spec_version,omitempty"`
 	State               ExecutionState `json:"state,omitempty"`

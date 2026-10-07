@@ -6,7 +6,7 @@ PRD §25 Rust veya Go tek core ister. Go 1.27.1 seçildi. Official checksum doğ
 
 PRD ADR 001–013 korunur: kendi loop; tek owner+SQLite+blobs; candidate/journal delivery; observation/claim/decision ayrımı; saf checkpoint; tek model/writer; versioned independent eval; Windows client/Linux execution; protected origin/read-only source; quality/fulfillment/outcome ayrımı; global/task sequence+generation; silinebilir payload+tombstone; independent benchmark.
 
-İlk dilim engineering spike. Host process/remote inference/live apply/restore kapalı. Snapshot/proposal preview explicit developer command, hostile filesystem isolation sağlamaz. Run/resume 3 + UNSUPPORTED_CAPABILITY; shell fallback yok. Store backup/delete/ACL kapıları henüz kapalı.
+İlk dilim engineering spike. Host process/remote inference/live apply/restore kapalı. Snapshot/proposal preview explicit developer command, hostile filesystem isolation sağlamaz. 0.3.0-dev offline run/resume, local owner IPC/steering ve snapshot backup/fresh restore uygulanmıştır; protected verification ve store deletion/lifecycle conformance kapıları kapalıdır. Ayrıntılar ADR 0002/0003 ve release kaydındadır.
 
 A3 hedef Linux namespaces/seccomp/cgroups, non-root/rootless; image/version floor gerçek conformance ile seçilir. Docker socket candidate'a verilmez. Read-only source/check, private scratch ve child quiescence olmadan güçlü receipt yok. Native host aynı assurance sayılmaz. Exclusive live access henüz yok; candidate-only default.
 

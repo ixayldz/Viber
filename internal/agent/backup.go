@@ -73,6 +73,23 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	for _, state := range states {
+		for after := int64(0); ; {
+			page, err := s.Journal.History(ctx, state.TaskID, after, 256)
+			if err != nil {
+				return nil, err
+			}
+			for _, record := range page.Records {
+				if record.Event.Type == "InputRecorded" && record.Payload.InputDigest != "" {
+					if _, err := s.pendingInput(ctx, state.TaskID, record.Event.ID); err != nil {
+						return nil, err
+					}
+				}
+			}
+			if !page.HasMore {
+				break
+			}
+			after = page.Next
+		}
 		if _, _, err = s.Load(ctx, state.TaskID); err != nil {
 			return nil, err
 		}

@@ -10,15 +10,17 @@ import (
 	"github.com/ixayldz/Viber/internal/agent"
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/owner"
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 func runHistory(command string, args []string, out, errout io.Writer) int {
 	task, args := promptFirst(args)
 	f := flags(command, errout)
 	directory := f.String("store", "", "private session store")
-	at := f.Int64("at", 0, "historical task sequence for inspect (0=current)")
-	until := f.Int64("until", 0, "final task sequence for replay (0=current)")
-	after := f.Int64("after", 0, "exclusive task sequence for events")
+	at := f.Int64("at", 0, "historical task sequence (0=current)")
+	until := f.Int64("until", 0, "final replay task sequence (0=current)")
+	after := f.Int64("after", 0, "exclusive events cursor")
 	limit := f.Int("limit", 64, "event page size, 1..256")
 	jsonMode := f.Bool("json", false, "structured result")
 	if err := f.Parse(args); err != nil {
@@ -35,19 +37,54 @@ func runHistory(command string, args []string, out, errout io.Writer) int {
 			invalid = true
 		}
 	})
-	if invalid || task == "" || *directory == "" || *at < 0 || *until < 0 {
+	if invalid || task == "" || *directory == "" || *at < 0 || *until < 0 || *after < 0 || *limit < 1 || *limit > 256 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "invalid task/store/history flags"), *jsonMode)
 	}
-	session, err := agent.OpenExisting(context.Background(), *directory)
+	id, err := resolveCommandID("")
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	defer session.Close()
+	sequence := *at
+	if command == "replay" {
+		sequence = *until
+	}
+	var payload any = owner.Cursor{Sequence: sequence}
 	if command == "events" {
-		page, err := session.Journal.History(context.Background(), task, *after, *limit)
+		payload = owner.Page{After: *after, Limit: *limit}
+	}
+	raw, routed, err := ownerCall(context.Background(), *directory, task, command, id, payload)
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
+	}
+	var view owner.View
+	var page store.HistoryPage
+	if routed {
+		if command == "events" {
+			err = c.DecodeStrict(raw, &page)
+		} else {
+			err = c.DecodeStrict(raw, &view)
+		}
+	} else {
+		var session *agent.Session
+		session, err = agent.OpenExisting(context.Background(), *directory)
 		if err != nil {
 			return report(out, errout, err, *jsonMode)
 		}
+		defer session.Close()
+		if command == "events" {
+			page, err = session.Journal.History(context.Background(), task, *after, *limit)
+		} else {
+			var doc agent.Document
+			view.State, doc, err = session.Inspect(context.Background(), task, sequence)
+			view.Budget = doc.Budget
+			view.Blocker = doc.Blocker
+			view.Candidate = doc.Candidate
+		}
+	}
+	if err != nil {
+		return report(out, errout, err, *jsonMode)
+	}
+	if command == "events" {
 		if *jsonMode {
 			if err = jsonWrite(out, page); err != nil {
 				return 4
@@ -60,14 +97,6 @@ func runHistory(command string, args []string, out, errout io.Writer) int {
 		}
 		return 0
 	}
-	sequence := *at
-	if command == "replay" {
-		sequence = *until
-	}
-	state, doc, err := session.Inspect(context.Background(), task, sequence)
-	if err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
 	if *jsonMode {
 		err = jsonWrite(out, struct {
 			SchemaVersion   int          `json:"schema_version"`
@@ -76,12 +105,12 @@ func runHistory(command string, args []string, out, errout io.Writer) int {
 			Blocker         string       `json:"blocker"`
 			Candidate       artifact.Ref `json:"candidate"`
 			EffectsExecuted bool         `json:"effects_executed"`
-		}{SchemaVersion: 1, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Candidate: doc.Candidate})
+		}{1, view.State, view.Budget, view.Blocker, view.Candidate, false})
 		if err != nil {
 			return 4
 		}
 	} else {
-		fmt.Fprintf(out, "%s · task sequence %d · %s · quality %s · effects executed: false\n", strconv.QuoteToASCII(task), state.TaskSeq, state.Execution, state.Quality)
+		fmt.Fprintf(out, "%s · task sequence %d · %s · quality %s · effects executed: false\n", strconv.QuoteToASCII(task), view.State.TaskSeq, view.State.Execution, view.State.Quality)
 	}
 	return 0
 }
