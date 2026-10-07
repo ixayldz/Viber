@@ -1,0 +1,10 @@
+.tools/
+.cache/
+bin/
+coverage.out
+*.test
+*.exe
+.viber-local/
+*.sqlite*
+*.prof
+.DS_Store
