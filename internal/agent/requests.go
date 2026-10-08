@@ -183,8 +183,11 @@ func (s *Session) validateReviewCall(state c.TaskState, doc Document, call model
 	layers := s.layers(state, doc)
 	layers[0].Effects = append(layers[0].Effects, "candidate.write")
 	p := c.Proposal{SchemaVersion: 1, ID: call.ID, TaskID: doc.TaskID, SpecVersion: doc.Spec.Version, BaseSnapshot: doc.Candidate.SnapshotDigest, PolicyEpoch: state.PolicyEpoch, KernelGeneration: state.KernelGeneration, ReadSet: args.ReadSet, Changes: args.Changes}
-	_, err = workspace.Preview(candidate, candidate, p, layers, state)
-	return err
+	next, err := workspace.Preview(candidate, candidate, p, layers, state)
+	if err != nil {
+		return err
+	}
+	return guardProtected(doc, next)
 }
 
 // ResponseTemplate fills immutable bindings; the operator supplies a fresh

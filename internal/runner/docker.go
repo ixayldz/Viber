@@ -156,6 +156,13 @@ func (d *Docker) check(ctx context.Context) error {
 	return nil
 }
 
+type inspectedMount struct {
+	Destination string
+	Source      string
+	RW          bool
+	Type        string
+	Propagation string
+}
 type inspected struct {
 	ID    string `json:"Id"`
 	State struct {
@@ -164,9 +171,21 @@ type inspected struct {
 		OOMKilled bool
 		Error     string
 	}
-	Config     struct{ User string }
+	Config struct {
+		User       string
+		Image      string
+		WorkingDir string
+		Entrypoint []string
+		Cmd        []string
+	}
 	HostConfig struct {
 		Privileged     bool
+		PidMode        string
+		IpcMode        string
+		Init           *bool
+		Tmpfs          map[string]string
+		Binds          []string
+		VolumesFrom    []string
 		ReadonlyRootfs bool
 		NetworkMode    string
 		CapDrop        []string
@@ -177,11 +196,7 @@ type inspected struct {
 		PidsLimit      int64
 		NanoCpus       int64
 	}
-	Mounts []struct {
-		Destination string
-		RW          bool
-		Type        string
-	}
+	Mounts []inspectedMount
 }
 
 func (d *Docker) inspect(ctx context.Context, id string) (inspected, error) {
@@ -195,8 +210,19 @@ func (d *Docker) inspect(ctx context.Context, id string) (inspected, error) {
 	}
 	return values[0], nil
 }
-func validateInspect(info inspected, p Profile) error {
+func validateInspect(info inspected, p Profile, source string, inv Invocation) error {
+	if info.Config.Image != p.Image || info.Config.WorkingDir != "/workspace" || len(info.Config.Entrypoint) != 1 || len(inv.Argv) == 0 || info.Config.Entrypoint[0] != inv.Argv[0] || len(info.Config.Cmd) != len(inv.Argv)-1 {
+		return c.Fail(c.PolicyDenied, "container image or invocation binding mismatch")
+	}
+	for i, arg := range info.Config.Cmd {
+		if arg != inv.Argv[i+1] {
+			return c.Fail(c.PolicyDenied, "container argv binding mismatch")
+		}
+	}
 	h := info.HostConfig
+	if h.PidMode != "" || h.IpcMode != "private" || h.Init == nil || !*h.Init || len(h.Binds) != 0 || len(h.VolumesFrom) != 0 || len(h.Tmpfs) != 1 || h.Tmpfs["/tmp"] != scratchOptions(p) {
+		return c.Fail(c.PolicyDenied, "unexpected process namespace, mount or scratch configuration")
+	}
 	if info.Config.User != "65532:65532" || h.Privileged || !h.ReadonlyRootfs || h.NetworkMode != "none" || len(h.CapAdd) != 0 || len(h.CapDrop) != 1 || !strings.EqualFold(h.CapDrop[0], "ALL") || h.Memory != p.MemoryBytes || h.MemorySwap != p.MemoryBytes || h.PidsLimit != p.Pids || h.NanoCpus != p.CPUs*1e9 {
 		return c.Fail(c.UnsupportedCapability, "engine did not enforce requested sandbox profile")
 	}
@@ -212,26 +238,32 @@ func validateInspect(info inspected, p Profile) error {
 	if !nnp || !seccomp {
 		return c.Fail(c.UnsupportedCapability, "sandbox security option mismatch")
 	}
-	source := false
+	seen := map[string]bool{}
 	for _, mount := range info.Mounts {
+		if seen[mount.Destination] {
+			return c.Fail(c.PolicyDenied, "duplicate container mount")
+		}
+		seen[mount.Destination] = true
 		switch mount.Destination {
 		case "/workspace":
-			if mount.Type != "bind" || mount.RW {
-				return c.Fail(c.PolicyDenied, "source mount is writable")
+			if mount.Type != "bind" || mount.RW || mount.Source != source || mount.Propagation != "rprivate" {
+				return c.Fail(c.PolicyDenied, "source mount identity or readonly enforcement mismatch")
 			}
-			source = true
 		case "/tmp":
-			if mount.Type != "tmpfs" {
+			if mount.Type != "tmpfs" || !mount.RW || mount.Source != "" {
 				return c.Fail(c.PolicyDenied, "unexpected scratch mount")
 			}
 		default:
 			return c.Fail(c.PolicyDenied, "unexpected container mount")
 		}
 	}
-	if !source {
+	if !seen["/workspace"] {
 		return c.Fail(c.PolicyDenied, "source mount missing")
 	}
 	return nil
+}
+func scratchOptions(p Profile) string {
+	return fmt.Sprintf("rw,exec,nosuid,nodev,size=%d,mode=1777", p.ScratchBytes)
 }
 func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocation) (result Result, resultErr error) {
 	d.mu.Lock()
@@ -242,13 +274,18 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if err := p.Validate(); err != nil {
 		return result, err
 	}
-	if !c.ValidDigest(inv.CandidateDigest) || len(inv.Argv) == 0 || len(inv.Argv) > 128 {
+	if !c.ValidDigest(inv.CandidateDigest) || len(inv.Argv) == 0 || inv.Argv[0] == "" || len(inv.Argv) > 128 {
 		return result, c.Fail(c.InvalidArgument, "invalid computation invocation")
 	}
+	argvBytes := 0
 	for _, arg := range inv.Argv {
+		argvBytes += len(arg)
 		if len(arg) > 16384 || strings.IndexByte(arg, 0) >= 0 {
 			return result, c.Fail(c.InvalidArgument, "invalid argv")
 		}
+	}
+	if argvBytes > 65536 {
+		return result, c.Fail(c.InvalidArgument, "invocation argv exceeds quota")
 	}
 	absolute, err := filepath.Abs(source)
 	if err != nil {
@@ -278,7 +315,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 		return result, err
 	}
 	name := "viber-" + hex.EncodeToString(nonce[:])
-	args := []string{"create", "--pull=never", "--name", name, "--label", "io.viber.runtime=offline-v1", "--user", "65532:65532", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin", "--pids-limit", fmt.Sprint(p.Pids), "--memory", fmt.Sprint(p.MemoryBytes), "--memory-swap", fmt.Sprint(p.MemoryBytes), "--cpus", fmt.Sprint(p.CPUs), "--ipc", "private", "--init", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go-mod", "--env", "GOTOOLCHAIN=local", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--mount", "type=bind,src=" + absolute + ",dst=/workspace,readonly,bind-propagation=rprivate", "--tmpfs", fmt.Sprintf("/tmp:rw,exec,nosuid,nodev,size=%d,mode=1777", p.ScratchBytes), "--entrypoint", inv.Argv[0], p.Image}
+	args := []string{"create", "--pull=never", "--name", name, "--label", "io.viber.runtime=offline-v1", "--user", "65532:65532", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin", "--pids-limit", fmt.Sprint(p.Pids), "--memory", fmt.Sprint(p.MemoryBytes), "--memory-swap", fmt.Sprint(p.MemoryBytes), "--cpus", fmt.Sprint(p.CPUs), "--ipc", "private", "--init", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go-mod", "--env", "GOTOOLCHAIN=local", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--mount", "type=bind,src=" + absolute + ",dst=/workspace,readonly,bind-propagation=rprivate", "--tmpfs", "/tmp:" + scratchOptions(p), "--entrypoint", inv.Argv[0], p.Image}
 	args = append(args, inv.Argv[1:]...)
 	raw, err := d.control(ctx, args...)
 	// A lost create response has an unknown effect: reconcile by our unique name,
@@ -323,7 +360,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if err != nil {
 		return result, err
 	}
-	if err = validateInspect(initial, p); err != nil {
+	if err = validateInspect(initial, p, absolute, inv); err != nil {
 		return result, err
 	}
 	result.SourceReadOnly = true
@@ -357,7 +394,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if final.State.Running {
 		return result, c.Fail(c.UnsupportedCapability, "container did not quiesce")
 	}
-	if err = validateInspect(final, p); err != nil {
+	if err = validateInspect(final, p, absolute, inv); err != nil {
 		return result, err
 	}
 	if final.State.Error != "" {

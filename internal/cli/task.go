@@ -21,18 +21,19 @@ import (
 	"github.com/ixayldz/Viber/internal/owner"
 )
 
-func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool) int {
+func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool, protection *agent.ProtectionInfo) int {
 	if jsonMode {
 		if err := jsonWrite(out, struct {
-			Context       *agent.ContextAudit `json:"context,omitempty"`
-			SchemaVersion int                 `json:"schema_version"`
-			State         c.TaskState         `json:"state"`
-			Budget        agent.Budget        `json:"budget"`
-			Blocker       string              `json:"blocker"`
-			Summary       string              `json:"untrusted_model_summary"`
-			Candidate     artifact.Ref        `json:"candidate"`
-			ReleaseReady  bool                `json:"release_ready"`
-		}{doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
+			Protection    *agent.ProtectionInfo `json:"check_protection,omitempty"`
+			Context       *agent.ContextAudit   `json:"context,omitempty"`
+			SchemaVersion int                   `json:"schema_version"`
+			State         c.TaskState           `json:"state"`
+			Budget        agent.Budget          `json:"budget"`
+			Blocker       string                `json:"blocker"`
+			Summary       string                `json:"untrusted_model_summary"`
+			Candidate     artifact.Ref          `json:"candidate"`
+			ReleaseReady  bool                  `json:"release_ready"`
+		}{protection, doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
 			return 4
 		}
 	} else {
@@ -42,6 +43,9 @@ func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, js
 		}
 		if doc.FinalReady {
 			fmt.Fprintf(out, "Model summary %s\n", strconv.QuoteToASCII(doc.FinalSummary))
+		}
+		if protection != nil {
+			fmt.Fprintf(out, "Check protection %s · checks %d · scopes %d · strong verification unavailable\n", protection.ClosureCoverage, protection.CheckCount, protection.ProtectedScopes)
 		}
 		fmt.Fprintln(out, "Offline fixture engineering profile · stable release gates remain closed")
 	}
@@ -60,6 +64,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	directory := f.String("store", "", "private session store outside source")
 	task := f.String("task", "", "task ID (default random)")
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
+	checkPlanFile := f.String("check-plan", "", "trusted operator check closure plan JSON; cannot grant VERIFIED")
 	offline := f.Bool("offline", false, "offline fixture profile only")
 	git := f.Bool("git", false, "native Git-aware capture")
 	allow := f.Bool("allow-unverified", false, "explicitly allow a limited UNVERIFIED candidate-only result (exit 2)")
@@ -112,6 +117,31 @@ func runTask(args []string, out, errout io.Writer) int {
 	if _, err = agent.ParseFixture(raw); err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
+	var checkPlan []byte
+	if *checkPlanFile != "" {
+		path, readErr := filepath.Abs(*checkPlanFile)
+		if readErr != nil {
+			return report(out, errout, readErr, *jsonMode)
+		}
+		checkRoot, readErr := os.OpenRoot(filepath.Dir(path))
+		if readErr != nil {
+			return report(out, errout, readErr, *jsonMode)
+		}
+		checkPlan, readErr = fileguard.ReadRegular(checkRoot, filepath.Base(path), 1<<20)
+		closeErr := checkRoot.Close()
+		if readErr == nil {
+			readErr = closeErr
+		}
+		if readErr == nil && len(checkPlan) == 0 {
+			readErr = c.Fail(c.InvalidArgument, "explicit check plan file is empty")
+		}
+		if readErr == nil {
+			_, readErr = agent.ParseCheckPlan(checkPlan)
+		}
+		if readErr != nil {
+			return report(out, errout, readErr, *jsonMode)
+		}
+	}
 	if *task == "" {
 		var nonce [16]byte
 		if _, err = rand.Read(nonce[:]); err != nil {
@@ -129,7 +159,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	budget := agent.DefaultBudget()
 	budget.MaxSteps = *steps
 	budget.MaxToolCalls = *tools
-	_, err = session.Create(ctx, agent.StartOptions{Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

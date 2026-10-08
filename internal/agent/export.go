@@ -80,13 +80,14 @@ func (s *Session) Export(ctx context.Context, task, output string) (ExportManife
 		return result, err
 	}
 	report, err := c.CanonicalV1(struct {
-		State         c.TaskState `json:"state"`
-		Budget        Budget      `json:"budget"`
-		Blocker       string      `json:"blocker"`
-		ModelSummary  string      `json:"untrusted_model_summary"`
-		PatchComplete bool        `json:"patch_complete"`
-		ReleaseReady  bool        `json:"release_ready"`
-	}{State: state, Budget: doc.Budget, Blocker: doc.Blocker, ModelSummary: doc.FinalSummary, PatchComplete: changeset.PatchComplete})
+		Protection    *ProtectionInfo `json:"check_protection,omitempty"`
+		State         c.TaskState     `json:"state"`
+		Budget        Budget          `json:"budget"`
+		Blocker       string          `json:"blocker"`
+		ModelSummary  string          `json:"untrusted_model_summary"`
+		PatchComplete bool            `json:"patch_complete"`
+		ReleaseReady  bool            `json:"release_ready"`
+	}{Protection: CheckProtection(doc), State: state, Budget: doc.Budget, Blocker: doc.Blocker, ModelSummary: doc.FinalSummary, PatchComplete: changeset.PatchComplete})
 	if err != nil {
 		return result, err
 	}

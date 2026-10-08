@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.4.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.5.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
 
 ## Derleme
 
@@ -145,3 +145,41 @@ OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol 
 ## Henüz desteklenmeyenler
 
 Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, tam IPC platform conformance/supervisor/attach/TUI, provider semantic steering, compaction, migration/retention/delete, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.
+
+## Korunan kontrol planı (0.5 engineering)
+
+İlk candidate değişikliğinden önce trusted operator check/helper/config/fixture kapsamını bildirebilir. Plan argv'si şu anda çalıştırılmaz; expected discovery bir sonuç beyanı değildir. Plan/model çıktısı VERIFIED yetkisi vermez. Plan yoksa typed origin `UNRESOLVED` olur.
+
+Örnek `check-plan.json` (runner_digest gerçek planlı runner metadata digest'iyle doldurulur; aşağıdaki sıfırlar yalnız biçim örneğidir):
+
+```json
+{
+  "schema_version": 1,
+  "checks": [{
+    "id": "behavior-suite",
+    "kind": "TEST",
+    "requirement_ids": ["user-goal"],
+    "argv": ["trusted-runner", "--selection", "all"],
+    "runner_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "selection": "all registered behavior checks",
+    "expected_tests": ["behavior-case-1"],
+    "closure": [
+      {"path": "tests", "recursive": true},
+      {"path": "test.config", "recursive": false},
+      {"path": "extra.config", "recursive": false}
+    ]
+  }]
+}
+```
+
+```powershell
+.\bin\viber.exe run "TASK" --offline --fixture fixture.json --check-plan check-plan.json --root C:\source --store C:\private-store --json
+```
+
+Path bir file ise recursive false, bir directory/tree ise true olmalıdır. Absent file/tree kapsamı sonradan gizli config/test eklenmesini de engeller. Closure scope exclusions/sensitive/binary kaynaklarla kesişirse eksik veri üzerinden güvence vermek yerine reddedilir. TEST için boş/duplicate expected discovery ve bilinmeyen requirement IDs kabul edilmez. Plan 1 MiB, 128 checks, check başına 256 scopes ve toplam 1024 distinct scope ile bounded'dır. Komut/env içinde credential bulundurmayın; production credential handle entegrasyonu ayrı D1 işidir.
+
+Origin durable task document'te tutulur. Sonradan aynı plan dosyasını değiştirmek mevcut görevi değiştirmez. Guided/auto ve review approval aynı protected guard'a tabidir. Mevcut revision original origin'i korur; yeni kriter eski coverage'ı kullanamaz. Korunan test beklentilerini değiştirme protokolü henüz sunulmuyor; böyle bir öneri POLICY_DENIED olur. Yeni agent testini kapsam dışında eklemek eski protected check yerine geçtiğini göstermez.
+
+`check_protection` JSON/IPC/export özeti origin digest, provenance, closure coverage, check/scope count ve `strong_verification_available: false` içerir. Raw operator argv/discovery listesi status'a açılmaz. Provenance `OPERATOR_DECLARED_REPOSITORY_BASELINE` bağımsız test oracle'ı değildir; `EXPLICIT_UNREVIEWED` tam dependency closure kabulü değildir. Candidate ve protected scope digests compiler'a zorunlu girdi olarak girer. Offline fixture teslimleri UNVERIFIED/exit 2 olmaya devam eder.
+
+[ADR 0005](adr/0005-protected-check-origin.md), [üretim tamamlama planı](IMPLEMENTATION_PLAN.md) ve [release kapıları](RELEASE_GATES.md) kabul sınırını tanımlar.

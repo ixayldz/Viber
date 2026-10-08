@@ -22,6 +22,7 @@ import (
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/policy"
 	"github.com/ixayldz/Viber/internal/store"
+	"github.com/ixayldz/Viber/internal/verify"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
@@ -60,27 +61,28 @@ type Pending struct {
 	Status          string `json:"status"`
 }
 type Document struct {
-	Context          *ContextAudit   `json:"context,omitempty"`
-	Requests         []UserRequest   `json:"requests,omitempty"`
-	SchemaVersion    int             `json:"schema_version"`
-	TaskID           string          `json:"task_id"`
-	Spec             c.TaskSpec      `json:"spec"`
-	Baseline         artifact.Ref    `json:"baseline"`
-	Candidate        artifact.Ref    `json:"candidate"`
-	Messages         []model.Message `json:"messages"`
-	ToolCursor       int64           `json:"tool_cursor"`
-	PendingReplies   []model.Reply   `json:"pending_replies"`
-	Budget           Budget          `json:"budget"`
-	AllowUnverified  bool            `json:"allow_unverified"`
-	Autonomy         string          `json:"autonomy"`
-	FixtureDigest    string          `json:"fixture_digest"`
-	FixtureCursor    int64           `json:"fixture_cursor"`
-	Pending          *Pending        `json:"pending"`
-	UnknownEffect    bool            `json:"unknown_effect"`
-	Blocker          string          `json:"blocker"`
-	FinalSummary     string          `json:"final_summary"`
-	FinalReady       bool            `json:"final_ready"`
-	LastResponseBlob string          `json:"last_response_blob"`
+	Protection       *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
+	Context          *ContextAudit       `json:"context,omitempty"`
+	Requests         []UserRequest       `json:"requests,omitempty"`
+	SchemaVersion    int                 `json:"schema_version"`
+	TaskID           string              `json:"task_id"`
+	Spec             c.TaskSpec          `json:"spec"`
+	Baseline         artifact.Ref        `json:"baseline"`
+	Candidate        artifact.Ref        `json:"candidate"`
+	Messages         []model.Message     `json:"messages"`
+	ToolCursor       int64               `json:"tool_cursor"`
+	PendingReplies   []model.Reply       `json:"pending_replies"`
+	Budget           Budget              `json:"budget"`
+	AllowUnverified  bool                `json:"allow_unverified"`
+	Autonomy         string              `json:"autonomy"`
+	FixtureDigest    string              `json:"fixture_digest"`
+	FixtureCursor    int64               `json:"fixture_cursor"`
+	Pending          *Pending            `json:"pending"`
+	UnknownEffect    bool                `json:"unknown_effect"`
+	Blocker          string              `json:"blocker"`
+	FinalSummary     string              `json:"final_summary"`
+	FinalReady       bool                `json:"final_ready"`
+	LastResponseBlob string              `json:"last_response_blob"`
 }
 type Session struct {
 	mu        sync.Mutex
@@ -147,6 +149,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	if doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion || doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task {
 		return state, doc, c.Fail(c.StoreIntegrityError, "durable task document binding mismatch")
 	}
+	if err = s.validateProtection(doc); err != nil {
+		return state, doc, err
+	}
 	if err = s.validateContext(doc); err != nil {
 		return state, doc, err
 	}
@@ -195,6 +200,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	CheckPlan       []byte
 	Root            string
 	Prompt          []byte
 	Git             bool
@@ -244,10 +250,15 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if err != nil {
 		return c.TaskState{}, err
 	}
-	origin, err := c.Digest(struct {
-		Baseline string
-		Profile  string
-	}{ref.SnapshotDigest, "offline-fixture-no-protected-checks-v1"})
+	plan, err := ParseCheckPlan(options.CheckPlan)
+	if err != nil {
+		return c.TaskState{}, err
+	}
+	protected, err := verify.BuildCheckOrigin(options.TaskID, base, rawDigest, plan)
+	if err != nil {
+		return c.TaskState{}, err
+	}
+	origin, err := c.Digest(protected)
 	if err != nil {
 		return c.TaskState{}, err
 	}
@@ -255,7 +266,10 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if err = spec.Validate(); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
+		return c.TaskState{}, err
+	}
+	doc := Document{Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	state, err := s.record(ctx, c.TaskState{}, doc, "TaskCreated", c.EventPayload{SpecVersion: 1, SnapshotDigest: ref.SnapshotDigest, RequiredObligations: 1})
 	if err != nil {
 		return state, err

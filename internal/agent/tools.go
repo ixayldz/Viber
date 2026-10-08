@@ -52,6 +52,9 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc Docume
 		if err != nil {
 			return model.Reply{}, nil, err
 		}
+		if err = guardProtected(doc, next); err != nil {
+			return model.Reply{}, nil, err
+		}
 		ref, err := s.Archive.Put(doc.TaskID, next)
 		if err != nil {
 			return model.Reply{}, nil, err

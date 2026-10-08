@@ -7,6 +7,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/verify"
 )
 
 const offlineContextProfile = "OFFLINE_BYTE_UPPER_BOUND_V1"
@@ -29,12 +30,18 @@ func offlineContext(request model.Request) ([]byte, ctxpack.Manifest, error) {
 	return raw, manifest, err
 }
 func compileOfflineRequest(doc Document, state c.TaskState, layers []policy.Policy) (model.Request, []byte, ctxpack.Manifest, error) {
+	var scopes []verify.ProtectedScope
+	if doc.Protection != nil {
+		scopes = doc.Protection.Protected
+	}
 	constraints, err := c.CanonicalV1(struct {
-		Spec         c.TaskSpec      `json:"spec"`
-		Policy       []policy.Policy `json:"restriction_layers"`
-		Budget       Budget          `json:"budget"`
-		ReleaseReady bool            `json:"release_ready"`
-	}{doc.Spec, layers, doc.Budget, false})
+		Protection   *ProtectionInfo         `json:"check_protection,omitempty"`
+		Scopes       []verify.ProtectedScope `json:"protected_check_scopes,omitempty"`
+		Spec         c.TaskSpec              `json:"spec"`
+		Policy       []policy.Policy         `json:"restriction_layers"`
+		Budget       Budget                  `json:"budget"`
+		ReleaseReady bool                    `json:"release_ready"`
+	}{CheckProtection(doc), scopes, doc.Spec, layers, doc.Budget, false})
 	if err != nil {
 		return model.Request{}, nil, ctxpack.Manifest{}, err
 	}

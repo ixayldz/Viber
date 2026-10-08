@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,8 +43,14 @@ func TestBoundedOutputCancelsOnceAndDoesNotExposeInternalBytes(t *testing.T) {
 }
 func TestInspectGuardRejectsMountAndAuthorityDowngrade(t *testing.T) {
 	p := DefaultProfile("golang@sha256:" + strings.Repeat("a", 64))
+	source := "/owned/candidate"
+	inv := Invocation{CandidateDigest: c.HashBytes([]byte("candidate")), Argv: []string{"/bin/sh", "-c", "echo computation"}}
 	var valid inspected
 	valid.Config.User = "65532:65532"
+	valid.Config.Image = p.Image
+	valid.Config.WorkingDir = "/workspace"
+	valid.Config.Entrypoint = inv.Argv[:1]
+	valid.Config.Cmd = inv.Argv[1:]
 	valid.HostConfig.ReadonlyRootfs = true
 	valid.HostConfig.NetworkMode = "none"
 	valid.HostConfig.CapDrop = []string{"ALL"}
@@ -52,28 +59,48 @@ func TestInspectGuardRejectsMountAndAuthorityDowngrade(t *testing.T) {
 	valid.HostConfig.MemorySwap = p.MemoryBytes
 	valid.HostConfig.PidsLimit = p.Pids
 	valid.HostConfig.NanoCpus = p.CPUs * 1e9
-	valid.Mounts = append(valid.Mounts, struct {
-		Destination string
-		RW          bool
-		Type        string
-	}{Destination: "/workspace", Type: "bind"})
-	if err := validateInspect(valid, p); err != nil {
+	init := true
+	valid.HostConfig.Init = &init
+	valid.HostConfig.IpcMode = "private"
+	valid.HostConfig.Tmpfs = map[string]string{"/tmp": scratchOptions(p)}
+	valid.Mounts = []inspectedMount{{Destination: "/workspace", Source: source, Type: "bind", Propagation: "rprivate"}}
+	if err := validateInspect(valid, p, source, inv); err != nil {
 		t.Fatal(err)
 	}
-	bad := valid
-	bad.HostConfig.Privileged = true
-	if err := validateInspect(bad, p); err == nil {
-		t.Fatal("privileged accepted")
+	cases := map[string]func(*inspected){
+		"privileged":          func(i *inspected) { i.HostConfig.Privileged = true },
+		"writable source":     func(i *inspected) { i.Mounts[0].RW = true },
+		"wrong mount source":  func(i *inspected) { i.Mounts[0].Source = "/other/candidate" },
+		"shared propagation":  func(i *inspected) { i.Mounts[0].Propagation = "shared" },
+		"duplicate workspace": func(i *inspected) { i.Mounts = append(i.Mounts, i.Mounts[0]) },
+		"extra credentials mount": func(i *inspected) {
+			i.Mounts = append(i.Mounts, inspectedMount{Destination: "/root/.ssh", Source: "/credentials", Type: "bind"})
+		},
+		"missing source":    func(i *inspected) { i.Mounts = nil },
+		"wrong image":       func(i *inspected) { i.Config.Image = "golang:latest" },
+		"wrong argv":        func(i *inspected) { i.Config.Cmd = []string{"-c", "echo fake-PASS"} },
+		"wrong entrypoint":  func(i *inspected) { i.Config.Entrypoint = []string{"/bin/other"} },
+		"wrong workdir":     func(i *inspected) { i.Config.WorkingDir = "/root" },
+		"host PID":          func(i *inspected) { i.HostConfig.PidMode = "host" },
+		"shared IPC":        func(i *inspected) { i.HostConfig.IpcMode = "host" },
+		"no init":           func(i *inspected) { i.HostConfig.Init = nil },
+		"unbounded scratch": func(i *inspected) { i.HostConfig.Tmpfs["/tmp"] = "rw" },
+		"other scratch":     func(i *inspected) { i.HostConfig.Tmpfs["/home"] = "rw" },
+		"extra binds":       func(i *inspected) { i.HostConfig.Binds = []string{"/host:/host"} },
+		"inherited volumes": func(i *inspected) { i.HostConfig.VolumesFrom = []string{"other"} },
 	}
-	bad = valid
-	bad.Mounts = append([]struct {
-		Destination string
-		RW          bool
-		Type        string
-	}{}, valid.Mounts...)
-	bad.Mounts[0].RW = true
-	if err := validateInspect(bad, p); err == nil {
-		t.Fatal("writable source accepted")
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(valid)
+			var bad inspected
+			if err := json.Unmarshal(raw, &bad); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&bad)
+			if err := validateInspect(bad, p, source, inv); err == nil {
+				t.Fatal("downgraded execution admitted")
+			}
+		})
 	}
 }
 func TestDockerOfflineReadOnlyQuiescenceAndTimeout(t *testing.T) {
