@@ -283,6 +283,15 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 	if err != nil {
 		return state, err
 	}
+	if command.Payload.Tokens != nil || command.Type == "TaskCreated" {
+		all, loadErr := tokenStates(ctx, tx)
+		if loadErr != nil {
+			return state, loadErr
+		}
+		if err = c.ValidateTokenAdmission(all, state, command.Payload.Tokens); err != nil {
+			return c.TaskState{}, err
+		}
+	}
 	envelope, err := c.CanonicalV1(event)
 	if err != nil {
 		return state, err
@@ -380,6 +389,9 @@ func (s *Store) replayToLocked(ctx context.Context, taskID string, until int64) 
 		next, err := kernel.Reduce(old, event, payload)
 		if err != nil {
 			return nil, c.Fail(c.StoreIntegrityError, "journal reducer rejected event")
+		}
+		if err := c.ValidateTokenAdmission(states, next, payload.Tokens); err != nil {
+			return nil, c.Fail(c.StoreIntegrityError, "journal global token admission is invalid")
 		}
 		states[task] = next
 		if task == taskID && next.TaskSeq == until {

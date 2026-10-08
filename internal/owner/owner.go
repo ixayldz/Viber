@@ -15,9 +15,12 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/delivery"
 	"github.com/ixayldz/Viber/internal/ipc"
+	"github.com/ixayldz/Viber/internal/plan"
 )
 
 type View struct {
+	Runtime      *agent.LocalRuntime   `json:"runtime,omitempty"`
+	Plan         *plan.State           `json:"plan,omitempty"`
 	Protection   *agent.ProtectionInfo `json:"check_protection,omitempty"`
 	Context      *agent.ContextAudit   `json:"context,omitempty"`
 	State        c.TaskState           `json:"state"`
@@ -112,7 +115,7 @@ func (o *Owner) close() error {
 }
 func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, error) {
 	state, doc, err := o.Session.Inspect(ctx, task, sequence)
-	return View{Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+	return View{Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
 func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	o.control.Lock()
@@ -146,7 +149,7 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	if completed {
 		o.mu.Unlock()
 		_, doc, err := o.Session.Inspect(ctx, task, state.TaskSeq)
-		return View{Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+		return View{Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 	}
 	runCtx, cancel := context.WithCancel(o.ctx)
 	active := &activeRun{task: task, cancel: cancel, done: make(chan struct{})}
@@ -226,6 +229,14 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
+	case "budget":
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		if _, err := o.Session.State(ctx, request.TaskID); err != nil {
+			return nil, err
+		}
+		return o.Session.Journal.TokenLedger(ctx)
 	case "status":
 		if err := nullPayload(request.Payload); err != nil {
 			return nil, err

@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.6.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.7.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
 
 ## Derleme
 
@@ -208,3 +208,4 @@ Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup co
 ~~~
 
 Script original yedeği değiştirmez; fresh .cache output altında eski restore, migration öncesi/sonrası backup, yeni restore ve historical replay oluşturur. Pending/unknown task veya yanlış task ID aynı güvenli preflight'te reddedilir.
+0.7 native plan/local runtime/token ledger kullanımı [README](../README.md), kapsam ve açık işler [KEYLESS_PROGRESS](KEYLESS_PROGRESS.md), authority/compatibility kararları [ADR 0007](adr/0007-plan-and-local-runtime.md) ve [ADR 0008](adr/0008-global-token-ledger.md) içindedir. Yeni ledger görevleri fresh store ister; legacy task'ların history/resume sözleşmesi korunur.

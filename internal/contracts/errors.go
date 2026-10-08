@@ -13,6 +13,7 @@ const (
 	StaleRequest          Code = "STALE_REQUEST"
 	Conflict              Code = "CONFLICT"
 	StaleAuthority        Code = "STALE_AUTHORITY"
+	BudgetLimitReached    Code = "BUDGET_LIMIT_REACHED"
 	ContextTooSmall       Code = "CONTEXT_TOO_SMALL"
 	StoreIntegrityError   Code = "STORE_INTEGRITY_ERROR"
 	StoreOwned            Code = "STORE_OWNED"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -19,11 +20,14 @@ import (
 	"github.com/ixayldz/Viber/internal/ipc"
 	"github.com/ixayldz/Viber/internal/kernel"
 	"github.com/ixayldz/Viber/internal/owner"
+	"github.com/ixayldz/Viber/internal/plan"
 )
 
 func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool, protection *agent.ProtectionInfo) int {
 	if jsonMode {
 		if err := jsonWrite(out, struct {
+			Runtime       *agent.LocalRuntime   `json:"runtime,omitempty"`
+			Plan          *plan.State           `json:"plan,omitempty"`
 			Protection    *agent.ProtectionInfo `json:"check_protection,omitempty"`
 			Context       *agent.ContextAudit   `json:"context,omitempty"`
 			SchemaVersion int                   `json:"schema_version"`
@@ -33,7 +37,7 @@ func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, js
 			Summary       string                `json:"untrusted_model_summary"`
 			Candidate     artifact.Ref          `json:"candidate"`
 			ReleaseReady  bool                  `json:"release_ready"`
-		}{protection, doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
+		}{doc.Runtime, doc.Plan, protection, doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
 			return 4
 		}
 	} else {
@@ -47,7 +51,7 @@ func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, js
 		if protection != nil {
 			fmt.Fprintf(out, "Check protection %s · checks %d · scopes %d · strong verification unavailable\n", protection.ClosureCoverage, protection.CheckCount, protection.ProtectedScopes)
 		}
-		fmt.Fprintln(out, "Offline fixture engineering profile · stable release gates remain closed")
+		fmt.Fprintln(out, "Fixture/local engineering profile · stable release gates remain closed")
 	}
 	return 0
 }
@@ -66,9 +70,18 @@ func runTask(args []string, out, errout io.Writer) int {
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
 	checkPlanFile := f.String("check-plan", "", "trusted operator check closure plan JSON; cannot grant VERIFIED")
 	offline := f.Bool("offline", false, "offline fixture profile only")
+	provider := f.String("provider", "", "ollama local runtime; remote providers remain unavailable")
+	endpoint := f.String("endpoint", "http://127.0.0.1:11434", "literal loopback Ollama origin")
+	modelID := f.String("model", "", "operator-selected local model")
+	localModel := f.Bool("local-model", false, "declare the endpoint/model executes locally without a cloud proxy")
+	contextLimit := f.Int64("context-limit", 32768, "declared model context capacity; conservative byte preflight")
+	outputLimit := f.Int64("output-limit", 512, "maximum model output tokens")
+	timeoutMillis := f.Int64("model-timeout-ms", 120000, "bounded local inference timeout")
 	git := f.Bool("git", false, "native Git-aware capture")
 	allow := f.Bool("allow-unverified", false, "explicitly allow a limited UNVERIFIED candidate-only result (exit 2)")
 	autonomy := f.String("autonomy", "guided", "review, guided or auto native tools")
+	storeInput := f.Int64("store-input-tokens", 64<<20, "immutable store-wide input token work limit; first task only")
+	storeOutput := f.Int64("store-output-tokens", 4<<20, "immutable store-wide output token work limit; first task only")
 	steps := f.Int64("max-steps", 16, "bounded model turns")
 	tools := f.Int64("max-tool-calls", 64, "bounded native tool calls")
 	jsonMode := f.Bool("json", false, "structured result")
@@ -80,9 +93,44 @@ func runTask(args []string, out, errout io.Writer) int {
 	} else if f.NArg() != 0 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "one raw task prompt required"), *jsonMode)
 	}
-	if !*offline || *fixtureFile == "" {
-		report(out, errout, c.Fail(c.UnsupportedCapability, "only explicit --offline --fixture profile is available; production backend/provider acceptance is pending"), *jsonMode)
-		return 3
+	var storeLimits *c.TokenLimits
+	f.Visit(func(value *flag.Flag) {
+		if value.Name == "store-input-tokens" || value.Name == "store-output-tokens" {
+			storeLimits = &c.TokenLimits{Input: *storeInput, Output: *storeOutput}
+		}
+	})
+	if storeLimits != nil {
+		if err := storeLimits.Validate(); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+	}
+	localFlag := false
+	f.Visit(func(value *flag.Flag) {
+		if value.Name == "endpoint" || value.Name == "context-limit" || value.Name == "output-limit" || value.Name == "model-timeout-ms" {
+			localFlag = true
+		}
+	})
+	var runtime *agent.LocalRuntime
+	if *provider == "" {
+		if !*offline || *fixtureFile == "" {
+			report(out, errout, c.Fail(c.UnsupportedCapability, "select --offline --fixture or declared local --provider ollama; remote runtime remains unavailable"), *jsonMode)
+			return 3
+		}
+		if *modelID != "" || *localModel || localFlag {
+			return report(out, errout, c.Fail(c.InvalidArgument, "fixture and local runtime flags are mutually exclusive"), *jsonMode)
+		}
+	} else {
+		if *provider != "ollama" {
+			report(out, errout, c.Fail(c.UnsupportedCapability, "only local Ollama runtime is available"), *jsonMode)
+			return 3
+		}
+		if *offline || *fixtureFile != "" {
+			return report(out, errout, c.Fail(c.InvalidArgument, "local runtime cannot be combined with offline fixture flags"), *jsonMode)
+		}
+		runtime = &agent.LocalRuntime{SchemaVersion: 1, Provider: *provider, Endpoint: *endpoint, Model: *modelID, DeclaredLocal: *localModel, ContextLimit: *contextLimit, OutputLimit: *outputLimit, TimeoutMillis: *timeoutMillis}
+		if err := runtime.Validate(); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
 	}
 	if prompt == "" || *directory == "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "raw prompt and session store required"), *jsonMode)
@@ -102,20 +150,24 @@ func runTask(args []string, out, errout io.Writer) int {
 	if !fileguard.Disjoint(source, target) {
 		return report(out, errout, c.Fail(c.PolicyDenied, "session store must not overlap source"), *jsonMode)
 	}
-	file, err := os.Open(*fixtureFile)
-	if err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return report(out, errout, err, *jsonMode)
-	}
-	if _, err = agent.ParseFixture(raw); err != nil {
-		return report(out, errout, err, *jsonMode)
+	var raw []byte
+	if runtime == nil {
+		file, err := os.Open(*fixtureFile)
+		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		raw, err = io.ReadAll(io.LimitReader(file, (8<<20)+1))
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		if _, err = agent.ParseFixture(raw); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+
 	}
 	var checkPlan []byte
 	if *checkPlanFile != "" {
@@ -159,7 +211,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	budget := agent.DefaultBudget()
 	budget.MaxSteps = *steps
 	budget.MaxToolCalls = *tools
-	_, err = session.Create(ctx, agent.StartOptions{CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

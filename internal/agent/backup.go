@@ -91,6 +91,11 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 				return nil, err
 			}
 			for _, record := range page.Records {
+				if record.Payload.Tokens != nil {
+					if _, _, err := s.Inspect(ctx, state.TaskID, record.Event.TaskSeq); err != nil {
+						return nil, err
+					}
+				}
 				if record.Event.Type == "InputRecorded" && record.Payload.InputDigest != "" {
 					if _, err := s.pendingInput(ctx, state.TaskID, record.Event.ID); err != nil {
 						return nil, err
@@ -128,6 +133,12 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 		if err = s.validateContext(doc); err != nil {
 			return nil, err
 		}
+		if err = s.validateRuntime(doc); err != nil {
+			return nil, err
+		}
+		if err = s.validatePlan(doc); err != nil {
+			return nil, err
+		}
 		if err = doc.Spec.Validate(); err != nil {
 			return nil, err
 		}
@@ -140,16 +151,19 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 				return nil, c.Fail(c.StoreIntegrityError, "backup raw intent missing")
 			}
 		}
-		fixtureRaw, err := s.Archive.GetBytes(ref.TaskID, doc.FixtureDigest)
-		if err != nil {
-			return nil, err
-		}
-		fixture, err := ParseFixture(fixtureRaw)
-		if err != nil {
-			return nil, err
-		}
-		if doc.FixtureCursor < 0 || doc.FixtureCursor > int64(len(fixture.Turns)) {
-			return nil, c.Fail(c.StoreIntegrityError, "fixture cursor invalid")
+		if doc.Runtime == nil {
+			fixtureRaw, err := s.Archive.GetBytes(ref.TaskID, doc.FixtureDigest)
+			if err != nil {
+				return nil, err
+			}
+			fixture, err := ParseFixture(fixtureRaw)
+			if err != nil {
+				return nil, err
+			}
+			if doc.FixtureCursor < 0 || doc.FixtureCursor > int64(len(fixture.Turns)) {
+				return nil, c.Fail(c.StoreIntegrityError, "fixture cursor invalid")
+			}
+
 		}
 		if doc.LastResponseBlob != "" {
 			if _, err = s.Archive.GetBytes(ref.TaskID, doc.LastResponseBlob); err != nil {

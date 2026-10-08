@@ -39,6 +39,7 @@ type Message struct {
 	Model        string            `json:"model"`
 }
 type Request struct {
+	ContextWindow   int64     `json:"context_window,omitempty"`
 	SchemaVersion   int       `json:"schema_version"`
 	ID              string    `json:"request_id"`
 	Model           string    `json:"model"`
@@ -85,7 +86,7 @@ type Adapter interface {
 var toolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
 
 func validateRequest(r Request, provider string) error {
-	if r.SchemaVersion != c.SchemaVersion || r.ID == "" || r.Model == "" || len(r.Model) > 256 || strings.ContainsAny(r.Model, "\r\n\x00") || r.MaxOutputTokens < 1 || r.MaxOutputTokens > 65536 || len(r.Messages) == 0 || len(r.Messages) > 10000 || len(r.Tools) > 32 {
+	if r.ContextWindow < 0 || r.ContextWindow > 1<<20 || r.ContextWindow > 0 && provider != "ollama" || r.SchemaVersion != c.SchemaVersion || r.ID == "" || r.Model == "" || len(r.Model) > 256 || strings.ContainsAny(r.Model, "\r\n\x00") || r.MaxOutputTokens < 1 || r.MaxOutputTokens > 65536 || len(r.Messages) == 0 || len(r.Messages) > 10000 || len(r.Tools) > 32 {
 		return c.Fail(c.InvalidArgument, "invalid model request")
 	}
 	names := map[string]bool{}

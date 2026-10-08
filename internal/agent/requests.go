@@ -185,6 +185,12 @@ func (s *Session) validateReviewCall(state c.TaskState, doc Document, call model
 	}
 	layers := s.layers(state, doc)
 	layers[0].Effects = append(layers[0].Effects, "candidate.write")
+	if err = doc.Plan.AdmitWrites(args.Changes); err != nil {
+		return err
+	}
+	if err = doc.Plan.AdmitReadSet(args.ReadSet); err != nil {
+		return err
+	}
 	p := c.Proposal{SchemaVersion: 1, ID: call.ID, TaskID: doc.TaskID, SpecVersion: doc.Spec.Version, BaseSnapshot: doc.Candidate.SnapshotDigest, PolicyEpoch: state.PolicyEpoch, KernelGeneration: state.KernelGeneration, ReadSet: args.ReadSet, Changes: args.Changes}
 	next, err := workspace.Preview(candidate, candidate, p, layers, state)
 	if err != nil {

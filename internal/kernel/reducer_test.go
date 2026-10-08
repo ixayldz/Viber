@@ -112,3 +112,16 @@ func TestMultipleInputsCannotClearEachOthersBarrier(t *testing.T) {
 		t.Fatal("resolved policy barrier")
 	}
 }
+
+func TestReducerOwnsTokenAccountAcrossHistoricalStates(t *testing.T) {
+	before := c.TaskState{SchemaVersion: 1, TaskID: "owned", SpecVersion: 1, Execution: c.Ready, TaskSeq: 3, StoreSeq: 3, KernelGeneration: 1, PolicyEpoch: 1, Tokens: &c.TokenAccount{SchemaVersion: 1, Limits: c.DefaultTokenLimits(), Reservations: []c.TokenReservation{{ID: "original"}}}}
+	after, err := Reduce(&before, c.Event{SchemaVersion: 1, ID: "running", Actor: "kernel", TaskID: "owned", TaskSeq: 4, StoreSeq: 4, KernelGeneration: 1, Type: "StateTransitioned"}, c.EventPayload{State: c.Running})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.Tokens.Limits.Input = 4096
+	after.Tokens.Reservations[0].ID = "changed"
+	if before.Tokens.Limits != c.DefaultTokenLimits() || before.Tokens.Reservations[0].ID != "original" {
+		t.Fatal("returned state aliased historical resource account")
+	}
+}

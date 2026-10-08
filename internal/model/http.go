@@ -110,7 +110,7 @@ func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
 	if err := validateRequest(r, client.config.Provider); err != nil {
 		return result, err
 	}
-	if client.config.Provider == "ollama" && (strings.Contains(r.Model, ":cloud") || strings.HasSuffix(r.Model, "-cloud")) {
+	if client.config.Provider == "ollama" && (strings.Contains(strings.ToLower(r.Model), ":cloud") || strings.HasSuffix(strings.ToLower(r.Model), "-cloud")) {
 		return result, c.Fail(c.PolicyDenied, "cloud Ollama profiles are not local inference")
 	}
 	body, endpoint, err := encodeRequest(client.config.Provider, r)
@@ -176,19 +176,45 @@ func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
 		// but do not copy them into printable errors or provider fallbacks.
 		return result, &Failure{Kind: "HTTP_ERROR", StatusCode: response.StatusCode, ProviderRequestID: result.ProviderRequestID, UsageUnknown: response.StatusCode >= 500, Retryable: false}
 	}
-	if err = validateWire(data); err != nil {
-		return result, &Failure{Kind: "INVALID_RESPONSE", UsageUnknown: true}
-	}
-	if err = decodeResult(client.config.Provider, data, &result); err != nil {
-		result.Calls = nil
-		return result, err
-	}
-	if err = validateResult(r, &result); err != nil {
-		result.Calls = nil
-		result.Continuation = nil
+	if err = decodeReceiptInto(r, client.config.Provider, data, &result); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// DecodeReceipt revalidates retained wire bytes without dispatching any effect.
+// It does not make provider-reported usage an independent task quality verdict.
+func DecodeReceipt(r Request, provider string, data []byte) (Result, error) {
+	result := Result{SchemaVersion: 1, RequestID: r.ID, Provider: provider, Model: r.Model, Raw: bytes.Clone(data)}
+	if err := ValidateRequest(r, provider); err != nil {
+		return result, err
+	}
+	err := decodeReceiptInto(r, provider, data, &result)
+	return result, err
+}
+func decodeReceiptInto(r Request, provider string, data []byte, result *Result) error {
+	if len(data) > 8<<20 || validateWire(data) != nil {
+		return &Failure{Kind: "INVALID_RESPONSE", UsageUnknown: true}
+	}
+	if provider == "ollama" {
+		wire, err := object(data)
+		if err != nil {
+			return err
+		}
+		if _, present := wire["model"]; present && text(wire, "model") != r.Model {
+			return &Failure{Kind: "MODEL_PROFILE_MISMATCH", UsageUnknown: true, ProviderRequestID: result.ProviderRequestID}
+		}
+	}
+	if err := decodeResult(provider, data, result); err != nil {
+		result.Calls = nil
+		return err
+	}
+	if err := validateResult(r, result); err != nil {
+		result.Calls = nil
+		result.Continuation = nil
+		return err
+	}
+	return nil
 }
 
 // Wire JSON may contain provider metadata decimals. Kernel tool arguments and

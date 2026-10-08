@@ -1,6 +1,6 @@
 # Doğrulama kaydı
 
-Tarih: 8 Ekim 2026. Ürün: 0.6.0-dev. Bu sonuçlar offline engineering profiline aittir; PRD A–D üretim kabulü değildir.
+Tarih: 8 Ekim 2026. Güncel ürün: 0.7.0-dev. Önceki tablolar kendi 0.6 ve önceki sürüm kanıtlarını korur; son 0.7 kayıt aşağıdadır. Bu sonuçlar fixture/local engineering profiline aittir; PRD A–D üretim kabulü değildir.
 
 | Kontrol | Sonuç / kapsam |
 |---|---|
@@ -65,3 +65,24 @@ Yerel ignored kanıtlar: .cache/windows-migration-tests.jsonl, .cache/windows-mi
 
 P04 migration dilimi engineering kabulüdür; full control reserve/quota/retention/deletion/tombstone/managed-copy purge, tam power-loss/upgrade/installation ve bağımsız release eval'i açık kalır. Real provider kabulü kullanıcının offline tercihiyle DEFERRED. A/B/stable release kapıları CLOSED; 304 PASS uygulamanın %100 tamamlandığı anlamına gelmez.
 README/PRD analizi doğrulaması — 8 Ekim 2026: README'den çıkarılan 8 PowerShell blok grubu native Windows'ta çalıştırıldı: build/version/doctor; fixture run/status/diff; export; review pending request ve bound respond/resume; inspect/replay/events; backup/fresh restore/status/replay. Run/resume beklenen exit 2; review mutation öncesi WAITING_USER; source SHA-256 değişmedi; restored candidate digest aynı; kalite UNVERIFIED. Yerel ignored kanıt .cache/readme-usage-validation.txt ve .cache/readme-validation.ps1. Docs local links, 41 kalem/1.650 puan ve JSON/tablo tutarlılığı ayrıca kontrol edildi. Bu docs-only iş full test suite'i yeniden çalıştırmadı ve release gate açmadı. Ayrıntılı kapsam/puanlama/API anahtarlı-anahtarsız backlog docs/PRD_STATUS_ANALYSIS.md ve docs/PRD_STATUS_SCORE.json içindedir.
+
+## 0.7 anahtarsız plan/local runtime/token ledger kabulü — 8 Ekim 2026
+
+Son Windows full JSON turu: **336 test/alt test PASS / 3 SKIP / 0 FAIL**; package-level pass sayıları bu sayıya dahil değildir. Format, module verify, full go vet, CLI build ve doctor PASS. SKIP: iki host symlink privilege fixture'ı ve opt-in Docker fixture'ı; önceki 0.6 real Docker PASS yeni tur yerine kullanılmadı.
+
+Son pinned offline Linux turu: module verify, full vet ve bütün paketlerde `go test -race -count=1 ./...` PASS; linux/amd64 binary/doctor PASS. Darwin arm64 bütün package/test/CLI binary cross-build; `/bin/true` ile test yürütmesi atlanır, **COMPILE_ONLY**. Native macOS acceptance yapılmadı. Trusted Linux validation checkout'u cache/binary yazıları için writable; bu ortam, untrusted backend conformance kanıtı değildir.
+
+Test edilen yeni davranışlar:
+
+- Typed bounded plan/dependency/contract/scope/criterion/check references; cycle/unknown/stale/unsafe deny; deterministic tek aktif node; legal nondependency relation cycles ve historical dependency bypass reddi.
+- Native plan propose/next/finish; review approval ile scope/read-set bypass reddi; pending plan final block; output artifact node/candidate/contract/trust binding; missing output closure fail; scope revision invalidate ve fresh restore.
+- Local CLI adapter gerçek loopback HTTP request'i üretir; model/num_ctx/num_predict/output/timeout binding, provider continuation, native candidate mutation ve source unchanged. Operator-local declaration, literal loopback, known cloud/remote/mixed flags/model response mismatch deny. HTTP kabulü gerçek model inference/quality değildir.
+- Context overflow model dispatch/step/reserve öncesi durur; missing usage veya model uyuşmazlığı UNKNOWN reserve/no retry bırakır; restart/fresh restore/revision current runtime bağlarını korur.
+- Immutable store-wide token limits; concurrent multi-task reserve transaction-atomic; failed admission journal/document/step/cursor değiştirmez; command reserve/settle dedup double charge yaratmaz. Bounded observed overage kayda alınır, sonraki work admission durur.
+- UNKNOWN cancel/restart/backup/fresh restore'da silinmez; unsafe release ve tracked/legacy task mix, changed limit/profile/epoch reddedilir. Raw canonical request/model/context upper bound/profile/receipt availability/observed usage journal charge'a bağlıdır. Eski receipt kaybı current load ve backup'ı durdurur. Document counter forgery commit öncesi reddedilir; historical reducer states account alias'ı paylaşmaz.
+- Local inference'in 3 saniyelik model timeout'u, 1 saniyelik task work deadline'ını uzatamaz; gerçek loopback cancellation fixture'ı call'ı durdurur, geçen süreyi ve unknown reserve'u korur. Monotonic/suspend/reboot/backend clock conformance bundan ayrı ve açıktır.
+- Native README smoke: build/version/doctor, fixture run/status/diff/export, review requests/respond/resume, inspect/replay/events, backup/fresh restore. Beklenen limited delivery exit2, mutation öncesi WAITING_USER, source SHA-256 unchanged, restored candidate same, quality UNVERIFIED. Yeni budget komutu gerçek iki-task store'un charged/reserved limitlerini verir; CLI/peer-auth IPC/missing-store/low-budget cancel ayrıca test edilir.
+
+Ignored logs: `.cache/windows-keyless-final-tests.jsonl`, `.cache/linux-keyless-final-validation.txt`, `.cache/readme-usage-validation.txt`. Önceki plan/runtime ve account dilimi log'ları ayrı tarihsel kanıttır. Binary `bin/viber.exe` 0.7.0-dev; Linux/Darwin çıktıları .cache altında. Toolchain/dependency sürümleri değişmedi; önceki govulncheck/fuzz sonuçları yeni güvenlik taraması gibi sunulmadı.
+
+**Bütün anahtarsız backlog kapanmadı; prod-ready %100 iddiası yok.** Actual installed Ollama/model/template, iki remote provider credential conformance, protected independent verification/observer, physical control reserve/disk quota/retention/delete, monetary/child/resource accounting, live apply/restore, supervisor/TUI/context continuity/language intelligence, independent eval/performance/native packaging/signing/pilot açık. Güncel ayrıntılar [KEYLESS_PROGRESS](KEYLESS_PROGRESS.md); A/B/stable CLOSED.

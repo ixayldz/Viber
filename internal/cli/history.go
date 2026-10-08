@@ -76,6 +76,8 @@ func runHistory(command string, args []string, out, errout io.Writer) int {
 		} else {
 			var doc agent.Document
 			view.State, doc, err = session.Inspect(context.Background(), task, sequence)
+			view.Plan = doc.Plan
+			view.Runtime = doc.Runtime
 			view.Budget = doc.Budget
 			view.Blocker = doc.Blocker
 			view.Candidate = doc.Candidate

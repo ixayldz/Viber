@@ -152,9 +152,22 @@ func TestResumeRejectsChangedLiveSourceAndPendingIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc.Pending = &Pending{ID: "crash-intent", Kind: "MODEL", Candidate: doc.Candidate.SnapshotDigest, Status: "ADMITTED"}
-	doc.Budget.ReservedInput = 100
-	doc.Budget.ReservedOutput = 512
+	state, err = session.transition(context.Background(), state, c.Running, "", "crash admission fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, encoded, manifest, err := compileOfflineRequest(doc, state, session.layers(state, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDigest, err := session.Archive.PutBytes(doc.TaskID, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Context = &ContextAudit{SchemaVersion: 1, Profile: manifest.Estimator, RequestDigest: requestDigest, Manifest: manifest}
+	doc.Pending = &Pending{ID: request.ID, Kind: "MODEL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes(encoded), Status: "ADMITTED"}
+	doc.Budget.ReservedInput = manifest.InputTokens + 4096
+	doc.Budget.ReservedOutput = request.MaxOutputTokens
 	if _, err = session.record(context.Background(), state, doc, "SessionRecorded", c.EventPayload{}); err != nil {
 		t.Fatal(err)
 	}

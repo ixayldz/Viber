@@ -105,8 +105,10 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	if revision.CommandID == "" || len(revision.CommandID) > 128 || revision.TaskID == "" || revision.InputID == "" || revision.ExpectedSpecVersion < 1 || revision.ExpectedPolicyEpoch < 1 || !c.ValidDigest(revision.ExpectedCandidate) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "bound scope revision required")
 	}
-	if _, err := ParseFixture(revision.Fixture); err != nil {
-		return c.TaskState{}, err
+	if len(revision.Fixture) > 0 {
+		if _, err := ParseFixture(revision.Fixture); err != nil {
+			return c.TaskState{}, err
+		}
 	}
 	digest, err := c.Digest(revision)
 	if err != nil {
@@ -125,6 +127,9 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	state, doc, err := s.Load(ctx, revision.TaskID)
 	if err != nil {
 		return state, err
+	}
+	if doc.Runtime != nil && len(revision.Fixture) > 0 || doc.Runtime == nil && len(revision.Fixture) == 0 {
+		return state, c.Fail(c.InvalidArgument, "revision cannot switch model runtime; fixture tasks require a fresh fixture, local tasks require no fixture")
 	}
 	if state.Execution == c.Terminated || state.SpecVersion != revision.ExpectedSpecVersion || state.PolicyEpoch != revision.ExpectedPolicyEpoch || state.CandidateDigest != revision.ExpectedCandidate || !state.InputBarrier {
 		return state, c.Fail(c.StaleRequest, "scope revision binding changed or no pending input")
@@ -154,9 +159,12 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	if err = doc.Spec.Validate(); err != nil {
 		return state, err
 	}
-	fixtureDigest, err := s.Archive.PutBytes(revision.TaskID, revision.Fixture)
-	if err != nil {
-		return state, err
+	fixtureDigest := ""
+	if doc.Runtime == nil {
+		fixtureDigest, err = s.Archive.PutBytes(revision.TaskID, revision.Fixture)
+		if err != nil {
+			return state, err
+		}
 	}
 	for i := range doc.Requests {
 		if doc.Requests[i].Status == "PENDING" || doc.Requests[i].Status == "APPROVED" {
@@ -164,6 +172,7 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 		}
 	}
 	doc.Context = nil
+	doc.Plan = nil // Historical document retains the superseded plan; a new spec must replan.
 	doc.FixtureDigest = fixtureDigest
 	doc.FixtureCursor = 0
 	doc.Messages = []model.Message{}

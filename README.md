@@ -2,9 +2,9 @@
 
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.
 
-**Mevcut sürüm: 0.6.0-dev — offline mühendislik önizlemesi. Üretim sürümü değildir.** Bugün CLI önceden tanımlanmış fixture yanıtlarını çalıştırır; serbest bir isteği gerçek bir LLM ile kodlayan son kullanıcı akışı henüz açılmamıştır. OpenAI, Anthropic ve Ollama protokol adapter'ları vardır; CLI'daki agent döngüsüne gerçek provider bağlantısı tamamlanmamıştır.
+**Mevcut sürüm: 0.7.0-dev — offline mühendislik önizlemesi. Üretim sürümü değildir.** CLI deterministik fixture veya açıkça yapılandırılmış yerel Ollama modeliyle aynı kalıcı native tool döngüsünü çalıştırır. OpenAI/Anthropic runtime bağlantısı, güçlü doğrulama ve üretim kabulü henüz tamamlanmamıştır. Yerel modelin gerçekten local çalıştığı operator beyanına bağlıdır; model/platform conformance ayrıca gerekir.
 
-[Ürün gereksinimleri](prd.md) · [PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [0.7 anahtarsız ilerleme](docs/KEYLESS_PROGRESS.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
@@ -17,7 +17,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Mevcut profil `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-Canlı workspace'e `apply`/`restore`, gerçek modelle genel kodlama, TUI, detach/attach, compaction, retention/delete, outline/symbol ve imzalı kurulum paketleri henüz hazır değildir. Ayrıntılar [mevcut durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, compaction, retention/delete, outline/symbol ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -261,6 +261,40 @@ Yeni store format 2 kullanır. Format 1 kendiliğinden yükseltilmez. Eski store
 
 [ADR 0006](docs/adr/0006-store-migration.md) kapsamı ve [migration demo script'i](scripts/migration-demo.ps1) tam native örneği açıklar.
 
+## Anahtarsız yerel model: Ollama (0.7)
+
+Ön koşul: Bu makinede Ollama ve tool calling destekleyen, önceden indirilmiş gerçekten local bir model bulunmalı. Endpoint cloud proxy olmamalı. Bu çalışma ortamında kurulu Ollama gözlenmedi; actual model kabulü henüz yapılmadı. Loopback HTTP kabul testleri gerçek model kalitesi kanıtı değildir.
+
+~~~powershell
+.\bin\viber.exe run "Kaynak kodunu incele ve izole candidate üzerinde değişiklik öner" --provider ollama --endpoint http://127.0.0.1:11434 --model INSTALLED_LOCAL_MODEL --local-model --context-limit 32768 --output-limit 512 --model-timeout-ms 120000 --root SOURCE_ROOT --store STORE_OUTSIDE_SOURCE --task local-work --autonomy review --allow-unverified --json
+~~~
+
+`INSTALLED_LOCAL_MODEL`, `SOURCE_ROOT` ve `STORE_OUTSIDE_SOURCE` gerçek değerlerle değiştirilmelidir. `--local-model` model/endpoint'in yerel çalıştığına dair operator beyanıdır; teknik egress proof değildir. Literal `127.0.0.1`/`::1` kullanılmalı; `localhost`, remote origin, credential, cloud model biçimleri ve fixture/local flag karışımı reddedilir.
+
+Context kapasitesini kurulu modelin doğrulanmış sınırına göre seçin. `num_ctx`/`num_predict` request'e bağlanır; mevcut preflight conservative byte üst sınırıdır, provider tokenizer conformance değildir. Zorunlu içerik sığmazsa çağrıdan önce WAITING_RESOURCE olur. [Ollama chat API](https://docs.ollama.com/api/chat) ve [context yapılandırması](https://docs.ollama.com/context-length).
+
+Review onayları fixture örneğindeki gibi `requests/respond/resume` ile verilir. Model gerçek tool çağrıları üretse de source doğrudan değişmez; sonuç UNVERIFIED kalır. Usage kaybı, timeout/transport belirsizliği veya bildirilen model uyuşmazlığı BLOCKED ve korunmuş reservation bırakır; kör tekrar yoktur. Streaming/thinking profile ve güvenilir check runner henüz yoktur.
+
+## Native dependency planı (0.7)
+
+Model `plan_propose`, `plan_next`, `plan_finish` araçlarını kullanabilir. Plan current spec/policy/candidate'a bağlanır; DEPENDS_ON cycle/unknown criterion/check/unsafe scope reddedilir. Scheduler tek aktif node tutar. Active node'un read/write contract'ı native araçlara ek restriction olarak uygulanır.
+
+Node output'u immutable `MODEL_AUTHORED_UNREVIEWED` work-product artifact'ıdır. `IMPLEMENTED` durumunun anlamı plan çıktısının kaydıdır; PASS/VERIFIED değildir. Tamamlanmamış plan sınırlı final teslimi de durdurur. Scope revision eski planı current kullanımdan çıkarır; tarihsel belge/artifact korunur. Plan `status`/IPC/history/backup/fresh restore ile taşınır. Paralel workers ve store'lar arası mutex bu sürümde açılmaz.
+
+## Store genelinde token bütçesi (0.7)
+
+Yeni store'un ilk görevi, değişmez ortak input/output token limitlerini kaydeder. Varsayılan sınırlar 67.108.864 input ve 4.194.304 output token'dır; daha küçük değerler ilk `run` sırasında `--store-input-tokens N --store-output-tokens N` ile seçilebilir. Sonraki görevler aynı sınırları devralır; mevcut sınırları bu flag'lerle değiştirmek reddedilir. Görev başına step/tool/time/token sınırları ayrıca uygulanır.
+
+~~~powershell
+.\bin\viber.exe budget greeting --store $store --json
+~~~
+
+`charged` gözlenen kullanım, `reserved` henüz sonuçlanmamış üst sınırdır. Her model intent'i ve rezervasyonu aynı SQLite transaction'ında commit edilir. Kapasite yetmezse model dispatch edilmeden `WAITING_RESOURCE / GLOBAL_TOKEN_BUDGET_EXHAUSTED` oluşur. Aynı receipt ikinci kez charge edilmez. Bildirilen gerçek overage kayda alınır ve sonraki çalışma durur; unknown risk cancel/restart/restore ile silinmez.
+
+`status`/`inspect` ayrıca görevdeki reservation/request/profile/raw-response bağlarını `state.token_account` içinde gösterir. Fixture kullanımının kaynağı `FIXTURE_REPORTED`, gerçek adapter'ınki `PROVIDER_REPORTED`'dır; bunlar bağımsız kalite veya parasal fatura kanıtı değildir. İptal ve kurtarma komutları token çalışma limitine tabi değildir. Fiziksel disk/control reserve, para/price, CPU/disk/child allocation ledger'ı bu teslimde tamamlanmaz.
+
+0.6 ve daha eski görevleri içeren store `LEGACY_UNTRACKED` olarak görünür. Eski görevler kendi mevcut sözleşmeleriyle okunur/resume edilir; tarihsel kullanım bilinmeden yeni global hesabın dışında bırakılmaz. 0.7'de yeni görevler için yeni bir store kullanın. Yeni task/account alanları eski strict decoder tarafından yorumlanamaz; downlevel resume desteklenmez. Mevcut SQLite şema 2 korunur, örtük migration yapılmaz.
+
 ## Model ve API anahtarı durumu
 
 | Profil | Anahtar | Bugün kullanıcı akışı |
@@ -268,10 +302,10 @@ Yeni store format 2 kullanır. Format 1 kendiliğinden yükseltilmez. Eski store
 | Offline fixture | Gerekmez | Çalışır; deterministik, gerçek inference yok |
 | OpenAI Responses | Mevcut adapter yolunda API credential gerekir | HTTP/protokol kodu var; CLI bağlantısı ve gerçek kabul eksik |
 | Anthropic Messages | Mevcut adapter yolunda API key gerekir | HTTP/protokol kodu var; CLI bağlantısı ve gerçek kabul eksik |
-| Ollama, gerçekten yerel model | Yerel API için gerekmez | Loopback adapter fixture testleri var; gerçek yerel model kabulü ve CLI bağlantısı eksik |
+| Ollama, gerçekten yerel model | Yerel API için gerekmez | CLI runtime bağlantısı var; gerçek kurulu model kabulü ve production conformance eksik |
 | Ollama cloud | Cloud credential gerekir | Mevcut yerel profil desteklemez |
 
-`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` ortam değişkeni eklemek veya `.env` oluşturmak bugün CLI'yı gerçek modellerle çalıştırmaz. Provider/model config, credential onboarding/keychain ve runtime wiring henüz tamamlanmamıştır. Anahtarı fixture'a, repo'ya veya response dosyasına yazmayın.
+`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` ortam değişkeni eklemek veya `.env` oluşturmak bugün CLI'yı gerçek modellerle çalıştırmaz. Uzak provider config, credential onboarding/keychain ve remote runtime wiring henüz tamamlanmamıştır; local Ollama komutu yukarıdadır. Anahtarı fixture'a, repo'ya veya response dosyasına yazmayın.
 
 OpenAI ve Anthropic'in alternatif kimlik doğrulama seçenekleri de vardır; bu repo onların workload identity yaşam döngüsünü uygulamaz. Ollama'da local API üzerinden bir cloud model çağrısı da uzak inference olabilir; yalnız endpoint'in loopback olması yeterli kabul değildir. Resmi kaynaklar: [OpenAI authentication](https://developers.openai.com/api/reference/overview/#authentication), [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication), [Ollama authentication](https://docs.ollama.com/api/authentication). Model gerektiren ve gerektirmeyen backlog [analizde](docs/PRD_STATUS_ANALYSIS.md) ayrı verilmiştir.
 

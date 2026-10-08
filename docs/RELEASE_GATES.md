@@ -1,6 +1,6 @@
 # Release kanıt kaydı
 
-PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.6.0-dev offline engineering profili içindir.
+PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.7.0-dev fixture/local engineering profili içindir; tarihsel kanıtlar kendi sürümleriyle korunur.
 
 | Family | Guard | Uygulanan kanıt / eksik taraf | Tam release |
 |---|---|---|---|
@@ -29,3 +29,4 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 
 0.5 iş kanıtı: P02'nin origin/explicit closure/proposal guard/frozen binding dilimi uygulandı; P03'ün broker source/image/argv/namespace/scratch binding açığı düzeltildi. P02/P03 tam DONE değildir. Test adları `TestF13...`, `TestF26...` ilgili family bağlantısını gösterir; readonly protected runner/discovery/observer/check revision ve tüm adversarial OS matrisi kapanmadan family PASS olmaz. Güncel [plan v2](IMPLEMENTATION_PLAN.md) tüm FR/NFR ve F01–F38/X01–X10 eşlemesini taşır.
 0.6 iş kanıtı: P04'ün v1→v2 explicit migration/restore-validated backup/durable intent/commit/read-only recovery dilimi ve full historical checkpoint denetimi; regular/single-link metadata preflight. F20/F34/F35/X05 için Windows subprocess crash ve uygulama/CLI restore fixture'ları geçer. Complete v2 backup migration marker'larını korur; v1 restore upgrade olmaz. P04 PARTIAL kalır: control reserve/quota/retention/delete/tombstone/managed-copy purge ve tam OS power-loss/install-update kabulü eksik. [ADR 0006](adr/0006-store-migration.md) sınırları tanımlar. Model/stdout PASS veya test sayısı release kapısını açmaz.
+0.7 iş kanıtı: P06/FR-33 B single-worker plan; P09/P10 actual loopback HTTP local runtime integration; P05 store-wide token reserve/settle/unknown ledger. F02/F06/F08/F15/F16/F18/F32/F33/F35 için bounded regression kanıtı arttı; hiçbir family bütünüyle PASS olmadı. Actual installed local model, remote credential/provider conformance, strong verifier/observer, full resource/control ledger, delete/live apply/supervisor/TUI/platform/pilot hâlâ açık. Token work limitinde control command çalışması fiziksel disk control reserve kanıtı değildir. [ADR 0007](adr/0007-plan-and-local-runtime.md) ve [ADR 0008](adr/0008-global-token-ledger.md). A/B/stable CLOSED.

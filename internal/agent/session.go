@@ -20,6 +20,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 
 	"github.com/ixayldz/Viber/internal/model"
+	"github.com/ixayldz/Viber/internal/plan"
 	"github.com/ixayldz/Viber/internal/policy"
 	"github.com/ixayldz/Viber/internal/store"
 	"github.com/ixayldz/Viber/internal/verify"
@@ -61,6 +62,9 @@ type Pending struct {
 	Status          string `json:"status"`
 }
 type Document struct {
+	StoreTokens      *c.TokenLimits      `json:"store_token_limits,omitempty"`
+	Runtime          *LocalRuntime       `json:"runtime,omitempty"`
+	Plan             *plan.State         `json:"plan,omitempty"`
 	Protection       *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
 	Context          *ContextAudit       `json:"context,omitempty"`
 	Requests         []UserRequest       `json:"requests,omitempty"`
@@ -149,6 +153,15 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	if doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion || doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task {
 		return state, doc, c.Fail(c.StoreIntegrityError, "durable task document binding mismatch")
 	}
+	if err = s.validateRuntime(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validatePlan(doc); err != nil {
+		return state, doc, err
+	}
+	if doc.Plan != nil && doc.Plan.Definition.PolicyEpoch != state.PolicyEpoch {
+		return state, doc, c.Fail(c.StoreIntegrityError, "plan policy binding mismatch")
+	}
 	if err = s.validateProtection(doc); err != nil {
 		return state, doc, err
 	}
@@ -156,6 +169,12 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 		return state, doc, err
 	}
 	if err = doc.Spec.Validate(); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateTokenReceipts(state, doc); err != nil {
+		return state, doc, err
+	}
+	if err = validateTokenDocument(state, doc); err != nil {
 		return state, doc, err
 	}
 	if err = doc.Budget.Validate(); err != nil {
@@ -178,6 +197,20 @@ func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, k
 	if err := s.Journal.Writable(); err != nil {
 		return state, err
 	}
+	if err := recordTokenMutation(state, doc, kind, &extra); err != nil {
+		return state, err
+	}
+	predicted := state
+	if extra.Tokens != nil {
+		var err error
+		predicted.Tokens, err = c.ApplyTokens(state.Tokens, *extra.Tokens, state)
+		if err != nil {
+			return state, err
+		}
+	}
+	if err := validateTokenDocument(predicted, doc); err != nil {
+		return state, err
+	}
 	raw, err := c.CanonicalV1(doc)
 	if err != nil {
 		return state, err
@@ -186,6 +219,7 @@ func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, k
 	if err != nil {
 		return state, err
 	}
+
 	extra.DocumentDigest = digest
 	return s.Journal.Execute(ctx, store.Command{ID: newID("event-"), TaskID: doc.TaskID, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: kind, Payload: extra})
 }
@@ -203,6 +237,8 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	StoreTokens     *c.TokenLimits
+	Runtime         *LocalRuntime
 	CheckPlan       []byte
 	Root            string
 	Prompt          []byte
@@ -223,6 +259,10 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
 	}
+	limits, err := s.creationTokenLimits(ctx, options.StoreTokens)
+	if err != nil {
+		return c.TaskState{}, err
+	}
 	absolute, err := filepath.Abs(options.Root)
 	if err != nil {
 		return c.TaskState{}, err
@@ -230,11 +270,15 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if !disjointSession(s.directory, absolute) {
 		return c.TaskState{}, c.Fail(c.PolicyDenied, "session store must be outside source")
 	}
-	fixture, err := ParseFixture(options.Fixture)
-	if err != nil {
+	if options.Runtime == nil {
+		if _, err = ParseFixture(options.Fixture); err != nil {
+			return c.TaskState{}, err
+		}
+	} else if len(options.Fixture) != 0 {
+		return c.TaskState{}, c.Fail(c.InvalidArgument, "fixture and local runtime are mutually exclusive")
+	} else if err = options.Runtime.Validate(); err != nil {
 		return c.TaskState{}, err
 	}
-	_ = fixture
 	var base workspace.Capture
 	if options.Git {
 		base, err = workspace.CaptureRepository(options.Root, workspace.DefaultLimits())
@@ -252,9 +296,12 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if err != nil {
 		return c.TaskState{}, err
 	}
-	fixtureDigest, err := s.Archive.PutBytes(options.TaskID, options.Fixture)
-	if err != nil {
-		return c.TaskState{}, err
+	fixtureDigest := ""
+	if options.Runtime == nil {
+		fixtureDigest, err = s.Archive.PutBytes(options.TaskID, options.Fixture)
+		if err != nil {
+			return c.TaskState{}, err
+		}
 	}
 	plan, err := ParseCheckPlan(options.CheckPlan)
 	if err != nil {
@@ -275,8 +322,8 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
-	state, err := s.record(ctx, c.TaskState{}, doc, "TaskCreated", c.EventPayload{SpecVersion: 1, SnapshotDigest: ref.SnapshotDigest, RequiredObligations: 1})
+	doc := Document{StoreTokens: &limits, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	state, err := s.record(ctx, c.TaskState{}, doc, "TaskCreated", c.EventPayload{Tokens: &c.TokenMutation{Action: "INIT", Limits: limits}, SpecVersion: 1, SnapshotDigest: ref.SnapshotDigest, RequiredObligations: 1})
 	if err != nil {
 		return state, err
 	}
@@ -288,7 +335,7 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 }
 func disjointSession(a, b string) bool { return fileguard.Disjoint(a, b) }
 func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
-	effects := []string{"snapshot.read", "model.infer"}
+	effects := []string{"snapshot.read", "model.infer", "plan.update"}
 	if doc.Autonomy != "review" {
 		effects = append(effects, "candidate.write")
 	}
@@ -307,6 +354,9 @@ func (s *Session) stop(ctx context.Context, state c.TaskState, doc Document, rea
 	return s.transition(ctx, state, execution, "", reason)
 }
 func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c.TaskState, error) {
+	if !doc.Plan.Complete() {
+		return s.stop(ctx, state, doc, "PLAN_NODES_PENDING", c.WaitingUser)
+	}
 	requestIndex := -1
 	if !doc.AllowUnverified {
 		var err error
@@ -401,13 +451,23 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	if doc.FinalReady {
 		return s.final(ctx, state, doc)
 	}
-	fixtureRaw, err := s.Archive.GetBytes(task, doc.FixtureDigest)
-	if err != nil {
-		return state, err
-	}
-	fixture, err := ParseFixture(fixtureRaw)
-	if err != nil {
-		return state, err
+	var fixture Fixture
+	var client *model.Client
+	if doc.Runtime == nil {
+		fixtureRaw, readErr := s.Archive.GetBytes(task, doc.FixtureDigest)
+		if readErr != nil {
+			return state, readErr
+		}
+		fixture, err = ParseFixture(fixtureRaw)
+		if err != nil {
+			return state, err
+		}
+	} else {
+		client, err = s.runtimeClient(doc)
+		if err != nil {
+			return state, err
+		}
+		defer client.Close()
 	}
 	started := time.Now()
 	initialActive := doc.Budget.ActiveMillis
@@ -452,24 +512,46 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		if err != nil {
 			return state, err
 		}
-		doc.Context = &ContextAudit{SchemaVersion: 1, Profile: offlineContextProfile, RequestDigest: requestDigest, Manifest: manifest}
+		doc.Context = &ContextAudit{SchemaVersion: 1, Profile: manifest.Estimator, RequestDigest: requestDigest, Manifest: manifest}
 		doc.Budget.ReservedInput = reserveInput
 		doc.Budget.ReservedOutput = request.MaxOutputTokens
 		doc.Budget.Steps++
 		doc.Pending = &Pending{ID: request.ID, Kind: "MODEL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes(encoded), Status: "ADMITTED"}
 		state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
 		if err != nil {
+			var typed *c.Error
+			if errors.As(err, &typed) && typed.Code == c.BudgetLimitReached {
+				// The transaction did not admit this operation. Reload the committed
+				// document; the speculative step/reservation must not be retained.
+				current, committed, loadErr := s.Load(ctx, task)
+				if loadErr != nil {
+					return current, loadErr
+				}
+				return s.stop(ctx, current, committed, "GLOBAL_TOKEN_BUDGET_EXHAUSTED", c.WaitingResource)
+			}
 			return state, err
 		}
-		result, callErr := fixture.Next(request, doc.FixtureCursor)
-		doc.FixtureCursor++
+		var result model.Result
+		var callErr error
+		if client == nil {
+			result, callErr = fixture.Next(request, doc.FixtureCursor)
+			doc.FixtureCursor++
+		} else {
+			// The operator model timeout cannot extend the task's remaining work
+			// time. Deadline loss remains UNKNOWN until an actual receipt exists.
+			deadline := started.Add(time.Duration(doc.Budget.MaxActiveMillis-initialActive) * time.Millisecond)
+			inferCtx, cancelInfer := context.WithDeadline(ctx, deadline)
+			result, callErr = client.Complete(inferCtx, request)
+			cancelInfer()
+		}
+		doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()
 		if len(result.Raw) > 0 {
 			doc.LastResponseBlob, err = s.Archive.PutBytes(task, result.Raw)
 			if err != nil {
 				return state, err
 			}
 		}
-		if callErr != nil || !result.Usage.Known {
+		if callErr != nil || !result.Usage.Known || result.Usage.Input < 0 || result.Usage.Output < 0 || result.Usage.Input > 1<<40 || result.Usage.Output > 1<<40 || !c.ValidDigest(doc.LastResponseBlob) {
 			doc.UnknownEffect = true
 			doc.Pending.Status = "UNKNOWN"
 			return s.stop(ctx, state, doc, "MODEL_USAGE_OR_RESULT_UNKNOWN", c.Blocked)
@@ -485,6 +567,13 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 				return state, err
 			}
 			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "settled usage exceeded budget")
+		}
+		if doc.Budget.ActiveMillis >= doc.Budget.MaxActiveMillis {
+			state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
+			if err != nil {
+				return state, err
+			}
+			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "active work time exhausted; observed receipt and candidate retained")
 		}
 		message, err := result.AssistantMessage()
 		if err != nil {
@@ -548,7 +637,7 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		var next *artifact.Ref
 		toolErr := preflightErr
 		if toolErr == nil {
-			reply, next, toolErr = s.executeTool(ctx, state, doc, call)
+			reply, next, toolErr = s.executeTool(ctx, state, &doc, call)
 		}
 		if approvedIndex >= 0 {
 			doc.Requests[approvedIndex].Status = "CONSUMED"

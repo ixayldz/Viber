@@ -17,16 +17,18 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.6.0-dev"
-const help = `Viber 0.6.0-dev — offline engineering agent (stable release gates closed)
+const Version = "0.7.0-dev"
+const help = `Viber 0.7.0-dev — fixture/local engineering agent (stable release gates closed)
 
 Usage:
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE] [--allow-unverified] [--json]
+  viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--model-timeout-ms N] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber store-backup --store PATH --output NEW_PATH [--json]
   viber store-restore --backup PATH --store NEW_PATH [--json]
   viber store-migrate --store PATH --backup-output PATH --command-id ID [--json]
   viber store-migration-status --store PATH [--json]
+  viber budget TASK --store PATH [--json]
   viber requests TASK --store PATH [--json]
   viber respond TASK --store PATH --request ID --response-file FILE [--json]
   viber inspect TASK --store PATH [--at TASK_SEQ] [--json]
@@ -95,6 +97,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "budget":
+		return runTokenLedger(args[1:], out, errout)
 	case "serve":
 		return runServe(args[1:], out, errout)
 	case "store-migrate", "store-migration-status":
@@ -165,7 +169,7 @@ func runDoctor(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unexpected arguments"), *jsonMode)
 	}
 	_, gitErr := exec.LookPath("git")
-	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", RemoteProviders: "OFFLINE_PROTOCOL_FIXTURES", LocalProvider: "LOOPBACK_PROTOCOL_FIXTURES", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", RemoteProviders: "OFFLINE_PROTOCOL_FIXTURES", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4

@@ -144,6 +144,7 @@ func (s TaskSpec) Validate() error {
 }
 
 type TaskState struct {
+	Tokens                  *TokenAccount  `json:"token_account,omitempty"`
 	DocumentDigest          string         `json:"document_digest,omitempty"`
 	BaselineDigest          string         `json:"baseline_digest,omitempty"`
 	CandidateDigest         string         `json:"candidate_digest,omitempty"`
@@ -177,6 +178,7 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
+	Tokens              *TokenMutation `json:"token_mutation,omitempty"`
 	CommandError        *Error         `json:"command_error,omitempty"`
 	DocumentDigest      string         `json:"document_digest,omitempty"`
 	SnapshotDigest      string         `json:"snapshot_digest,omitempty"`

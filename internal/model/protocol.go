@@ -102,7 +102,11 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 		}
 		// A local endpoint may have model-specific tool support; no endpoint or model
 		// is marked supported until its recorded/real profile conformance passes.
-		return map[string]any{"model": r.Model, "messages": messages, "tools": tools, "stream": false, "think": false, "options": map[string]any{"num_predict": r.MaxOutputTokens}}, "/api/chat", nil
+		options := map[string]any{"num_predict": r.MaxOutputTokens}
+		if r.ContextWindow > 0 {
+			options["num_ctx"] = r.ContextWindow
+		}
+		return map[string]any{"model": r.Model, "messages": messages, "tools": tools, "stream": false, "think": false, "options": options}, "/api/chat", nil
 	}
 	return nil, "", c.Fail(c.UnsupportedCapability, "unknown protocol")
 }

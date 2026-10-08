@@ -85,6 +85,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		}
 	} else {
 		next = *state
+		if state.Tokens != nil {
+			account := *state.Tokens
+			account.Reservations = append([]c.TokenReservation{}, state.Tokens.Reservations...)
+			next.Tokens = &account
+		}
 		next.PendingInputIDs = append([]string{}, state.PendingInputIDs...)
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
@@ -201,6 +206,16 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			return next, c.Fail(c.StoreIntegrityError, "unknown required event type")
 		}
 		next.KernelGeneration = event.KernelGeneration
+	}
+	if p.Tokens != nil {
+		if event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Tokens.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" || p.Tokens.Action == "INIT")) {
+			return next, c.Fail(c.PolicyDenied, "token mutation requires an atomic kernel document event")
+		}
+		var err error
+		next.Tokens, err = c.ApplyTokens(next.Tokens, *p.Tokens, next)
+		if err != nil {
+			return next, err
+		}
 	}
 	next.InputBarrier = len(next.PendingInputIDs) > 0
 	next.TaskSeq = event.TaskSeq
