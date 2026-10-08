@@ -41,6 +41,9 @@ func (s *Session) SteeringReceipt(ctx context.Context, input SteeringInput) (c.T
 // first; the journal barrier fences an in-flight candidate pointer transaction.
 // Only the offline/native profile currently exposes this concurrent boundary.
 func (s *Session) RecordSteering(ctx context.Context, input SteeringInput) (c.TaskState, error) {
+	if err := s.Journal.Writable(); err != nil {
+		return c.TaskState{}, err
+	}
 	if input.CommandID == "" || len(input.CommandID) > 128 || input.TaskID == "" || len(input.Text) == 0 || len(input.Text) > 64<<10 || !utf8.ValidString(input.Text) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "bounded UTF-8 steering input required")
 	}
@@ -96,6 +99,9 @@ func (s *Session) pendingInput(ctx context.Context, task, id string) ([]byte, er
 func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.Journal.Writable(); err != nil {
+		return c.TaskState{}, err
+	}
 	if revision.CommandID == "" || len(revision.CommandID) > 128 || revision.TaskID == "" || revision.InputID == "" || revision.ExpectedSpecVersion < 1 || revision.ExpectedPolicyEpoch < 1 || !c.ValidDigest(revision.ExpectedCandidate) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "bound scope revision required")
 	}

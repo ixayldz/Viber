@@ -1,6 +1,6 @@
 # Release kanıt kaydı
 
-PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.5.0-dev offline engineering profili içindir.
+PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.6.0-dev offline engineering profili içindir.
 
 | Family | Guard | Uygulanan kanıt / eksik taraf | Tam release |
 |---|---|---|---|
@@ -15,12 +15,12 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 17 | Compaction policy | Compactor yok | NOT_IMPLEMENTED |
 | 18 | Privacy fallback | Restriction intersection, no remote fixture loop, redirect/proxy deny; full lineage eksik | PARTIAL |
 | 19 | Plugin isolation | Plugin runtime yok | NOT_IMPLEMENTED |
-| 20–21 | Corruption/two owners | Journal/projection/dedup receipt hash/replay + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
+| 20–21 | Corruption/two owners | Journal/projection/historical checkpoint/dedup receipt hash/replay + explicit restore-tested v1→v2 migration + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
 | 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; workspace restore/stream reconnect/delete yok | PARTIAL |
 | 25–28 | Guards/origin/integrity/delivery | Pure predicate + frozen artifact + scoped limited delivery; durable typed origin, tree/absence check weakening guard, revision/recovery/backup closure; full interval protected verifier eksik | PARTIAL |
 | 29 | Clock/lease | Request expiry kontrolü var; backend lease/fencing conformance yok | NOT_IMPLEMENTED |
 | 30–32 | Owner/children/pause/dedup | Lock/generation, Docker cleanup, native pause/cancel; bound one-shot approval ve active command dedup; Ctrl+C pause; tam supervisor/children fencing eksik | PARTIAL |
-| 33–34 | Reserve/delete/backup | Offline model reserve/settle, unknown tutulması, CAS+SQLite backup; control reserve/GC/tombstone/migration eksik | PARTIAL |
+| 33–34 | Reserve/delete/backup | Offline model reserve/settle, unknown tutulması, CAS+SQLite backup, explicit migration/read-only recovery/lineage restore; control reserve/GC/tombstone ve tam upgrade/power-loss matrisi eksik | PARTIAL |
 | 35–36 | Sequence/replay/intent | Current/historical replay, task/global cursor ayrımı, raw input closure, event paging | PARTIAL |
 | 37 | Independent evaluator | Bağımsız benchmark/pilot yok | NOT_IMPLEMENTED |
 | 38 | Host Git/OSC/secret output | Capture Git executable çalıştırmaz; OSC escaped; provider error secret redaction | PARTIAL |
@@ -28,3 +28,4 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 **A gate CLOSED. B preview CLOSED. Stable A–D CLOSED.** Engineering özelliklerinin çalışması kapıları açmaz. Gerçek iki remote+bir local endpoint kabulü kullanıcı tercihiyle ertelendi; fixture sonucu bu kabulün yerine geçmez. Tam sandbox, protected verification, store lifecycle/retention/privacy, tam IPC/process supervisor conformance, platform packaging ve bağımsız evaluator kanıtları zorunludur.
 
 0.5 iş kanıtı: P02'nin origin/explicit closure/proposal guard/frozen binding dilimi uygulandı; P03'ün broker source/image/argv/namespace/scratch binding açığı düzeltildi. P02/P03 tam DONE değildir. Test adları `TestF13...`, `TestF26...` ilgili family bağlantısını gösterir; readonly protected runner/discovery/observer/check revision ve tüm adversarial OS matrisi kapanmadan family PASS olmaz. Güncel [plan v2](IMPLEMENTATION_PLAN.md) tüm FR/NFR ve F01–F38/X01–X10 eşlemesini taşır.
+0.6 iş kanıtı: P04'ün v1→v2 explicit migration/restore-validated backup/durable intent/commit/read-only recovery dilimi ve full historical checkpoint denetimi; regular/single-link metadata preflight. F20/F34/F35/X05 için Windows subprocess crash ve uygulama/CLI restore fixture'ları geçer. Complete v2 backup migration marker'larını korur; v1 restore upgrade olmaz. P04 PARTIAL kalır: control reserve/quota/retention/delete/tombstone/managed-copy purge ve tam OS power-loss/install-update kabulü eksik. [ADR 0006](adr/0006-store-migration.md) sınırları tanımlar. Model/stdout PASS veya test sayısı release kapısını açmaz.

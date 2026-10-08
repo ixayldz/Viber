@@ -17,14 +17,16 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.5.0-dev"
-const help = `Viber 0.5.0-dev — offline engineering agent (stable release gates closed)
+const Version = "0.6.0-dev"
+const help = `Viber 0.6.0-dev — offline engineering agent (stable release gates closed)
 
 Usage:
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE] [--allow-unverified] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber store-backup --store PATH --output NEW_PATH [--json]
   viber store-restore --backup PATH --store NEW_PATH [--json]
+  viber store-migrate --store PATH --backup-output PATH --command-id ID [--json]
+  viber store-migration-status --store PATH [--json]
   viber requests TASK --store PATH [--json]
   viber respond TASK --store PATH --request ID --response-file FILE [--json]
   viber inspect TASK --store PATH [--at TASK_SEQ] [--json]
@@ -95,6 +97,8 @@ func Execute(args []string, out, errout io.Writer) int {
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:], out, errout)
+	case "store-migrate", "store-migration-status":
+		return runStoreMigration(args[0], args[1:], out, errout)
 	case "store-backup", "store-restore":
 		return runStoreBackup(args[0], args[1:], out, errout)
 	case "version":

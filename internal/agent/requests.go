@@ -107,6 +107,9 @@ func (s *Session) Requests(ctx context.Context, task string) ([]UserRequest, err
 func (s *Session) Respond(ctx context.Context, response UserResponse) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.Journal.Writable(); err != nil {
+		return c.TaskState{}, err
+	}
 	var state c.TaskState
 	if response.CommandID == "" || len(response.CommandID) > 128 || response.RequestID == "" || response.TaskID == "" || response.Attempt != 1 || response.ExpectedSpecVersion < 1 || !c.ValidDigest(response.ExpectedPolicyDigest) || !c.ValidDigest(response.ActionDigest) || response.Response.Decision != "approve" && response.Response.Decision != "reject" {
 		return state, c.Fail(c.InvalidArgument, "invalid bound user response")

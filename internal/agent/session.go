@@ -175,6 +175,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	return state, doc, nil
 }
 func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, kind string, extra c.EventPayload) (c.TaskState, error) {
+	if err := s.Journal.Writable(); err != nil {
+		return state, err
+	}
 	raw, err := c.CanonicalV1(doc)
 	if err != nil {
 		return state, err
@@ -214,6 +217,9 @@ type StartOptions struct {
 func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.Journal.Writable(); err != nil {
+		return c.TaskState{}, err
+	}
 	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
 	}
@@ -342,6 +348,9 @@ func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c
 }
 
 func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, error) {
+	if err := s.Journal.Writable(); err != nil {
+		return c.TaskState{}, err
+	}
 	state, doc, err := s.Load(ctx, task)
 	if err != nil {
 		return state, err

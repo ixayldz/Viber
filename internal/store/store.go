@@ -1,5 +1,5 @@
 // Package store is the initial single-owner SQLite journal foundation.
-// Full power-loss conformance, migrations and privacy deletion are not
+// Full power-loss conformance and privacy deletion are not
 // shipped yet; this package is not a supported production metadata service.
 package store
 
@@ -20,14 +20,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const storeVersion = 1
+const storeVersion = 2
 
 type Store struct {
-	mu         sync.Mutex
-	db         *sql.DB
-	lock       *os.File
-	generation int64
-	directory  string
+	mu             sync.Mutex
+	db             *sql.DB
+	lock           *os.File
+	generation     int64
+	directory      string
+	schema         int
+	readOnlyReason string
+	migrationFault func(string) error
+	migrationSpace func() uint64
 }
 type Command struct {
 	ID              string         `json:"command_id"`
@@ -58,8 +62,13 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 		privateRoot.Close()
 		return nil, err
 	}
-	privateRoot.Close()
-	lock, err := acquireLock(filepath.Join(root, "owner.lock"))
+	defer privateRoot.Close()
+	for _, name := range []string{"owner.lock", "state.sqlite", "state.sqlite-wal", "state.sqlite-shm"} {
+		if err = fileguard.RegularPath(privateRoot, name, true); err != nil {
+			return nil, err
+		}
+	}
+	lock, err := fileguard.Lock(privateRoot, "owner.lock")
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +97,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return nil, err
 	}
-	if version > storeVersion {
+	if version < 0 || version > storeVersion {
 		return nil, c.Fail(c.UnsupportedCapability, "newer store schema; downgrade forbidden")
 	}
 	for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL"} {
@@ -116,7 +125,8 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 			"CREATE TABLE events (store_seq INTEGER PRIMARY KEY,task_id TEXT NOT NULL,task_seq INTEGER NOT NULL,event_id TEXT NOT NULL UNIQUE,envelope BLOB NOT NULL,payload_digest TEXT NOT NULL,previous_hash TEXT NOT NULL,event_hash TEXT NOT NULL,UNIQUE(task_id,task_seq),FOREIGN KEY(task_id,payload_digest) REFERENCES payloads(task_id,digest))",
 			"CREATE TABLE commands (command_id TEXT PRIMARY KEY,payload_digest TEXT NOT NULL,result BLOB NOT NULL)",
 			"CREATE TABLE checkpoints (task_id TEXT PRIMARY KEY,store_seq INTEGER NOT NULL,task_seq INTEGER NOT NULL,reducer_version INTEGER NOT NULL,state_digest TEXT NOT NULL,state BLOB NOT NULL)",
-			"PRAGMA user_version=1",
+			formatTable,
+			"PRAGMA user_version=2",
 		}
 		for _, statement := range statements {
 			if _, err = tx.ExecContext(ctx, statement); err != nil {
@@ -124,12 +134,31 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 			}
 		}
 	}
+	if version == 0 {
+		format, formatErr := newFormat(nil)
+		if formatErr != nil {
+			return nil, formatErr
+		}
+		if err = insertFormat(ctx, tx, format); err != nil {
+			return nil, err
+		}
+		version = storeVersion
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, lock: lock, directory: root}
+	s := &Store{db: db, lock: lock, directory: root, schema: version}
 	if err = s.verifyProjectionsLocked(ctx); err != nil {
 		return nil, err
+	}
+	if err = s.checkMigrationLocked(ctx); err != nil {
+		return nil, err
+	}
+	if s.readOnlyReason != "" {
+		if err = db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='generation'").Scan(&s.generation); err != nil {
+			return nil, err
+		}
+		return s, nil
 	}
 	tx, err = db.BeginTx(ctx, nil)
 	if err != nil {
@@ -164,14 +193,23 @@ func (s *Store) Close() error {
 func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.db == nil {
-		return c.TaskState{}, c.Fail(c.StoreIntegrityError, "store closed")
+	if err := s.writableLocked(); err != nil {
+		return c.TaskState{}, err
 	}
 	if command.ID == "" || command.TaskID == "" || command.Actor == "" || command.ExpectedTaskSeq < 0 {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid command")
 	}
 	if err := s.verifyProjectionsLocked(ctx); err != nil {
 		return c.TaskState{}, err
+	}
+	if s.schema == 2 {
+		format, _, err := s.formatLocked(ctx)
+		if err != nil {
+			return c.TaskState{}, err
+		}
+		if format.Migration != nil && format.Migration.ID == command.ID {
+			return c.TaskState{}, c.Fail(c.CommandIDConflict, "command ID belongs to schema migration")
+		}
 	}
 	digest, err := c.Digest(command)
 	if err != nil {
@@ -382,8 +420,11 @@ func (s *Store) replayToLocked(ctx context.Context, taskID string, until int64) 
 func (s *Store) Checkpoint(ctx context.Context, taskID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.db == nil {
-		return "", c.Fail(c.StoreIntegrityError, "store closed")
+	if err := s.writableLocked(); err != nil {
+		return "", err
+	}
+	if err := s.verifyProjectionsLocked(ctx); err != nil {
+		return "", err
 	}
 	states, err := s.replayLocked(ctx, taskID)
 	if err != nil {
@@ -408,6 +449,9 @@ func (s *Store) InspectCheckpoint(ctx context.Context, taskID string) (c.TaskSta
 	if s.db == nil {
 		return state, c.Fail(c.StoreIntegrityError, "store closed")
 	}
+	if err := s.verifyProjectionsLocked(ctx); err != nil {
+		return state, err
+	}
 	var seq, taskSeq int64
 	var version int
 	var digest string
@@ -430,6 +474,9 @@ func (s *Store) InspectCheckpoint(ctx context.Context, taskID string) (c.TaskSta
 func (s *Store) String() string { return fmt.Sprintf("store-generation-%d", s.generation) }
 
 func (s *Store) verifyProjectionsLocked(ctx context.Context) error {
+	if _, _, err := s.formatLocked(ctx); err != nil {
+		return err
+	}
 	states, err := s.replayLocked(ctx, "")
 	if err != nil {
 		return err
@@ -473,5 +520,8 @@ func (s *Store) verifyProjectionsLocked(ctx context.Context) error {
 	if count != len(states) {
 		return c.Fail(c.StoreIntegrityError, "task projection missing")
 	}
-	return nil
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	return s.verifyCheckpointsLocked(ctx)
 }

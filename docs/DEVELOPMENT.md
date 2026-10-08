@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.5.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.6.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm explicit offline fixture ile çalışan, candidate üzerinde değişiklik üreten bir engineering profilidir.
 
 ## Derleme
 
@@ -144,7 +144,7 @@ OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol 
 
 ## Henüz desteklenmeyenler
 
-Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, tam IPC platform conformance/supervisor/attach/TUI, provider semantic steering, compaction, migration/retention/delete, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.
+Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, tam IPC platform conformance/supervisor/attach/TUI, provider semantic steering, compaction, retention/delete ve tam disk/control reserve, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.
 
 ## Korunan kontrol planı (0.5 engineering)
 
@@ -183,3 +183,28 @@ Origin durable task document'te tutulur. Sonradan aynı plan dosyasını değiş
 `check_protection` JSON/IPC/export özeti origin digest, provenance, closure coverage, check/scope count ve `strong_verification_available: false` içerir. Raw operator argv/discovery listesi status'a açılmaz. Provenance `OPERATOR_DECLARED_REPOSITORY_BASELINE` bağımsız test oracle'ı değildir; `EXPLICIT_UNREVIEWED` tam dependency closure kabulü değildir. Candidate ve protected scope digests compiler'a zorunlu girdi olarak girer. Offline fixture teslimleri UNVERIFIED/exit 2 olmaya devam eder.
 
 [ADR 0005](adr/0005-protected-check-origin.md), [üretim tamamlama planı](IMPLEMENTATION_PLAN.md) ve [release kapıları](RELEASE_GATES.md) kabul sınırını tanımlar.
+## Store sürüm geçişi (0.6 engineering)
+
+Yeni store schema 2, eski store schema 1 olarak açılır. Normal run/status/restore otomatik migration yapmaz; reducer/event/task version değişmez.
+
+~~~sh
+viber store-migration-status --store ../viber-demo-store --json
+viber store-migrate --store ../viber-demo-store --backup-output ../viber-before-upgrade --command-id upgrade-20261008 --json
+~~~
+
+Store'u tutan serve veya başka owner önce kapatılmalıdır; migration owner RPC üzerinden dispatch edilmez. Bütün task'lar terminal ve pending/UNKNOWN effect/reservation'sız olmalıdır. Pause migration için yeterli değildir. Unknown çağrıyı tekrar deneyerek veya reservation'ı silerek geçiş engeli aşılmaz.
+
+--backup-output mevcut parent altında fresh directory veya aynı journal'ın tamamlanmış v1 yedeğidir. Yedek raw input/CAS/journal closure ile private temp store'a gerçekten restore edilir; geçici doğrulama kopyası sonra temizlenir. Source/store/backup overlap reddedilir. Migration yalnız v1→v2'dir; v2 store'da yeni upgrade isteği UNSUPPORTED döner.
+
+Kesinti halinde aynı --command-id ve original backup path ile aynı komut tekrar çalıştırılır. store-migration-status pending intent, schema ve read-only reason'ı verir. Pending açılış generation yükseltmez; run/create/steer/respond/revise/checkpoint durur; inspect/replay açık kalır. Commit gerçekleşmişse DDL tekrarlanmaz. Complete retry original receipt'i döndürür; farklı backup/request command ID conflict olur. Bozuk marker veya kayıp original backup'ta dosyaları silmeyin; doğrulanmış yedekten fresh store-restore kullanın.
+
+Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup completion metadata'sını da korur; v1 backup v1 olarak restore edilir. Store/backup aynı host source identity içindir; cross-host path rebinding desteklenmez. Disk preflight DB'nin 3 katı +32 MiB ister; fiziksel control reserve ve elektrik kesintisi conformance iddiası değildir. Retention/delete/tombstone kabulü açık kalır.
+
+[ADR 0006](adr/0006-store-migration.md) transaction, crash ve kabul sınırlarını tanımlar.
+Önceki schema 1 tam yedeğinizle ayrı native CLI süreçleri üzerinden upgrade/restore smoke çalıştırmak için:
+
+~~~powershell
+.\scripts\migration-demo.ps1 -LegacyBackup C:\private\viber-v1-backup -Task greeting
+~~~
+
+Script original yedeği değiştirmez; fresh .cache output altında eski restore, migration öncesi/sonrası backup, yeni restore ve historical replay oluşturur. Pending/unknown task veya yanlış task ID aynı güvenli preflight'te reddedilir.

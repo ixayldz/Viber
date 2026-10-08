@@ -31,20 +31,29 @@ type BackupManifest struct {
 }
 
 func backupFileLimit(name string) int64 {
+	if name == "metadata/migrations/v1-v2-intent.json" || name == "metadata/migrations/v1-v2-complete.json" {
+		return 1 << 20
+	}
 	if name == "database/state.sqlite" {
 		return 256 << 20
 	}
 	return 64 << 20
 }
 func validateBackupManifest(m BackupManifest) error {
-	if m.SchemaVersion != 1 || m.Store.SchemaVersion != 1 || m.Store.ReducerVersion != c.ReducerVersion || m.Store.StoreSeq < 0 || (m.Store.StoreSeq == 0 && m.Store.TailHash != "") || (m.Store.StoreSeq > 0 && !c.ValidDigest(m.Store.TailHash)) || m.DeletionPolicy != "UNSUPPORTED_NO_DELETIONS" || m.DeletionWatermark != 0 || len(m.Files) == 0 || len(m.Files) > backupMaxFiles {
+	validFormat := m.Store.SchemaVersion == 1 && m.Store.FormatDigest == "" || m.Store.SchemaVersion == 2 && c.ValidDigest(m.Store.FormatDigest)
+	if m.SchemaVersion != 1 || !validFormat || m.Store.ReducerVersion != c.ReducerVersion || m.Store.StoreSeq < 0 || (m.Store.StoreSeq == 0 && m.Store.TailHash != "") || (m.Store.StoreSeq > 0 && !c.ValidDigest(m.Store.TailHash)) || m.DeletionPolicy != "UNSUPPORTED_NO_DELETIONS" || m.DeletionWatermark != 0 || len(m.Files) == 0 || len(m.Files) > backupMaxFiles {
 		return c.Fail(c.UnsupportedCapability, "unsupported or invalid backup manifest")
 	}
 	total := int64(0)
 	previous := ""
 	database := false
+	migrationFiles := 0
 	for _, f := range m.Files {
 		valid := strings.HasPrefix(f.Path, "artifacts/") && artifact.ImmutablePath(strings.TrimPrefix(f.Path, "artifacts/"))
+		if f.Path == "metadata/migrations/v1-v2-intent.json" || f.Path == "metadata/migrations/v1-v2-complete.json" {
+			valid = true
+			migrationFiles++
+		}
 		if f.Path == "database/state.sqlite" {
 			valid = true
 			database = true
@@ -54,6 +63,9 @@ func validateBackupManifest(m BackupManifest) error {
 		}
 		total += f.Size
 		previous = f.Path
+	}
+	if migrationFiles != 0 && (migrationFiles != 2 || m.Store.SchemaVersion != 2) {
+		return c.Fail(c.StoreIntegrityError, "incomplete or legacy migration metadata")
 	}
 	if !database {
 		return c.Fail(c.StoreIntegrityError, "backup database missing")
@@ -198,7 +210,13 @@ func freshPrivate(directory string) (*os.Root, error) {
 func (s *Session) Backup(ctx context.Context, output string) (BackupManifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.backupLocked(ctx, output)
+}
+func (s *Session) backupLocked(ctx context.Context, output string) (BackupManifest, error) {
 	m := BackupManifest{SchemaVersion: 1, DeletionPolicy: "UNSUPPORTED_NO_DELETIONS", Files: []BackupFile{}}
+	if err := s.Journal.Writable(); err != nil {
+		return m, err
+	}
 	roots, err := s.backupClosure(ctx)
 	if err != nil {
 		return m, err
@@ -249,6 +267,24 @@ func (s *Session) Backup(ctx context.Context, output string) (BackupManifest, er
 	}
 	if err = s.Archive.VisitImmutable(ctx, func(name string, raw []byte) error { return add("artifacts/"+name, raw, true) }); err != nil {
 		return m, err
+	}
+	intent, receipt, err := s.Journal.MigrationStatus(ctx)
+	if err != nil {
+		return m, err
+	}
+	if intent != nil {
+		if receipt == nil {
+			return m, c.Fail(c.PolicyDenied, "cannot back up an incomplete migration")
+		}
+		for name, value := range map[string]any{"metadata/migrations/v1-v2-intent.json": intent, "metadata/migrations/v1-v2-complete.json": receipt} {
+			raw, err := c.CanonicalV1(value)
+			if err != nil {
+				return m, err
+			}
+			if err = add(name, raw, true); err != nil {
+				return m, err
+			}
+		}
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })
 	if err = validateBackupManifest(m); err != nil {
@@ -353,6 +389,12 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 			return m, err
 		}
 		name := f.Path
+		if name == "metadata/migrations/v1-v2-intent.json" {
+			name = store.MigrationIntentFile
+		}
+		if name == "metadata/migrations/v1-v2-complete.json" {
+			name = store.MigrationCompleteFile
+		}
 		if name == "database/state.sqlite" {
 			name = "state.sqlite"
 		}

@@ -1,12 +1,12 @@
 # Doğrulama kaydı
 
-Tarih: 8 Ekim 2026. Ürün: 0.5.0-dev. Bu sonuçlar offline engineering profiline aittir; PRD A–D üretim kabulü değildir.
+Tarih: 8 Ekim 2026. Ürün: 0.6.0-dev. Bu sonuçlar offline engineering profiline aittir; PRD A–D üretim kabulü değildir.
 
 | Kontrol | Sonuç / kapsam |
 |---|---|
 | gofmt / mod verify / go vet | PASS; pinned module checksums, Windows native ve Linux |
-| Windows test | 260 test/alt test PASS (tam tur); 2 host symlink yetkisi SKIP; 0 FAIL |
-| Linux race tests | PASS; tüm paketler, linux/amd64 |
+| Windows test | 304 benzersiz test/alt test PASS (tam tur + real Docker + son store turu); 2 host symlink yetkisi SKIP; 0 FAIL |
+| Linux race tests | PASS; tüm paketler, linux/amd64; son commit-iptal/ID fixture store turu ayrıca PASS |
 | Linux strict JSON fuzz | PASS; bu oturumdaki 0.3 turunda 23.046 execution, corpus 89; encoding code değişmedi |
 | Linux Git index fuzz | PASS; bu oturumdaki 0.3 turunda 253.819 execution, corpus 13; index decoder değişmedi |
 | Windows binary / offline demo | PASS; fixture→candidate→export→backup→fresh restore→historical replay |
@@ -46,10 +46,21 @@ Davranış kanıtları:
 
 go-winio v0.6.2 bağımlılığı eklendikten sonra govulncheck v1.8.0 yeniden çalıştırıldı: No vulnerabilities found. Bu sonuç bütün güvenlik risklerinin yokluğu anlamına gelmez.
 
-Açık kabul: tam sandbox escape/egress/fencing/clock; real provider+streaming; semantic spec/goal review; protected check closure/observer; complete budget/control reserve; tam IPC hostile-principal/process fencing/supervisor/provider steering conformance; live apply/restore concurrency; retention/delete/tombstone/migration/OS power-loss; platform install/signature/SBOM, native macOS smoke ve independent benchmark/pilot. [Release kaydı](RELEASE_GATES.md) kapıları kapalı tutar.
+Açık kabul: tam sandbox escape/egress/fencing/clock; real provider+streaming; semantic spec/goal review; protected check closure/observer; complete budget/control reserve; tam IPC hostile-principal/process fencing/supervisor/provider steering conformance; live apply/restore concurrency; retention/delete/tombstone/tam migration ve OS power-loss; platform install/signature/SBOM, native macOS smoke ve independent benchmark/pilot. [Release kaydı](RELEASE_GATES.md) kapıları kapalı tutar.
 
 Yerel kanıt dosyaları (Git'e girmez): .cache/windows-owner-tests.jsonl, .cache/windows-owner-final-tests.jsonl, .cache/linux-owner-validation.txt, .cache/linux-owner-final-validation.txt, .cache/owner-vulncheck.txt ve .cache/offline-owner-demo.jsonl. Yeni binary bin/viber.exe, Linux ve darwin/arm64 binary'leri .cache altındadır.
 0.4 son doğrulama kayıtları: .cache/windows-context-tests.jsonl, .cache/linux-context-validation.txt ve .cache/offline-context-demo.jsonl. Windows binary 0.4.0-dev; son offline demo .cache/demo-e755db1ed48f45da8166bb0758453b81 altında. Önceki owner/fuzz/vulnerability kayıtları bu oturumdaki ayrı kanıtları korur. Native macOS testi yapılmadı; /bin/true kullanılan cross-compile çıktısı runtime PASS sayılmaz.
 0.5 doğrulama kanıt dosyaları (ignored local outputs): `.cache/windows-production-tests.jsonl`, `.cache/linux-production-validation.txt`, `.cache/offline-production-demo.jsonl`. Native demo dizini `.cache/demo-4b4467037a3940a8a7a60528f5455e44`; source `hello.txt` aynı kaldı. `scripts/check.ps1` ile aynı format/module/vet/test/build/doctor adımları JSON test kaydıyla uygulandı. Linux pinned validation script `.cache/validate-production-linux.sh`, vet/race ve binary build'i çalıştırdı. Darwin arm64 package/test binary cross-compile `go test -exec /bin/true` ile **COMPILE_ONLY**'dır; native macOS PASS değildir. Encoding/index değişmediği için fuzz tekrarları ve değişmeyen dependency graph'ın önceki govulncheck sonucu tarihsel kanıt olarak ayrı tutuldu.
 
 P02/P03'ün bu dilimi 0.5.0-dev'dir; 260 PASS uygulamanın %100 üretim kabulü değildir. A/B/stable release kapıları CLOSED; gerçek remote/local inference kullanıcı tercihiyle DEFERRED; tam protected runner/observer/check revision, migration/delete/control reserve, live apply/restore, supervisor/TUI, packaging/pilot ve bağımsız eval açık.
+0.6 doğrulama: Windows tam tur + real Docker opt-in + son store turunun aynı package/test kimlikleriyle birleştirilmiş sonucu **304 PASS / 2 SKIP / 0 FAIL**. Tam turda 299 PASS/3 SKIP vardı; Docker image opt-in ile o fixture PASS oldu; final store turu commit-iptali ve ID çakışması için 4 yeni test/alt test ekledi. Package-level pass sayıları test sayısına dahil edilmedi. Herhangi bir SKIP PASS olarak sayılmadı.
+
+Linux: module verify, vet, bütün package race testleri PASS; son bounded commit-reconciliation/ID fixture değişikliği için store race ayrıca PASS. Linux CLI build/doctor 0.6.0-dev PASS. Bütün Darwin arm64 package/test/CLI binary'leri cross-compile edildi; son store değişikliği ve CLI yeniden compile edildi. /bin/true nedeniyle Darwin **COMPILE_ONLY**; native macOS smoke yok.
+
+Migration kanıtı: TestMigrationAbruptProcessRecovery after-intent/before-commit/after-commit/before-marker sınırlarında gerçek child process'i os.Exit ile sonlandırır; DB transaction'ın iki tarafı ve read-only/no-generation-bump recovery gözlenir. Canceled COMMIT aynı immutable request ile uzlaşır. Journal/checkpoint/dedup/data korunur; invalid/downgraded format, altered/missing marker, changed pending tail, stale/overlapping backup, active/unknown/reserved task, low space ve rehashed false checkpoint reddedilir. Hardlinked DB/WAL/SHM/lock SQLite erişiminden önce reddedilir. Bu fixture'lar gerçek elektrik kesintisi veya filesystem/controller conformance değildir.
+
+Native binary testi: önceki 0.5 backup'ı format 1 olarak restore edildi; store-migrate/idempotent retry/format 2 backup/fresh restore/historical replay ayrı CLI process'leriyle PASS. Journal sequence 24 ve tail hash aynı; task state aynı. Original 0.5 backup/store değiştirilmedi. Yeni formatta normal offline fixture→candidate→export→backup→fresh restore→historical replay demo da PASS; examples/offline/source/hello.txt değişmedi.
+
+Yerel ignored kanıtlar: .cache/windows-migration-tests.jsonl, .cache/windows-migration-docker-tests.jsonl, .cache/windows-migration-store-final.jsonl, .cache/linux-migration-validation.txt, .cache/linux-migration-final.txt, .cache/native-migration-demo.jsonl, .cache/offline-migration-demo.jsonl. Native migration demo .cache/migration-demo-4a3ba630da5f47a0a7e336d46debd0ea; normal demo .cache/demo-0f1af34345f0483d84f799833209928c. Binary bin/viber.exe 0.6.0-dev; Linux/Darwin binary'leri .cache altındadır. Reproducible native upgrade script'i scripts/migration-demo.ps1'dir.
+
+P04 migration dilimi engineering kabulüdür; full control reserve/quota/retention/deletion/tombstone/managed-copy purge, tam power-loss/upgrade/installation ve bağımsız release eval'i açık kalır. Real provider kabulü kullanıcının offline tercihiyle DEFERRED. A/B/stable release kapıları CLOSED; 304 PASS uygulamanın %100 tamamlandığı anlamına gelmez.

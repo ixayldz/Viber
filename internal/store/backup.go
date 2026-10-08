@@ -16,6 +16,7 @@ type SnapshotInfo struct {
 	SchemaVersion  int    `json:"schema_version"`
 	ReducerVersion int    `json:"reducer_version"`
 	StoreSeq       int64  `json:"store_seq"`
+	FormatDigest   string `json:"format_digest,omitempty"`
 	TailHash       string `json:"tail_hash"`
 }
 type DocumentRef struct {
@@ -24,17 +25,22 @@ type DocumentRef struct {
 }
 
 func (s *Store) snapshotInfoLocked(ctx context.Context) (SnapshotInfo, error) {
-	info := SnapshotInfo{SchemaVersion: storeVersion, ReducerVersion: c.ReducerVersion}
+	info := SnapshotInfo{SchemaVersion: s.schema, ReducerVersion: c.ReducerVersion}
 	if s.db == nil {
 		return info, os.ErrClosed
 	}
 	if err := s.verifyProjectionsLocked(ctx); err != nil {
 		return info, err
 	}
+	_, formatDigest, err := s.formatLocked(ctx)
+	if err != nil {
+		return info, err
+	}
+	info.FormatDigest = formatDigest
 	if err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='store_seq'").Scan(&info.StoreSeq); err != nil {
 		return info, err
 	}
-	err := s.db.QueryRowContext(ctx, "SELECT event_hash FROM events ORDER BY store_seq DESC LIMIT 1").Scan(&info.TailHash)
+	err = s.db.QueryRowContext(ctx, "SELECT event_hash FROM events ORDER BY store_seq DESC LIMIT 1").Scan(&info.TailHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
