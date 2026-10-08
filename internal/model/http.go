@@ -50,7 +50,7 @@ func New(config Config) (*Client, error) {
 		return nil, c.Fail(c.InvalidArgument, "invalid provider resource profile")
 	}
 	switch config.Provider {
-	case "openai":
+	case "openai", "chatgpt":
 		if u.Scheme != "https" || u.Host != "api.openai.com" || config.Secret == nil {
 			return nil, c.Fail(c.PolicyDenied, "official OpenAI origin and secret handle required")
 		}
@@ -105,8 +105,14 @@ func (client *Client) Close() {
 		transport.CloseIdleConnections()
 	}
 }
-func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
-	result := Result{SchemaVersion: 1, RequestID: r.ID, Provider: client.config.Provider, Model: r.Model, Calls: []Call{}, CompletionStatus: "UNKNOWN"}
+func (client *Client) Complete(ctx context.Context, r Request) (result Result, callErr error) {
+	dispatched := false
+	defer func() {
+		if callErr != nil && !dispatched {
+			callErr = &PreflightFailure{Cause: callErr}
+		}
+	}()
+	result = Result{SchemaVersion: 1, RequestID: r.ID, Provider: client.config.Provider, Model: r.Model, Calls: []Call{}, CompletionStatus: "UNKNOWN"}
 	if err := validateRequest(r, client.config.Provider); err != nil {
 		return result, err
 	}
@@ -130,7 +136,21 @@ func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	if client.config.Provider == "chatgpt" || r.Stream && client.config.Provider != "ollama" {
+		request.Header.Set("Accept", "text/event-stream")
+	} else if r.Stream && client.config.Provider == "ollama" {
+		request.Header.Set("Accept", "application/x-ndjson")
+	}
+	// Reject stale policy before credential renewal/catalog network operations,
+	// then recheck it immediately before the consequential inference request.
 	if client.config.Secret != nil {
+		admission, err := client.config.Authority(ctx)
+		if err != nil {
+			return result, err
+		}
+		if err = policy.Admit(admission.Layers, policy.Action{Epoch: admission.Epoch, Generation: admission.Generation, InputBarrier: admission.InputBarrier, Effect: "model.infer", Remote: true, Provider: client.config.Provider}); err != nil {
+			return result, err
+		}
 		secret, err := client.config.Secret(ctx)
 		if err != nil {
 			return result, err
@@ -138,7 +158,7 @@ func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
 		if secret == "" || strings.ContainsAny(secret, "\r\n") {
 			return result, c.Fail(c.PolicyDenied, "unavailable scoped provider secret")
 		}
-		if client.config.Provider == "openai" {
+		if client.config.Provider == "openai" || client.config.Provider == "chatgpt" {
 			request.Header.Set("Authorization", "Bearer "+secret)
 		} else {
 			request.Header.Set("x-api-key", secret)
@@ -152,6 +172,7 @@ func (client *Client) Complete(ctx context.Context, r Request) (Result, error) {
 	if err = policy.Admit(admission.Layers, policy.Action{Epoch: admission.Epoch, Generation: admission.Generation, InputBarrier: admission.InputBarrier, Effect: "model.infer", Remote: client.config.Provider != "ollama", Provider: client.config.Provider}); err != nil {
 		return result, err
 	}
+	dispatched = true
 	response, err := client.http.Do(request)
 	if err != nil {
 		kind := "TRANSPORT_UNKNOWN"
@@ -193,6 +214,12 @@ func DecodeReceipt(r Request, provider string, data []byte) (Result, error) {
 	return result, err
 }
 func decodeReceiptInto(r Request, provider string, data []byte, result *Result) error {
+	if provider == "chatgpt" {
+		return decodeChatGPTStream(r, data, result)
+	}
+	if r.Stream {
+		return decodeStreamReceipt(r, provider, data, result)
+	}
 	if len(data) > 8<<20 || validateWire(data) != nil {
 		return &Failure{Kind: "INVALID_RESPONSE", UsageUnknown: true}
 	}

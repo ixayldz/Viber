@@ -19,6 +19,7 @@ import (
 )
 
 type View struct {
+	Checks       []agent.CheckSummary  `json:"checks,omitempty"`
 	Runtime      *agent.LocalRuntime   `json:"runtime,omitempty"`
 	Plan         *plan.State           `json:"plan,omitempty"`
 	Protection   *agent.ProtectionInfo `json:"check_protection,omitempty"`
@@ -115,7 +116,11 @@ func (o *Owner) close() error {
 }
 func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, error) {
 	state, doc, err := o.Session.Inspect(ctx, task, sequence)
-	return View{Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+	checks, checkErr := o.Session.CheckSummaries(doc, state)
+	if err == nil {
+		err = checkErr
+	}
+	return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
 func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	o.control.Lock()
@@ -149,7 +154,11 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	if completed {
 		o.mu.Unlock()
 		_, doc, err := o.Session.Inspect(ctx, task, state.TaskSeq)
-		return View{Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+		checks, checkErr := o.Session.CheckSummaries(doc, state)
+		if err == nil {
+			err = checkErr
+		}
+		return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 	}
 	runCtx, cancel := context.WithCancel(o.ctx)
 	active := &activeRun{task: task, cancel: cancel, done: make(chan struct{})}
@@ -229,6 +238,15 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
+	case "context-why", "context-page", "checks", "check-output", "report":
+		var args agent.Observation
+		if err := c.DecodeStrict(request.Payload, &args); err != nil {
+			return nil, err
+		}
+		if args.Kind != request.Command {
+			return nil, c.Fail(c.InvalidArgument, "observation envelope mismatch")
+		}
+		return o.Session.Observe(ctx, request.TaskID, args)
 	case "budget":
 		if err := nullPayload(request.Payload); err != nil {
 			return nil, err
@@ -298,6 +316,20 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "steering envelope mismatch")
 		}
 		return o.steer(ctx, input)
+	case "attempt":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "attempt requires a quiescent owner boundary")
+		}
+		var options agent.AttemptOptions
+		if err := c.DecodeStrict(request.Payload, &options); err != nil {
+			return nil, err
+		}
+		if options.ParentTask != request.TaskID {
+			return nil, c.Fail(c.InvalidArgument, "attempt envelope mismatch")
+		}
+		return o.Session.NewAttempt(ctx, options)
 	case "requests", "respond", "revise":
 		o.mu.Lock()
 		defer o.mu.Unlock()

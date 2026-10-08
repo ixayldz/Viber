@@ -9,6 +9,8 @@ import (
 
 func encodeRequest(provider string, r Request) (any, string, error) {
 	switch provider {
+	case "chatgpt":
+		return encodeChatGPT(r)
 	case "openai":
 		input := []any{}
 		for _, message := range r.Messages {
@@ -19,7 +21,7 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 				continue
 			}
 			if message.Role == "assistant" && len(message.Continuation) > 0 {
-				if err := checkContinuation(provider, message); err != nil {
+				if err := checkContinuation("openai", message); err != nil {
 					return nil, "", err
 				}
 				for _, item := range message.Continuation {
@@ -36,7 +38,7 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 		for _, tool := range r.Tools {
 			tools = append(tools, map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "parameters": tool.Parameters, "strict": true})
 		}
-		return map[string]any{"model": r.Model, "instructions": r.Instructions, "input": input, "tools": tools, "store": false, "stream": false, "parallel_tool_calls": false, "truncation": "disabled", "max_output_tokens": r.MaxOutputTokens, "include": []string{"reasoning.encrypted_content"}}, "/v1/responses", nil
+		return map[string]any{"model": r.Model, "instructions": r.Instructions, "input": input, "tools": tools, "store": false, "stream": r.Stream, "parallel_tool_calls": false, "truncation": "disabled", "max_output_tokens": r.MaxOutputTokens, "include": []string{"reasoning.encrypted_content"}}, "/v1/responses", nil
 	case "anthropic":
 		messages := []any{}
 		for _, message := range r.Messages {
@@ -71,7 +73,7 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 		for _, tool := range r.Tools {
 			tools = append(tools, map[string]any{"name": tool.Name, "description": tool.Description, "input_schema": tool.Parameters})
 		}
-		return map[string]any{"model": r.Model, "system": r.Instructions, "messages": messages, "tools": tools, "max_tokens": r.MaxOutputTokens, "stream": false, "tool_choice": map[string]any{"type": "auto", "disable_parallel_tool_use": true}}, "/v1/messages", nil
+		return map[string]any{"model": r.Model, "system": r.Instructions, "messages": messages, "tools": tools, "max_tokens": r.MaxOutputTokens, "stream": r.Stream, "tool_choice": map[string]any{"type": "auto", "disable_parallel_tool_use": true}}, "/v1/messages", nil
 	case "ollama":
 		messages := []any{map[string]any{"role": "system", "content": r.Instructions}}
 		callNames := map[string]string{}
@@ -106,7 +108,7 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 		if r.ContextWindow > 0 {
 			options["num_ctx"] = r.ContextWindow
 		}
-		return map[string]any{"model": r.Model, "messages": messages, "tools": tools, "stream": false, "think": false, "options": options}, "/api/chat", nil
+		return map[string]any{"model": r.Model, "messages": messages, "tools": tools, "stream": r.Stream, "think": false, "options": options}, "/api/chat", nil
 	}
 	return nil, "", c.Fail(c.UnsupportedCapability, "unknown protocol")
 }
@@ -150,8 +152,9 @@ func list(value map[string]json.RawMessage, key string) ([]json.RawMessage, erro
 func usage(value map[string]json.RawMessage, input, output, cached string) Usage {
 	in, okIn := number(value, input)
 	out, okOut := number(value, output)
-	cache, _ := number(value, cached)
-	return Usage{Known: okIn && okOut, Input: in, Output: out, CachedInput: cache}
+	cache, okCache := number(value, cached)
+	_, cachePresent := value[cached]
+	return Usage{Known: okIn && okOut && (!cachePresent || okCache), Input: in, Output: out, CachedInput: cache}
 }
 func decodeResult(provider string, raw []byte, result *Result) error {
 	value, err := object(raw)
@@ -159,6 +162,7 @@ func decodeResult(provider string, raw []byte, result *Result) error {
 		return err
 	}
 	switch provider {
+
 	case "openai":
 		if result.ProviderRequestID == "" {
 			result.ProviderRequestID = text(value, "id")
@@ -206,8 +210,9 @@ func decodeResult(provider string, raw []byte, result *Result) error {
 			result.Usage = usage(wireUsage, "input_tokens", "output_tokens", "cache_read_input_tokens")
 			// Anthropic input_tokens excludes cache read/write categories. Canonical
 			// input counts all categories and cached input remains a subset of it.
-			write, _ := number(wireUsage, "cache_creation_input_tokens")
-			if write < 0 || result.Usage.Input > 1<<60 || result.Usage.CachedInput > 1<<60 || write > 1<<60 {
+			write, validWrite := number(wireUsage, "cache_creation_input_tokens")
+			_, writePresent := wireUsage["cache_creation_input_tokens"]
+			if !result.Usage.Known || writePresent && !validWrite || result.Usage.Input < 0 || result.Usage.Output < 0 || result.Usage.CachedInput < 0 || write < 0 || result.Usage.Input > 1<<60 || result.Usage.CachedInput > 1<<60 || write > 1<<60 {
 				return &Failure{Kind: "INVALID_USAGE", UsageUnknown: true}
 			}
 			result.Usage.Input += result.Usage.CachedInput + write

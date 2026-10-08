@@ -62,37 +62,46 @@ type Pending struct {
 	Status          string `json:"status"`
 }
 type Document struct {
-	StoreTokens      *c.TokenLimits      `json:"store_token_limits,omitempty"`
-	Runtime          *LocalRuntime       `json:"runtime,omitempty"`
-	Plan             *plan.State         `json:"plan,omitempty"`
-	Protection       *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
-	Context          *ContextAudit       `json:"context,omitempty"`
-	Requests         []UserRequest       `json:"requests,omitempty"`
-	SchemaVersion    int                 `json:"schema_version"`
-	TaskID           string              `json:"task_id"`
-	Spec             c.TaskSpec          `json:"spec"`
-	Baseline         artifact.Ref        `json:"baseline"`
-	Candidate        artifact.Ref        `json:"candidate"`
-	Messages         []model.Message     `json:"messages"`
-	ToolCursor       int64               `json:"tool_cursor"`
-	PendingReplies   []model.Reply       `json:"pending_replies"`
-	Budget           Budget              `json:"budget"`
-	AllowUnverified  bool                `json:"allow_unverified"`
-	Autonomy         string              `json:"autonomy"`
-	FixtureDigest    string              `json:"fixture_digest"`
-	FixtureCursor    int64               `json:"fixture_cursor"`
-	Pending          *Pending            `json:"pending"`
-	UnknownEffect    bool                `json:"unknown_effect"`
-	Blocker          string              `json:"blocker"`
-	FinalSummary     string              `json:"final_summary"`
-	FinalReady       bool                `json:"final_ready"`
-	LastResponseBlob string              `json:"last_response_blob"`
+	AttemptOrigin       *AttemptOrigin      `json:"attempt_origin,omitempty"`
+	TaskKind            string              `json:"task_kind,omitempty"`
+	MaxRepairs          int                 `json:"max_repairs,omitempty"`
+	RepairAttempts      int                 `json:"repair_attempts,omitempty"`
+	FinalArtifactDigest string              `json:"final_artifact_digest,omitempty"`
+	CheckRuntime        *CheckRuntime       `json:"check_runtime,omitempty"`
+	CheckRuns           []CheckRunRef       `json:"check_runs,omitempty"`
+	StoreTokens         *c.TokenLimits      `json:"store_token_limits,omitempty"`
+	Runtime             *LocalRuntime       `json:"runtime,omitempty"`
+	Plan                *plan.State         `json:"plan,omitempty"`
+	Protection          *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
+	Context             *ContextAudit       `json:"context,omitempty"`
+	Requests            []UserRequest       `json:"requests,omitempty"`
+	SchemaVersion       int                 `json:"schema_version"`
+	TaskID              string              `json:"task_id"`
+	Spec                c.TaskSpec          `json:"spec"`
+	Baseline            artifact.Ref        `json:"baseline"`
+	Candidate           artifact.Ref        `json:"candidate"`
+	Messages            []model.Message     `json:"messages"`
+	ToolCursor          int64               `json:"tool_cursor"`
+	PendingReplies      []model.Reply       `json:"pending_replies"`
+	Budget              Budget              `json:"budget"`
+	AllowUnverified     bool                `json:"allow_unverified"`
+	Autonomy            string              `json:"autonomy"`
+	FixtureDigest       string              `json:"fixture_digest"`
+	FixtureCursor       int64               `json:"fixture_cursor"`
+	Pending             *Pending            `json:"pending"`
+	UnknownEffect       bool                `json:"unknown_effect"`
+	Blocker             string              `json:"blocker"`
+	FinalSummary        string              `json:"final_summary"`
+	FinalReady          bool                `json:"final_ready"`
+	LastNoDispatch      bool                `json:"last_no_dispatch,omitempty"`
+	LastResponseBlob    string              `json:"last_response_blob"`
 }
 type Session struct {
-	mu        sync.Mutex
-	directory string
-	Journal   *store.Store
-	Archive   *artifact.Archive
+	creationFault func(c.ExecutionState) error
+	mu            sync.Mutex
+	directory     string
+	Journal       *store.Store
+	Archive       *artifact.Archive
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {
@@ -161,6 +170,15 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	}
 	if doc.Plan != nil && doc.Plan.Definition.PolicyEpoch != state.PolicyEpoch {
 		return state, doc, c.Fail(c.StoreIntegrityError, "plan policy binding mismatch")
+	}
+	if err = s.validateAttempt(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateFinalArtifact(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateChecks(doc); err != nil {
+		return state, doc, err
 	}
 	if err = s.validateProtection(doc); err != nil {
 		return state, doc, err
@@ -237,6 +255,11 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	AttemptOrigin   *AttemptOrigin
+	inheritedSpec   *c.TaskSpec
+	TaskKind        string
+	MaxRepairs      int
+	CheckRuntime    *CheckRuntime
 	StoreTokens     *c.TokenLimits
 	Runtime         *LocalRuntime
 	CheckPlan       []byte
@@ -279,6 +302,9 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	} else if err = options.Runtime.Validate(); err != nil {
 		return c.TaskState{}, err
 	}
+	if options.Runtime != nil && options.Runtime.Provider == "chatgpt" && (!disjointSession(options.Runtime.AuthDirectory, absolute) || !disjointSession(options.Runtime.AuthDirectory, s.directory)) {
+		return c.TaskState{}, c.Fail(c.PolicyDenied, "credentials must stay outside source and task store")
+	}
 	var base workspace.Capture
 	if options.Git {
 		base, err = workspace.CaptureRepository(options.Root, workspace.DefaultLimits())
@@ -316,30 +342,64 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 		return c.TaskState{}, err
 	}
 	spec := c.TaskSpec{SchemaVersion: 1, TaskID: options.TaskID, Version: 1, Goal: string(options.Prompt), Inputs: []c.InputSource{{ID: "initial", PayloadRef: "blob://" + options.TaskID + "/" + rawDigest, Digest: rawDigest, ByteLength: int64(len(options.Prompt)), Integrity: c.Intact}}, Requirements: []c.Requirement{{ID: "user-goal", Source: c.SourceSpan{InputID: "initial", Start: 0, End: int64(len(options.Prompt))}, Required: true, Risk: "NORMAL", VerificationMethod: "UNRESOLVED_GOAL_COVERAGE"}}, ProtectedOrigin: origin, DeliveryPolicy: "CANDIDATE_ONLY"}
+	if options.inheritedSpec != nil {
+		spec = *options.inheritedSpec
+		spec.ProtectedOrigin = origin
+	}
 	if err = spec.Validate(); err != nil {
 		return c.TaskState{}, err
 	}
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{StoreTokens: &limits, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
-	state, err := s.record(ctx, c.TaskState{}, doc, "TaskCreated", c.EventPayload{Tokens: &c.TokenMutation{Action: "INIT", Limits: limits}, SpecVersion: 1, SnapshotDigest: ref.SnapshotDigest, RequiredObligations: 1})
+	doc := Document{AttemptOrigin: options.AttemptOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	if err = validateLoop(doc); err != nil {
+		return c.TaskState{}, err
+	}
+	if err = validateCheckRuntime(doc); err != nil {
+		return c.TaskState{}, err
+	}
+	required := 0
+	for _, requirement := range spec.Requirements {
+		if requirement.Required {
+			required++
+		}
+	}
+	state, err := s.record(ctx, c.TaskState{}, doc, "TaskCreated", c.EventPayload{Tokens: &c.TokenMutation{Action: "INIT", Limits: limits}, SpecVersion: 1, SnapshotDigest: ref.SnapshotDigest, RequiredObligations: required})
 	if err != nil {
 		return state, err
 	}
-	state, err = s.transition(ctx, state, c.Scoping, "", "offline scope")
+	if s.creationFault != nil {
+		if err = s.creationFault(c.Created); err != nil {
+			return state, err
+		}
+	}
+	state, err = s.transition(ctx, state, c.Scoping, "", "initial bounded scope")
 	if err != nil {
 		return state, err
 	}
-	return s.transition(ctx, state, c.Ready, "", "restricted native tools only; no process or strong verification capability")
+	if s.creationFault != nil {
+		if err = s.creationFault(c.Scoping); err != nil {
+			return state, err
+		}
+	}
+	return s.transition(ctx, state, c.Ready, "", "restricted registered tools; strong verification unavailable")
 }
 func disjointSession(a, b string) bool { return fileguard.Disjoint(a, b) }
 func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
 	effects := []string{"snapshot.read", "model.infer", "plan.update"}
-	if doc.Autonomy != "review" {
+	if doc.CheckRuntime != nil {
+		effects = append(effects, "check.run")
+	}
+	if doc.Autonomy != "review" && taskKind(doc) != "ANALYSIS" {
 		effects = append(effects, "candidate.write")
 	}
-	return []policy.Policy{{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: effects, Paths: []string{"**"}}}
+	remote := doc.Runtime != nil && doc.Runtime.Provider != "ollama" && doc.Runtime.AllowRemote
+	var providers []string
+	if remote {
+		providers = []string{doc.Runtime.Provider}
+	}
+	return []policy.Policy{{RemoteInference: remote, Providers: providers, SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: effects, Paths: []string{"**"}}}
 }
 func (s *Session) stop(ctx context.Context, state c.TaskState, doc Document, reason string, execution c.ExecutionState) (c.TaskState, error) {
 	doc.Blocker = reason
@@ -354,8 +414,12 @@ func (s *Session) stop(ctx context.Context, state c.TaskState, doc Document, rea
 	return s.transition(ctx, state, execution, "", reason)
 }
 func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c.TaskState, error) {
-	if !doc.Plan.Complete() {
-		return s.stop(ctx, state, doc, "PLAN_NODES_PENDING", c.WaitingUser)
+	blocker, checkErr := s.finalBlocker(doc, state)
+	if checkErr != nil {
+		return state, checkErr
+	}
+	if blocker != "" {
+		return s.repairFinal(ctx, state, doc, blocker)
 	}
 	requestIndex := -1
 	if !doc.AllowUnverified {
@@ -374,6 +438,17 @@ func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c
 	}
 	if doc.UnknownEffect || doc.Pending != nil {
 		return s.stop(ctx, state, doc, "UNRESOLVED_EFFECT", c.Blocked)
+	}
+	if doc.FinalArtifactDigest == "" {
+		raw, encodeErr := c.CanonicalV1(finalArtifact(doc))
+		if encodeErr != nil {
+			return state, encodeErr
+		}
+		var putErr error
+		doc.FinalArtifactDigest, putErr = s.Archive.PutBytes(doc.TaskID, raw)
+		if putErr != nil {
+			return state, putErr
+		}
 	}
 	// The final response must survive a crash between verification/delivery states.
 	state, err := s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
@@ -406,7 +481,7 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		return state, err
 	}
 	if state.Execution == c.Terminated {
-		return state, c.Fail(c.UnsupportedCapability, "terminal resume requires a new attempt; create a new offline task")
+		return state, c.Fail(c.UnsupportedCapability, "terminal resume requires an explicit attempt command with a new task ID")
 	}
 	state, err = s.recover(ctx, state)
 	if err != nil {
@@ -438,18 +513,31 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	if live.Snapshot.Digest != base.Snapshot.Digest {
 		return s.stop(ctx, state, doc, "STALE_LIVE_BASE_REQUIRES_RESCOPING", c.WaitingUser)
 	}
-	if state.Execution != c.Ready {
-		state, err = s.transition(ctx, state, c.Ready, "", "reconciled immutable fixture and baseline")
+	if state.Execution == c.Created {
+		state, err = s.transition(ctx, state, c.Scoping, "", "reconcile interrupted creation")
 		if err != nil {
 			return state, err
 		}
 	}
-	state, err = s.transition(ctx, state, c.Running, "", "offline fixture loop")
+	if state.Execution != c.Ready {
+		state, err = s.transition(ctx, state, c.Ready, "", "reconciled immutable runtime profile and baseline")
+		if err != nil {
+			return state, err
+		}
+	}
+	state, err = s.transition(ctx, state, c.Running, "", "durable native tool loop")
 	if err != nil {
 		return state, err
 	}
 	if doc.FinalReady {
-		return s.final(ctx, state, doc)
+		state, err = s.final(ctx, state, doc)
+		if err != nil || state.Execution != c.Running {
+			return state, err
+		}
+		_, doc, err = s.Load(ctx, task)
+		if err != nil {
+			return state, err
+		}
 	}
 	var fixture Fixture
 	var client *model.Client
@@ -486,7 +574,9 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		if len(doc.Messages) > 0 {
 			last := doc.Messages[len(doc.Messages)-1]
 			if last.Role == "assistant" && len(last.Calls) > 0 {
-				state, doc, err = s.completeTools(ctx, state, doc, last.Calls)
+				toolCtx, cancelTools := context.WithDeadline(ctx, started.Add(time.Duration(doc.Budget.MaxActiveMillis-initialActive)*time.Millisecond))
+				state, doc, err = s.completeTools(toolCtx, state, doc, last.Calls)
+				cancelTools()
 				if state.Execution != c.Running {
 					return state, err
 				}
@@ -512,6 +602,7 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		if err != nil {
 			return state, err
 		}
+		doc.LastNoDispatch = false
 		doc.Context = &ContextAudit{SchemaVersion: 1, Profile: manifest.Estimator, RequestDigest: requestDigest, Manifest: manifest}
 		doc.Budget.ReservedInput = reserveInput
 		doc.Budget.ReservedOutput = request.MaxOutputTokens
@@ -551,6 +642,23 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 				return state, err
 			}
 		}
+		var preflight *model.PreflightFailure
+		if doc.Runtime != nil && errors.As(callErr, &preflight) {
+			raw, encodeErr := c.CanonicalV1(model.NoDispatchReceipt{SchemaVersion: 1, RequestID: request.ID, RequestDigest: requestDigest, ProfileDigest: tokenProfile(doc), Provider: doc.Runtime.Provider, Model: request.Model, Decision: "KERNEL_PREFLIGHT_DECLINED"})
+			if encodeErr != nil {
+				return state, encodeErr
+			}
+			doc.LastResponseBlob, err = s.Archive.PutBytes(task, raw)
+			if err != nil {
+				return state, err
+			}
+			doc.LastNoDispatch = true
+			doc.Budget.ReservedInput, doc.Budget.ReservedOutput = 0, 0
+			doc.Pending = nil
+			controlCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			return s.stop(controlCtx, state, doc, "MODEL_PREFLIGHT_DECLINED; reconnect selected account/credential or inspect current policy", c.WaitingResource)
+		}
 		if callErr != nil || !result.Usage.Known || result.Usage.Input < 0 || result.Usage.Output < 0 || result.Usage.Input > 1<<40 || result.Usage.Output > 1<<40 || !c.ValidDigest(doc.LastResponseBlob) {
 			doc.UnknownEffect = true
 			doc.Pending.Status = "UNKNOWN"
@@ -587,7 +695,15 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		if len(result.Calls) == 0 {
 			doc.FinalSummary = result.Text
 			doc.FinalReady = true
-			return s.final(ctx, state, doc)
+			state, err = s.final(ctx, state, doc)
+			if err != nil || state.Execution != c.Running {
+				return state, err
+			}
+			_, doc, err = s.Load(ctx, task)
+			if err != nil {
+				return state, err
+			}
+			continue
 		}
 		doc.ToolCursor = 0
 		doc.PendingReplies = []model.Reply{}
@@ -605,7 +721,10 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		call := calls[n]
 		approvedIndex := -1
 		var preflightErr error
-		if call.Name == "candidate_propose" && doc.Autonomy == "review" {
+		if call.Name == "candidate_propose" && taskKind(doc) == "ANALYSIS" {
+			preflightErr = c.Fail(c.PolicyDenied, "analysis task cannot mutate its candidate")
+		}
+		if call.Name == "candidate_propose" && doc.Autonomy == "review" && preflightErr == nil {
 			requestIndex := boundRequest(doc, state, "CANDIDATE_WRITE", &call)
 			if requestIndex < 0 || doc.Requests[requestIndex].Status == "PENDING" {
 				preflightErr = s.validateReviewCall(state, doc, call)
@@ -633,11 +752,23 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		if err != nil {
 			return state, doc, err
 		}
+		toolStarted := time.Now()
 		var reply model.Reply
 		var next *artifact.Ref
 		toolErr := preflightErr
 		if toolErr == nil {
 			reply, next, toolErr = s.executeTool(ctx, state, &doc, call)
+		}
+		doc.Budget.ActiveMillis += time.Since(toolStarted).Milliseconds()
+		commitCtx := ctx
+		if call.Name == "check_run" && (ctx.Err() != nil || doc.UnknownEffect) {
+			var cancel context.CancelFunc
+			commitCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+		}
+		if doc.UnknownEffect {
+			nextState, stopErr := s.stop(commitCtx, state, doc, "CHECK_OPERATION_OUTCOME_UNKNOWN; no blind retry", c.Blocked)
+			return nextState, doc, stopErr
 		}
 		if approvedIndex >= 0 {
 			doc.Requests[approvedIndex].Status = "CONSUMED"
@@ -657,9 +788,12 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 			kind = "CandidateRecorded"
 			payload.SnapshotDigest = next.SnapshotDigest
 		}
-		state, err = s.record(ctx, state, doc, kind, payload)
+		state, err = s.record(commitCtx, state, doc, kind, payload)
 		if err != nil {
 			return state, doc, err
+		}
+		if ctx.Err() != nil {
+			return state, doc, ctx.Err()
 		}
 	}
 	doc.Messages = append(doc.Messages, model.Message{Role: "tool", Replies: doc.PendingReplies})

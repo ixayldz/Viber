@@ -17,13 +17,21 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.7.0-dev"
-const help = `Viber 0.7.0-dev — fixture/local engineering agent (stable release gates closed)
+const Version = "0.8.0-dev"
+const help = `Viber 0.8.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
-  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE] [--allow-unverified] [--json]
-  viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--model-timeout-ms N] [--json]
+  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--json]
+  viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--stream] [--model-timeout-ms N] [--json]
+  viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
+  viber run "TASK" --provider openai|anthropic --allow-remote --model ID --root PATH --store PATH [--context-limit N] [--output-limit N] [--stream] [--json]
+  viber auth login|status|profiles|select|models|logout [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
+  viber check-config --runtime FILE [--plan FILE] [--json]
+  viber context-why|checks|report TASK --store PATH [--json]
+  viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
+  viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
+  viber attempt TASK --store PATH --new-task ID --parent-seq N [--fixture FILE] [--allow-unverified] [--json]
   viber store-backup --store PATH --output NEW_PATH [--json]
   viber store-restore --backup PATH --store NEW_PATH [--json]
   viber store-migrate --store PATH --backup-output PATH --command-id ID [--json]
@@ -62,6 +70,8 @@ type doctor struct {
 	SnapshotPreview    bool   `json:"snapshot_preview"`
 	ProposalPreview    bool   `json:"proposal_preview"`
 	ProcessSandbox     string `json:"process_sandbox"`
+	ChatGPTAuth        string `json:"chatgpt_auth"`
+	ChatGPTInference   string `json:"chatgpt_inference"`
 	RemoteProviders    string `json:"remote_providers"`
 	LocalProvider      string `json:"local_provider"`
 	LiveApply          string `json:"live_apply"`
@@ -97,6 +107,14 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "check-config":
+		return runCheckConfig(args[1:], out, errout)
+	case "auth":
+		return runAuth(args[1:], out, errout)
+	case "attempt":
+		return runAttempt(args[1:], out, errout)
+	case "context-why", "context-page", "checks", "check-output", "report":
+		return runObservation(args[0], args[1:], out, errout)
 	case "budget":
 		return runTokenLedger(args[1:], out, errout)
 	case "serve":
@@ -169,7 +187,7 @@ func runDoctor(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unexpected arguments"), *jsonMode)
 	}
 	_, gitErr := exec.LookPath("git")
-	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", RemoteProviders: "OFFLINE_PROTOCOL_FIXTURES", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4

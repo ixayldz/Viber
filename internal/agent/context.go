@@ -35,6 +35,12 @@ func boundedContext(request model.Request, capacity int64, profile string) ([]by
 }
 func contextProfile(doc Document) (string, int64, string) {
 	if doc.Runtime != nil {
+		if doc.Runtime.Provider == "chatgpt" {
+			return doc.Runtime.Provider, doc.Runtime.ContextLimit, model.ChatGPTProfile
+		}
+		if doc.Runtime.Provider != "ollama" {
+			return doc.Runtime.Provider, doc.Runtime.ContextLimit, "REMOTE_DECLARED_BYTE_UPPER_BOUND_V1"
+		}
 		return doc.Runtime.Provider, doc.Runtime.ContextLimit, localContextProfile
 	}
 	return "fixture", offlineContextCapacity, offlineContextProfile
@@ -45,15 +51,16 @@ func compileOfflineRequest(doc Document, state c.TaskState, layers []policy.Poli
 		scopes = doc.Protection.Protected
 	}
 	constraints, err := c.CanonicalV1(struct {
-		Protection   *ProtectionInfo         `json:"check_protection,omitempty"`
-		Scopes       []verify.ProtectedScope `json:"protected_check_scopes,omitempty"`
-		Spec         c.TaskSpec              `json:"spec"`
-		Policy       []policy.Policy         `json:"restriction_layers"`
-		Budget       Budget                  `json:"budget"`
-		Plan         *plan.State             `json:"plan,omitempty"`
-		StoreTokens  *c.TokenLimits          `json:"store_token_limits,omitempty"`
-		ReleaseReady bool                    `json:"release_ready"`
-	}{CheckProtection(doc), scopes, doc.Spec, layers, doc.Budget, doc.Plan, doc.StoreTokens, false})
+		Checks       []verify.CheckDefinition `json:"registered_checks,omitempty"`
+		Protection   *ProtectionInfo          `json:"check_protection,omitempty"`
+		Scopes       []verify.ProtectedScope  `json:"protected_check_scopes,omitempty"`
+		Spec         c.TaskSpec               `json:"spec"`
+		Policy       []policy.Policy          `json:"restriction_layers"`
+		Budget       Budget                   `json:"budget"`
+		Plan         *plan.State              `json:"plan,omitempty"`
+		StoreTokens  *c.TokenLimits           `json:"store_token_limits,omitempty"`
+		ReleaseReady bool                     `json:"release_ready"`
+	}{registeredChecks(doc), CheckProtection(doc), scopes, doc.Spec, layers, doc.Budget, doc.Plan, doc.StoreTokens, false})
 	if err != nil {
 		return model.Request{}, nil, ctxpack.Manifest{}, err
 	}
@@ -61,8 +68,11 @@ func compileOfflineRequest(doc Document, state c.TaskState, layers []policy.Poli
 	provider, capacity, profile := contextProfile(doc)
 	if doc.Runtime != nil {
 		request.Model = doc.Runtime.Model
+		request.Stream = doc.Runtime.Stream
 		request.MaxOutputTokens = doc.Runtime.OutputLimit
-		request.ContextWindow = doc.Runtime.ContextLimit
+		if doc.Runtime.Provider == "ollama" {
+			request.ContextWindow = doc.Runtime.ContextLimit
+		}
 	}
 	if err = model.ValidateRequest(request, provider); err != nil {
 		return request, nil, ctxpack.Manifest{}, err
@@ -90,7 +100,7 @@ func (s *Session) validateContext(doc Document) error {
 	if err = model.ValidateRequest(request, provider); err != nil {
 		return err
 	}
-	if doc.Runtime != nil && (request.Model != doc.Runtime.Model || request.ContextWindow != doc.Runtime.ContextLimit || request.MaxOutputTokens != doc.Runtime.OutputLimit) {
+	if doc.Runtime != nil && (request.Stream != doc.Runtime.Stream || request.Model != doc.Runtime.Model || request.ContextWindow != requestContextWindow(doc.Runtime) || request.MaxOutputTokens != doc.Runtime.OutputLimit) {
 		return c.Fail(c.StoreIntegrityError, "local context runtime binding mismatch")
 	}
 	_, manifest, err := boundedContext(request, capacity, profile)
@@ -109,4 +119,11 @@ func (s *Session) validateContext(doc Document) error {
 		return c.Fail(c.StoreIntegrityError, "context manifest/request integrity mismatch")
 	}
 	return nil
+}
+
+func registeredChecks(doc Document) []verify.CheckDefinition {
+	if doc.Protection == nil {
+		return nil
+	}
+	return doc.Protection.Plan.Checks
 }

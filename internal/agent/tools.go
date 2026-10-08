@@ -18,7 +18,9 @@ func Tools() []model.Tool {
 		{Name: "fs_search", Description: "Page captured literal matches with exact byte offsets and bounded excerpts. Long-line excerpts explicitly declare incomplete coverage; use fs_read to hydrate exact ranges. A negative search covers only captured policy scope.", Parameters: readToolParameters("fs_search")},
 		{Name: "candidate_propose", Description: "Propose exact bytes for an isolated candidate. Every write needs a FILE or ABSENT read condition. Never touches the live workspace or Git index.", Parameters: json.RawMessage(`{"type":"object","properties":{"read_set":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["FILE","ABSENT","LISTING"]},"digest":{"type":"string"}},"required":["path","kind","digest"],"additionalProperties":false}},"changes":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"before_digest":{"type":"string"},"after_bytes":{"type":["string","null"]},"delete":{"type":"boolean"}},"required":["path","before_digest","after_bytes","delete"],"additionalProperties":false}}},"required":["read_set","changes"],"additionalProperties":false}`)},
 	}
-	return append(tools, planTools()...)
+	tools = append(tools, planTools()...)
+	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound TS/JS/Python lexical declaration hints. Names/spans are captured-byte references; semantic resolution remains UNKNOWN. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
+	return append(tools, checkTools()...)
 }
 func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Document, call model.Call) (model.Reply, *artifact.Ref, error) {
 	candidate, err := s.Archive.Get(doc.Candidate)
@@ -35,13 +37,19 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		return model.Reply{CallID: call.ID, Content: string(raw)}, nil, err
 	}
 	switch call.Name {
+	case "check_run", "check_output":
+		value, checkErr := s.executeCheck(ctx, state, doc, call)
+		if checkErr != nil {
+			return model.Reply{}, nil, checkErr
+		}
+		return encode(value)
 	case "plan_propose", "plan_next", "plan_finish":
 		value, planErr := s.executePlan(ctx, state, doc, call)
 		if planErr != nil {
 			return model.Reply{}, nil, planErr
 		}
 		return encode(value)
-	case "fs_read", "fs_list", "fs_search":
+	case "fs_read", "fs_list", "fs_search", "fs_outline":
 		readLayers := layers
 		if node := doc.Plan.Active(); node != nil {
 			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
@@ -52,6 +60,9 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		}
 		return encode(value)
 	case "candidate_propose":
+		if taskKind(*doc) == "ANALYSIS" {
+			return model.Reply{}, nil, c.Fail(c.PolicyDenied, "analysis tasks cannot write candidates")
+		}
 		var args struct {
 			ReadSet []c.ReadCondition `json:"read_set"`
 			Changes []c.Change        `json:"changes"`

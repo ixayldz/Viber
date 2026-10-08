@@ -37,9 +37,14 @@ type Capture struct {
 
 var excludedDirs = map[string]bool{".git": true, "node_modules": true, ".tools": true, ".cache": true, ".viber": true, ".viber-local": true, ".aws": true, ".ssh": true, ".venv": true, "vendor": true, "dist": true, "build": true, "bin": true}
 
+func credentialArtifact(name string) bool {
+	n := strings.ToLower(name)
+	return n == "credentials.bin" || n == "auth.lock" || strings.HasPrefix(n, ".auth-")
+}
+
 func excludedFile(name string) bool {
 	n := strings.ToLower(name)
-	return n == ".env" || strings.HasPrefix(n, ".env.") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || strings.HasSuffix(n, ".p12") || strings.HasSuffix(n, ".sqlite") || strings.HasSuffix(n, ".sqlite-wal") || strings.HasSuffix(n, ".sqlite-shm")
+	return credentialArtifact(n) || n == ".env" || strings.HasPrefix(n, ".env.") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || strings.HasSuffix(n, ".p12") || strings.HasSuffix(n, ".sqlite") || strings.HasSuffix(n, ".sqlite-wal") || strings.HasSuffix(n, ".sqlite-shm")
 }
 
 // CaptureDirectory performs two exact scans, then compares all manifest bytes.
@@ -134,7 +139,7 @@ func scanWithGit(root string, limits Limits, g *gitCapture) (Capture, error) {
 		if len(seen) > limits.MaxFiles*3 {
 			return c.Fail(c.UnsupportedCapability, "capture entry quota exceeded")
 		}
-		if d.IsDir() && excludedDirs[strings.ToLower(d.Name())] {
+		if d.IsDir() && (excludedDirs[strings.ToLower(d.Name())] || credentialArtifact(d.Name())) {
 			result.Snapshot.Exclusions = append(result.Snapshot.Exclusions, relative+"/")
 			return filepath.SkipDir
 		}

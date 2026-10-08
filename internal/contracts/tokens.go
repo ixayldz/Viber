@@ -94,7 +94,10 @@ func ApplyTokens(account *TokenAccount, change TokenMutation, task TaskState) (*
 		} else {
 			// Actual observed usage is charged even when it exceeds a reservation.
 			// Subsequent admissions stop; rejecting the receipt would lose accounting.
-			if r.Status != "SETTLED" || !ValidDigest(r.ResponseDigest) || (r.UsageSource != "PROVIDER_REPORTED" && r.UsageSource != "FIXTURE_REPORTED") || r.Used.Input < 0 || r.Used.Output < 0 || r.Used.Input > 1<<40 || r.Used.Output > 1<<40 {
+			if r.UsageSource == "KERNEL_NO_DISPATCH" && r.Used != (TokenLimits{}) {
+				return nil, Fail(StoreIntegrityError, "preflight zero charge cannot contain usage")
+			}
+			if r.Status != "SETTLED" || !ValidDigest(r.ResponseDigest) || (r.UsageSource != "PROVIDER_REPORTED" && r.UsageSource != "FIXTURE_REPORTED" && r.UsageSource != "KERNEL_NO_DISPATCH") || r.Used.Input < 0 || r.Used.Output < 0 || r.Used.Input > 1<<40 || r.Used.Output > 1<<40 {
 				return nil, Fail(InvalidArgument, "settlement requires bounded observed usage and raw receipt")
 			}
 			next.Reserved.Input -= old.Upper.Input

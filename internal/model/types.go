@@ -39,6 +39,7 @@ type Message struct {
 	Model        string            `json:"model"`
 }
 type Request struct {
+	Stream          bool      `json:"stream,omitempty"`
 	ContextWindow   int64     `json:"context_window,omitempty"`
 	SchemaVersion   int       `json:"schema_version"`
 	ID              string    `json:"request_id"`
@@ -86,8 +87,14 @@ type Adapter interface {
 var toolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
 
 func validateRequest(r Request, provider string) error {
-	if r.ContextWindow < 0 || r.ContextWindow > 1<<20 || r.ContextWindow > 0 && provider != "ollama" || r.SchemaVersion != c.SchemaVersion || r.ID == "" || r.Model == "" || len(r.Model) > 256 || strings.ContainsAny(r.Model, "\r\n\x00") || r.MaxOutputTokens < 1 || r.MaxOutputTokens > 65536 || len(r.Messages) == 0 || len(r.Messages) > 10000 || len(r.Tools) > 32 {
+	if r.ContextWindow < 0 || r.ContextWindow > 1<<20 || r.ContextWindow > 0 && provider != "ollama" || r.SchemaVersion != c.SchemaVersion || r.ID == "" || r.Model == "" || len(r.Model) > 256 || strings.ContainsAny(r.Model, "\r\n\x00") || r.MaxOutputTokens < 1 || r.MaxOutputTokens > 65536 && provider != "chatgpt" || len(r.Messages) == 0 || len(r.Messages) > 10000 || len(r.Tools) > 32 {
 		return c.Fail(c.InvalidArgument, "invalid model request")
+	}
+	if r.Stream && provider != "openai" && provider != "anthropic" && provider != "ollama" {
+		return c.Fail(c.PolicyDenied, "explicit streaming is supported only for registered API/local protocols")
+	}
+	if provider == "chatgpt" && (r.Model != ChatGPTModel || r.MaxOutputTokens != ChatGPTOutputCeiling || r.ContextWindow != 0) {
+		return c.Fail(c.PolicyDenied, "ChatGPT model requires a registered published output ceiling")
 	}
 	names := map[string]bool{}
 	for _, tool := range r.Tools {
@@ -118,7 +125,7 @@ func validateRequest(r Request, provider string) error {
 				return c.Fail(c.InvalidArgument, "user message cannot carry protocol authority")
 			}
 		case "assistant":
-			if len(message.Replies) > 0 {
+			if len(message.Calls) > 32 || len(message.Replies) > 0 {
 				return c.Fail(c.InvalidArgument, "assistant replies forbidden")
 			}
 			for _, call := range message.Calls {
@@ -167,6 +174,12 @@ func validArguments(raw []byte) error {
 	return nil
 }
 func validateResult(r Request, result *Result) error {
+	if len(result.Calls) > 32 {
+		result.Calls = nil
+		result.Continuation = nil
+		result.CompletionStatus = "UNKNOWN"
+		return &Failure{Kind: "TOOL_CALL_QUOTA", UsageUnknown: true}
+	}
 	selected := map[string]bool{}
 	for _, tool := range r.Tools {
 		selected[tool.Name] = true
@@ -206,3 +219,20 @@ func ValidateRequest(request Request, provider string) error {
 	return validateRequest(request, provider)
 }
 func ValidateResult(request Request, result *Result) error { return validateResult(request, result) }
+
+// PreflightFailure can only be emitted before the inference transport is called.
+// Credential/catalog renewal is distinct from possibly billed inference.
+type PreflightFailure struct{ Cause error }
+
+func (f *PreflightFailure) Error() string { return "model preflight declined" }
+func (f *PreflightFailure) Unwrap() error { return f.Cause }
+
+type NoDispatchReceipt struct {
+	SchemaVersion int    `json:"schema_version"`
+	RequestID     string `json:"request_id"`
+	RequestDigest string `json:"request_digest"`
+	ProfileDigest string `json:"profile_digest"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Decision      string `json:"decision"`
+}

@@ -19,8 +19,8 @@ func validateShape(capture Capture) error {
 			return c.Fail(c.InvalidArgument, "unsafe or aliased manifest path")
 		}
 		for _, part := range strings.Split(p, "/") {
-			if strings.EqualFold(part, ".git") && kind != "excluded" {
-				return c.Fail(c.PolicyDenied, "Git internals cannot be candidate content")
+			if (strings.EqualFold(part, ".git") || credentialArtifact(part)) && kind != "excluded" {
+				return c.Fail(c.PolicyDenied, "Git internals and credential artifacts cannot be candidate content")
 			}
 		}
 		seen[strings.ToLower(p)] = kind

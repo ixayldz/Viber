@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "schema_version": 1,
+    "image": "golang:1.27.1-bookworm@sha256:8d48e12ec56735e9358640898b9d9b9fcca110612ed8a5567438c0a1baa24e66",
+    "memory_bytes": 536870912,
+    "pids": 64,
+    "cpus": 1,
+    "scratch_bytes": 134217728,
+    "timeout_seconds": 60,
+    "max_output_bytes": 1048576
+  }
+}

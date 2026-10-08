@@ -2,13 +2,16 @@
 
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.
 
-**Mevcut sürüm: 0.7.0-dev — offline mühendislik önizlemesi. Üretim sürümü değildir.** CLI deterministik fixture veya açıkça yapılandırılmış yerel Ollama modeliyle aynı kalıcı native tool döngüsünü çalıştırır. OpenAI/Anthropic runtime bağlantısı, güçlü doğrulama ve üretim kabulü henüz tamamlanmamıştır. Yerel modelin gerçekten local çalıştığı operator beyanına bağlıdır; model/platform conformance ayrıca gerekir.
+**Mevcut sürüm: 0.8.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü ve güçlü doğrulama tamamlanmamıştır.
 
-[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [0.7 anahtarsız ilerleme](docs/KEYLESS_PROGRESS.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [0.8 anahtarsız ilerleme](docs/KEYLESS_PROGRESS.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
 - Anahtar gerektirmeyen deterministik fixture ile görev açabilir, dosya okuyabilir, candidate değişikliği ve diff üretebilirsiniz.
+- ChatGPT hesabıyla giriş yapabilir, hesap seçebilir ve izinli abonelik modeliyle görev başlatabilirsiniz.
+- Kayıtlı check çalıştırabilir; exact çıktı, context ve analysis raporunu inceleyebilirsiniz.
+- Terminal görevden intent ve toplam token hesabını koruyan yeni deneme oluşturabilirsiniz.
 - Candidate yazısını `review` modunda inceleyip tek işleme bağlı onay verebilirsiniz.
 - Durumu, bütçeyi, bekleyen istekleri, geçmiş olayları ve replay sonucunu inceleyebilirsiniz.
 - Nonterminal görevleri pause/cancel/resume ile kontrol edebilir; ham steering mesajını kalıcı kaydedebilirsiniz.
@@ -17,7 +20,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Mevcut profil `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, compaction, retention/delete, outline/symbol ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, compaction, retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -273,7 +276,7 @@ Yeni store format 2 kullanır. Format 1 kendiliğinden yükseltilmez. Eski store
 
 Context kapasitesini kurulu modelin doğrulanmış sınırına göre seçin. `num_ctx`/`num_predict` request'e bağlanır; mevcut preflight conservative byte üst sınırıdır, provider tokenizer conformance değildir. Zorunlu içerik sığmazsa çağrıdan önce WAITING_RESOURCE olur. [Ollama chat API](https://docs.ollama.com/api/chat) ve [context yapılandırması](https://docs.ollama.com/context-length).
 
-Review onayları fixture örneğindeki gibi `requests/respond/resume` ile verilir. Model gerçek tool çağrıları üretse de source doğrudan değişmez; sonuç UNVERIFIED kalır. Usage kaybı, timeout/transport belirsizliği veya bildirilen model uyuşmazlığı BLOCKED ve korunmuş reservation bırakır; kör tekrar yoktur. Streaming/thinking profile ve güvenilir check runner henüz yoktur.
+Review onayları fixture örneğindeki gibi `requests/respond/resume` ile verilir. Model gerçek tool çağrıları üretse de source doğrudan değişmez; sonuç UNVERIFIED kalır. Usage kaybı, timeout/transport belirsizliği veya bildirilen model uyuşmazlığı BLOCKED ve korunmuş reservation bırakır; kör tekrar yoktur. Ollama için --stream NDJSON yolu vardır; thinking profili henüz desteklenmez. Kayıtlı Docker check 0.8 ile bağlıdır; trusted discovery/observer ve güçlü verification yoktur.
 
 ## Native dependency planı (0.7)
 
@@ -300,12 +303,14 @@ Yeni store'un ilk görevi, değişmez ortak input/output token limitlerini kayde
 | Profil | Anahtar | Bugün kullanıcı akışı |
 |---|---|---|
 | Offline fixture | Gerekmez | Çalışır; deterministik, gerçek inference yok |
-| OpenAI Responses | Mevcut adapter yolunda API credential gerekir | HTTP/protokol kodu var; CLI bağlantısı ve gerçek kabul eksik |
-| Anthropic Messages | Mevcut adapter yolunda API key gerekir | HTTP/protokol kodu var; CLI bağlantısı ve gerçek kabul eksik |
+| OpenAI Responses, API hesabı | Mevcut adapter yolunda API credential gerekir | CLI runtime bağlı; gerçek endpoint kabulü eksik |
+| Anthropic Messages | Mevcut adapter yolunda API key gerekir | CLI runtime bağlı; gerçek endpoint kabulü eksik |
 | Ollama, gerçekten yerel model | Yerel API için gerekmez | CLI runtime bağlantısı var; gerçek kurulu model kabulü ve production conformance eksik |
+| ChatGPT coding aboneliği | API anahtarı gerekmez; browser OAuth gerekir | Auth ve stateless SSE runtime bağlı; gerçek hesap kabulü bekler |
+| Diğer coding abonelikleri | Provider belirler | Auth sağlayıcısı şu an yalnız chatgpt |
 | Ollama cloud | Cloud credential gerekir | Mevcut yerel profil desteklemez |
 
-`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` ortam değişkeni eklemek veya `.env` oluşturmak bugün CLI'yı gerçek modellerle çalıştırmaz. Uzak provider config, credential onboarding/keychain ve remote runtime wiring henüz tamamlanmamıştır; local Ollama komutu yukarıdadır. Anahtarı fixture'a, repo'ya veya response dosyasına yazmayın.
+`OPENAI_API_KEY` ve `ANTHROPIC_API_KEY` seçilen process environment’ında yapılandırılmalıdır; .env otomatik okunmaz. API provider’ları ayrıca `--allow-remote` ister. Credential değeri task/context/output’a kaydedilmez; metadata yalnız fixed environment handle adını taşır. ChatGPT aboneliği ayrı auth yoludur ve bu API anahtarlarını kullanmaz. Anahtarları fixture/repository/response dosyasına yazmayın.
 
 OpenAI ve Anthropic'in alternatif kimlik doğrulama seçenekleri de vardır; bu repo onların workload identity yaşam döngüsünü uygulamaz. Ollama'da local API üzerinden bir cloud model çağrısı da uzak inference olabilir; yalnız endpoint'in loopback olması yeterli kabul değildir. Resmi kaynaklar: [OpenAI authentication](https://developers.openai.com/api/reference/overview/#authentication), [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication), [Ollama authentication](https://docs.ollama.com/api/authentication). Model gerektiren ve gerektirmeyen backlog [analizde](docs/PRD_STATUS_ANALYSIS.md) ayrı verilmiştir.
 
@@ -315,7 +320,7 @@ Görev store'u ham kullanıcı niyeti, captured kaynak byte'ları, model/fixture
 
 Snapshot varsayılan olarak en çok 10.000 dosya, dosya başına 2 MiB ve toplam 32 MiB captured içerikle sınırlıdır. Binary baseline ve desteklenmeyen path/index türleri dışlanır veya reddedilir; excluded dosya için yokluk iddia edilmez. İki scan eşitliği `BEST_EFFORT` capture'dır; atomik filesystem snapshot değildir.
 
-Policy/path/hash kontrolü gerçek OS sandbox'ıyla aynı güvenceyi vermez. `sandbox-run` ayrı operator profile/policy/authority ve pinned image gerektiren advanced geliştirme yüzeyidir. Normal fixture loop keyfi shell/test çalıştırmaz. Protected `--check-plan` origin'i mutation öncesi bağlar ve check weakening'i sınırlar; henüz trusted test observer veya güçlü verification receipt üretmez.
+Policy/path/hash kontrolü gerçek OS sandbox'ıyla aynı güvenceyi vermez. `sandbox-run` ayrı operator profile/policy/authority ve pinned image gerektiren advanced geliştirme yüzeyidir. Model keyfi shell komutu gönderemez. --check-runtime seçilirse yalnız --check-plan içindeki operator argv/image/profile çalışır. Protected `--check-plan` origin'i mutation öncesi bağlar ve check weakening'i sınırlar; henüz trusted test observer veya güçlü verification receipt üretmez.
 
 Telemetry/training bildirimi varsayılan OFF'tur; geniş config/privacy/secret-safe export ve türev verileri silme sistemi henüz tamamlanmamıştır. Kaynak/backup/delivery dizinlerini Git'e eklemeyin.
 
@@ -329,7 +334,7 @@ Telemetry/training bildirimi varsayılan OFF'tur; geniş config/privacy/secret-s
 | `STALE_BASE` / source changed | Kaynak/read-set değişmiş; eski patch'i zorlamayın. Yeni task veya uygun fresh revision gerekir |
 | `STALE_REQUEST` | Güncel isteği yeniden okuyun; eski bağlarla yanıt göndermeyin |
 | `COMMAND_ID_CONFLICT` | Aynı ID farklı komut/payload için kullanılmış |
-| Terminal task resume hatası | Yeni task ID kullanın; yeni attempt özelliği henüz yok |
+| Terminal task resume hatası | Terminal task_seq ile attempt --new-task ID --parent-seq N kullanın |
 | `CONTEXT_TOO_SMALL` | Zorunlu içerik sığmıyor; otomatik kırpma yapılmaz |
 | UNKNOWN usage/effect | Reservation korunur; kör tekrar yerine uzlaştırma gerekir |
 | Output dizini zaten var | Yeni çıktı path'i seçin; overwrite desteklenmez |
@@ -365,6 +370,112 @@ Kod yerleşimi:
 | `internal/workspace` / `artifact` / `delivery` | Capture, candidate/CAS, export |
 | `internal/policy` / `runner` / `fileguard` | Admission, Docker broker, path/metadata korumaları |
 | `internal/model` / `context` / `verify` | Provider protokolleri, preflight, kalite/origin kuralları |
+| `internal/auth` | SIWC giriş, credential koruma, hesap/refresh/revoke |
 | `internal/owner` / `ipc` | Tek owner ve yerel komut iletişimi |
 
 Gözlenmiş test sonuçları ve açık üretim kabulü [VALIDATION.md](docs/VALIDATION.md) içinde; gereksinim bazında puanlama [PRD_STATUS_ANALYSIS.md](docs/PRD_STATUS_ANALYSIS.md) içindedir. Bu README mevcut komutları anlatır; gelecekteki PRD komutları kullanım örneği diye sunulmaz.
+
+## ChatGPT coding aboneliğiyle giriş (0.8)
+
+API anahtarı yerine resmî [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) kullanılır. Sistem tarayıcısında hesabınıza girin ve callback tamamlanınca terminale dönün:
+
+~~~powershell
+.\bin\viber.exe auth login --provider chatgpt --json
+.\bin\viber.exe auth status --json
+.\bin\viber.exe auth profiles --json
+.\bin\viber.exe auth models --json
+~~~
+
+`chatgpt_plan_usage:true` gerekli granted scopes ve credential bulunduğunu gösterir. Yalnız kimlik girişi model kullanım izni değildir. Başlangıç SIWC kapsamı uygun Plus/Pro hesaplarıdır; kullanılabilirliği ve limitleri OpenAI belirler. Ticari/hosted entegrasyon ayrı partner koşullarına tabidir.
+
+`auth models` güncel görünür hesabın kataloğunu getirir. Şu an runtime’da yalnız yayımlanmış output tavanı kayıtlı `gpt-6.1-sol` profili açıktır. Diğer coding aboneliklerinin girişi bu sürümde desteklenmez.
+
+Yeni hesap, seçim ve kayıtlı hesaba yeniden giriş:
+
+~~~powershell
+.\bin\viber.exe auth login --json
+.\bin\viber.exe auth select --profile SAVED_PROFILE_ID --json
+.\bin\viber.exe auth login --profile SAVED_PROFILE_ID --json
+~~~
+
+`SAVED_PROFILE_ID` auth profiles çıktısındaki ID’dir. Görev profile bağlanır; sonradan auth select eski görevin hesabını değiştirmez.
+
+~~~powershell
+.\bin\viber.exe run "Kaynak kodunu incele ve izole candidate üzerinde düzeltme öner" --provider chatgpt --allow-remote --model gpt-6.1-sol --root SOURCE_ROOT --store STORE_OUTSIDE_SOURCE --task chatgpt-work --autonomy review --allow-unverified --json
+~~~
+
+Placeholder’ları gerçek yollarla değiştirin. `--allow-remote` context’in seçili provider’a gönderilmesine açık izindir. Review yine requests/respond/resume kullanır. Abonelik girişi güçlü verification yetkisi değildir.
+
+Credential kullanıcı config dizininin `viber/auth` altındadır; `--auth-dir` hem source hem task store dışında olmalıdır. Windows kullanıcı DPAPI + private ACL; Linux/macOS owner-only dizin ve 0600 dosya kullanır. Unix dosyası disk üzerinde şifrelenmez. Credential dosyaları normal task akışıyla journal/context/export/backup’a kopyalanmaz; status token dökmez. Default source capture `credentials.bin`, `auth.lock` ve `.auth-*` adlarını her dizin seviyesinde dışlar; Git’te tracked olmaları filtreyi aşmaz. Bu dosyaları başka adlarla source’a veya prompt’a kopyalamayın; genel secret keşfi/derived privacy lineage henüz tamamlanmadı.
+
+~~~powershell
+.\bin\viber.exe auth logout --profile SAVED_PROFILE_ID --json
+~~~
+
+Local token’lar temizlenir. `remote_revocation_confirmed:false` sunucudaki iptalin doğrulanmadığını belirtir; [kullanım ayarlarını](https://chatgpt.com/settings/usage) kontrol edin.
+
+SIWC store:false/stream:true ve viber tool namespace kullanır. Preview max_output_tokens kabul etmediğinden çağrı başına [modelin](https://developers.openai.com/api/docs/models/gpt-6.1-sol) yayımlanmış 128.000 output token tavanı rezerve edilir. Bu yolun toplam görev output bütçesi varsayılan 1.048.576’dır; `--max-output-tokens` toplam work limitidir, wire cap değildir. `--output-limit` Ollama/API runtime için wire cap’tir; ChatGPT yolunda kullanılamaz. response.completed gelmeden araç çalışmaz; kesik stream UNKNOWN rezervasyonu bırakır. [Resmî inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), [preview sınırları](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+## Context, analysis ve yeni deneme (0.8)
+
+İlk offline demo’daki `$store` ile:
+
+~~~powershell
+.\bin\viber.exe context-why greeting --store $store --json
+.\bin\viber.exe context-page greeting --store $store --offset 0 --limit 4096 --json
+.\bin\viber.exe report greeting --store $store --json
+~~~
+
+Context why dahil edilme nedenlerini ve audit bağını gösterir. Component boyları bağımsız tokenizer ölçümü değildir. Context page saklanan canonical request’in exact base64 byte sayfasıdır; next_offset ile devam edilir. Arbitrary blob/host dosya lookup yoktur.
+
+~~~powershell
+$analysisStore = Join-Path $demoBase 'analysis-store'
+.\bin\viber.exe run "Yakalanmış hello.txt dosyasını incele" --offline --fixture examples/offline/analysis.json --task-kind ANALYSIS --root examples/offline/source --store $analysisStore --task analysis --allow-unverified --json
+.\bin\viber.exe report analysis --store $analysisStore --json
+~~~
+
+ANALYSIS candidate mutation’ını reddeder. Report inputs/spec/candidate’a bağlı immutable artifact’tır; MODEL_AUTHORED_UNREVIEWED independent goal review değildir. CODE görevinde değişiklik yoksa kind NO_CHANGES olur; export final artifact’ı taşır.
+
+`--max-repairs` 0..8, varsayılan 2’dir. Eksik plan/check veya geçersiz final özetinde aynı amaç/bütçe içinde bounded repair devam eder. Kriterler yeniden yazılmaz; limit dolunca WAITING_USER olur.
+
+~~~powershell
+$parent = .\bin\viber.exe status greeting --store $store --json | ConvertFrom-Json
+.\bin\viber.exe attempt greeting --store $store --new-task greeting-retry --parent-seq $parent.state.task_seq --fixture examples/offline/greeting.json --allow-unverified --json
+.\bin\viber.exe resume greeting-retry --store $store --json
+~~~
+
+Yeni task ham intent/criteria’yı korur, canlı source’u yeniden yakalar. Eski plan/check/approval/quality taşınmaz; toplam charge sıfırlanmaz. Aynı new-task/payload kayıp creation cevabını uzlaştırır; farklı payload conflict olur. UNKNOWN parent effect yeni denemeyi engeller. Local/ChatGPT parent için fixture verilmez; runtime/profile korunur.
+
+## Kayıtlı check ve lexical outline (0.8)
+
+Model yalnız kayıtlı check ID gönderir; argv/image/network/profile seçemez. Linux Docker engine ve önceden kurulu digest-pinned image gerekir; otomatik pull veya host fallback yoktur.
+
+~~~powershell
+$checkStore = Join-Path $demoBase 'check-store'
+.\bin\viber.exe run "Yakalanmış greeting için kayıtlı kontrolü çalıştır" --offline --fixture examples/offline/check.json --check-plan examples/offline/check-plan.json --check-runtime examples/offline/check-runtime.json --root examples/offline/source --store $checkStore --task check-demo --allow-unverified --json
+.\bin\viber.exe checks check-demo --store $checkStore --json
+.\bin\viber.exe check-output check-demo --store $checkStore --run-id run-greeting-check --stream stdout --offset 0 --limit 4096 --json
+~~~
+
+Image exact digest’i check-runtime.json içindedir. `check-config --runtime FILE --plan FILE --json` profile digest ve plan eşleşmesini process başlatmadan gösterir. Profile değişirse plan runner_digest de Viber canonical metadata digest’iyle eşleşmelidir. Test/helper/config closure’ını eksiksiz seçmek gerekir; explicit closure full discovery değildir.
+
+Process nonroot/network-none/readonly source/root ve bounded CPU/memory/PID/scratch/output kullanır. Receipt candidate/spec/policy/origin’e bağlıdır. Candidate değişince current:false olur. PASS çıktısı veya exit 0 computation sonucudur; verification:UNKNOWN kalır.
+
+`fs_outline` JS/TS/Python lexical declaration sayfaları, comment/string dışlama, exact source digest/span ve candidate/policy cursor bağları verir. AST/reference/LSP garantisi değildir.
+
+## API hesabıyla OpenAI / Anthropic (0.8)
+
+İlgili API anahtarını bu terminalin environment’ına güvenli şekilde yapılandırdıktan sonra provider/model/context profilini açıkça seçin:
+
+~~~powershell
+.\bin\viber.exe run "TASK" --provider openai --allow-remote --model MODEL_AVAILABLE_TO_API_ACCOUNT --context-limit 32768 --output-limit 2048 --root SOURCE_ROOT --store STORE_OUTSIDE_SOURCE --autonomy review --json
+.\bin\viber.exe run "TASK" --provider anthropic --allow-remote --model MODEL_AVAILABLE_TO_API_ACCOUNT --context-limit 32768 --output-limit 2048 --root SOURCE_ROOT --store STORE_OUTSIDE_SOURCE --autonomy review --json
+~~~
+
+API model ID, context kapasitesi ve output limiti hesabınızdaki doğrulanmış profil olmalıdır; bunlar operator beyanıdır, tüm modeller için conformance garantisi değildir. API endpoint sabittir; custom origin/proxy/redirect veya izinsiz provider fallback açılmaz. OpenAI/Anthropic için varsayılan JSON response’dur; `--stream` ile sırasıyla Responses SSE ve Messages SSE seçilir. Ollama’da aynı flag NDJSON kullanır. Stream seçimi task/runtime/request/profile’a bağlanır ve restore’da doğrulanır; provider bunu sessizce değiştiremez. SIWC her zaman SSE kullanır ve ayrıca stream flag’i istemez.
+
+Credential/policy inference transport’u çağrılmadan reddedilirse kernel `KERNEL_NO_DISPATCH` receipt’iyle rezervasyonu sıfır kullanımla settle eder ve WAITING_RESOURCE olur. Credential düzeltildikten sonra explicit resume mümkündür. Gönderilmiş/kesilmiş request bu receipt’i alamaz; UNKNOWN reservation korunur. Bu ayrım billing veya kalite doğrulaması değildir.
+
+Gerçek API kabulü bu çalışma kapsamında anahtar kullanılmadan test edilmedi; offline protocol/admission/privacy kanıtı vardır.
+
+Stream, UI’ya canlı delta yayını değildir: 8 MiB’ye kadar private wire cevap saklanır, ancak tam terminal protokol sınırı doğrulandıktan sonra native tools’a geçilir. Anthropic JSON argüman parçaları/signed thinking ve cumulative/cache usage; OpenAI terminal response; Ollama complete structured tool chunks korunur. Kesik/bozuk/sırasız/different-model/server-tool cevap authority vermez. JSON/stream mode, opaque continuation ve UNKNOWN usage için silent fallback/retry yoktur. Per-response tool batch en fazla 32 çağrıdır. [OpenAI Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses), [Anthropic Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [Ollama streaming](https://docs.ollama.com/capabilities/streaming).

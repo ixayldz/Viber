@@ -79,6 +79,15 @@ func (s *Session) Export(ctx context.Context, task, output string) (ExportManife
 	if err = publish("changes.patch", patch); err != nil {
 		return result, err
 	}
+	if doc.FinalArtifactDigest != "" {
+		raw, readErr := s.Archive.GetBytes(task, doc.FinalArtifactDigest)
+		if readErr != nil {
+			return result, readErr
+		}
+		if err = publish("final-artifact.json", raw); err != nil {
+			return result, err
+		}
+	}
 	report, err := c.CanonicalV1(struct {
 		Protection    *ProtectionInfo `json:"check_protection,omitempty"`
 		State         c.TaskState     `json:"state"`

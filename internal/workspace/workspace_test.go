@@ -183,3 +183,71 @@ func TestCaptureCannotSilentlyTreatFileAsEmptyDirectory(t *testing.T) {
 		t.Fatal("unbounded read quota accepted")
 	}
 }
+
+func TestCredentialArtifactsNeverEnterCandidate(t *testing.T) {
+	for _, gitAware := range []bool{false, true} {
+		t.Run(map[bool]string{false: "directory", true: "tracked-git"}[gitAware], func(t *testing.T) {
+			root := t.TempDir()
+			if gitAware {
+				root = gitFixture(t)
+			}
+			write(t, root, "public.txt", []byte("public source"))
+			sensitive := []string{"credentials.bin", "nested/CREDENTIALS.BIN", "nested/.auth-interrupted", "auth.lock", ".AUTH-orphan"}
+			for _, name := range sensitive {
+				write(t, root, name, []byte("plaintext-credential-must-never-be-captured"))
+			}
+			write(t, root, "deep/credentials.bin/nested-token.txt", []byte("nested plaintext"))
+			if gitAware {
+				fixtureGit(t, root, "add", "-f", "--", "credentials.bin", "nested", "auth.lock", ".AUTH-orphan", "deep")
+			}
+			captured, err := CaptureDirectory(root, DefaultLimits())
+			if gitAware {
+				captured, err = CaptureRepository(root, DefaultLimits())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = VerifyCapture(captured); err != nil {
+				t.Fatal(err)
+			}
+			if string(captured.Contents["public.txt"]) != "public source" {
+				t.Fatal("ordinary source unavailable")
+			}
+			for name, raw := range captured.Contents {
+				if bytes.Contains(raw, []byte("plaintext")) {
+					t.Fatal("credential leaked into captured source", name)
+				}
+			}
+			for _, name := range append(sensitive, "deep/credentials.bin/") {
+				found := false
+				for _, exclusion := range captured.Snapshot.Exclusions {
+					found = found || exclusion == name
+				}
+				if !found {
+					t.Fatal("credential exclusion unavailable", name)
+				}
+			}
+			// Even an absent credential path cannot be created through candidate
+			// mutation, and a freshly rehashed forged capture cannot admit it.
+			p, layers, authority := proposal(captured, "public.txt", []byte("changed"))
+			p.Changes = append(p.Changes, c.Change{Path: "new/credentials.bin", After: []byte("forged credential")})
+			p.ReadSet = append(p.ReadSet, c.ReadCondition{Path: "new/credentials.bin", Kind: "ABSENT"})
+			if _, err = Preview(captured, captured, p, layers, authority); err == nil {
+				t.Fatal("credential path mutation admitted")
+			}
+			forged := captured
+			forged.Snapshot.Entries = append(append([]c.Entry{}, captured.Snapshot.Entries...), c.Entry{Path: ".auth-forged", Hash: c.HashBytes([]byte("forged")), Size: 6, Mode: 0600})
+			forged.Contents = map[string][]byte{}
+			for name, raw := range captured.Contents {
+				forged.Contents[name] = bytes.Clone(raw)
+			}
+			forged.Contents[".auth-forged"] = []byte("forged")
+			if err = seal(&forged.Snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if VerifyCapture(forged) == nil {
+				t.Fatal("rehashed credential capture admitted")
+			}
+		})
+	}
+}

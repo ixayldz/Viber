@@ -252,3 +252,35 @@ func TestPageCursorRejectsChangedCandidatePolicyQueryAndInvalidArguments(t *test
 		t.Fatal("input barrier bypassed by paging")
 	}
 }
+
+func TestNativeOutlinePagesBindExactSourcePolicyAndCandidate(t *testing.T) {
+	capture, layers, state := capturedPages(t, map[string][]byte{"src/module.ts": []byte("export function first() {}\r\nexport const second = () => 2;\r\nclass Third {}\r\n"), "other.ts": []byte("function hidden() {}")})
+	first := pageResult(t, capture, layers, state, "fs_outline", map[string]any{"path": "src/module.ts", "limit": 1})
+	var page struct {
+		Coverage pageCoverage    `json:"coverage"`
+		Read     c.ReadCondition `json:"read_condition"`
+		Outline  struct {
+			Symbols []struct {
+				Name string `json:"name"`
+			} `json:"symbols"`
+		} `json:"outline"`
+	}
+	if err := json.Unmarshal(first, &page); err != nil || len(page.Outline.Symbols) != 1 || page.Outline.Symbols[0].Name != "first" || !page.Coverage.HasMore || page.Read.Digest != c.HashBytes(capture.Contents["src/module.ts"]) {
+		t.Fatalf("outline first: %s %v", first, err)
+	}
+	cursor := page.Coverage.Next
+	next := pageResult(t, capture, layers, state, "fs_outline", map[string]any{"path": "src/module.ts", "limit": 1, "cursor": cursor})
+	if err := json.Unmarshal(next, &page); err != nil || page.Outline.Symbols[0].Name != "second" {
+		t.Fatalf("outline next %s %v", next, err)
+	}
+	restricted := append([]policy.Policy(nil), layers...)
+	restricted[0].Paths = []string{"other.ts"}
+	raw, _ := json.Marshal(map[string]any{"path": "src/module.ts", "limit": 1})
+	if _, err := nativeReadPage(context.Background(), capture, restricted, state, model.Call{Name: "fs_outline", Arguments: raw}); err == nil {
+		t.Fatal("outline leaked disallowed path")
+	}
+	raw, _ = json.Marshal(map[string]any{"path": "other.ts", "limit": 1, "cursor": cursor})
+	if _, err := nativeReadPage(context.Background(), capture, layers, state, model.Call{Name: "fs_outline", Arguments: raw}); err == nil {
+		t.Fatal("cross-path outline cursor accepted")
+	}
+}

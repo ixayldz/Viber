@@ -11,6 +11,7 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/model"
+	"github.com/ixayldz/Viber/internal/outline"
 	"github.com/ixayldz/Viber/internal/policy"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
@@ -35,6 +36,9 @@ type pageCursor struct {
 func readToolParameters(name string) json.RawMessage {
 	property := "path"
 	maximum := 65536
+	if name == "fs_outline" {
+		maximum = 256
+	}
 	if name == "fs_list" {
 		property = "directory"
 		maximum = 256
@@ -87,7 +91,7 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 		return args, pageCursor{}, c.Fail(c.InvalidArgument, "random byte offset requires a pinned candidate")
 	}
 	defaultLimit, maximum := int64(16384), int64(65536)
-	if call.Name == "fs_list" {
+	if call.Name == "fs_list" || call.Name == "fs_outline" {
 		defaultLimit, maximum = 64, 256
 	}
 	if call.Name == "fs_search" {
@@ -167,6 +171,36 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 	}
 	action := policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, InputBarrier: state.InputBarrier, Effect: "snapshot.read"}
 	switch call.Name {
+	case "fs_outline":
+		action.Path = args.Path
+		if err = policy.Admit(layers, action); err != nil {
+			return nil, err
+		}
+		raw, ok := candidate.Contents[args.Path]
+		if !ok {
+			return nil, c.Fail(c.InvalidArgument, "outline source unavailable or excluded")
+		}
+		extracted, err := outline.Extract(args.Path, raw)
+		if err != nil {
+			return nil, err
+		}
+		total := int64(len(extracted.Symbols))
+		if cursor.Position > total {
+			return nil, c.Fail(c.StaleBase, "outline cursor outside captured extent")
+		}
+		end := min(cursor.Position+args.Limit, total)
+		extent, err := coverage(cursor, end, total)
+		if err != nil {
+			return nil, err
+		}
+		extracted.Symbols = extracted.Symbols[cursor.Position:end]
+		return struct {
+			Outline   outline.Result  `json:"outline"`
+			Candidate string          `json:"candidate"`
+			Trust     string          `json:"trust"`
+			Coverage  pageCoverage    `json:"coverage"`
+			Read      c.ReadCondition `json:"read_condition"`
+		}{extracted, candidate.Snapshot.Digest, "UNTRUSTED_LEXICAL_HINT", extent, c.ReadCondition{Path: args.Path, Kind: "FILE", Digest: c.HashBytes(raw)}}, nil
 	case "fs_read":
 		action.Path = args.Path
 		if err = policy.Admit(layers, action); err != nil {

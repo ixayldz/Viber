@@ -266,6 +266,12 @@ func scratchOptions(p Profile) string {
 	return fmt.Sprintf("rw,exec,nosuid,nodev,size=%d,mode=1777", p.ScratchBytes)
 }
 func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocation) (result Result, resultErr error) {
+	dispatched := false
+	defer func() {
+		if resultErr != nil {
+			resultErr = &DispatchFailure{Cause: resultErr, EffectPossible: dispatched}
+		}
+	}()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
@@ -317,6 +323,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	name := "viber-" + hex.EncodeToString(nonce[:])
 	args := []string{"create", "--pull=never", "--name", name, "--label", "io.viber.runtime=offline-v1", "--user", "65532:65532", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin", "--pids-limit", fmt.Sprint(p.Pids), "--memory", fmt.Sprint(p.MemoryBytes), "--memory-swap", fmt.Sprint(p.MemoryBytes), "--cpus", fmt.Sprint(p.CPUs), "--ipc", "private", "--init", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go-mod", "--env", "GOTOOLCHAIN=local", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--mount", "type=bind,src=" + absolute + ",dst=/workspace,readonly,bind-propagation=rprivate", "--tmpfs", "/tmp:" + scratchOptions(p), "--entrypoint", inv.Argv[0], p.Image}
 	args = append(args, inv.Argv[1:]...)
+	dispatched = true
 	raw, err := d.control(ctx, args...)
 	// A lost create response has an unknown effect: reconcile by our unique name,
 	// never retry create. Cleanup cannot depend on a cancelled invocation context.
@@ -446,3 +453,13 @@ func (b *boundedOutput) Bytes() []byte   { b.mu.Lock(); defer b.mu.Unlock(); ret
 func (b *boundedOutput) Truncated() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.truncated }
 
 var _ io.Writer = (*boundedOutput)(nil)
+
+// DispatchFailure records whether container creation was attempted. A proven
+// preflight refusal can be reported as a tool error without an UNKNOWN effect.
+type DispatchFailure struct {
+	Cause          error
+	EffectPossible bool
+}
+
+func (e *DispatchFailure) Error() string { return e.Cause.Error() }
+func (e *DispatchFailure) Unwrap() error { return e.Cause }

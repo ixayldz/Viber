@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "id": "captured-greeting",
+      "kind": "STATIC",
+      "requirement_ids": [
+        "user-goal"
+      ],
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "test \"$(cat /workspace/hello.txt)\" = hello"
+      ],
+      "runner_digest": "3eda6db113c61235985243ee78796b5975aaa5baa238c359c6ca71c5c343f962",
+      "selection": "explicit captured greeting check",
+      "expected_tests": [],
+      "closure": [
+        {
+          "path": "checks",
+          "recursive": true
+        }
+      ]
+    }
+  ]
+}

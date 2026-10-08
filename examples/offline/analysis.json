@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "turns": [
+    {
+      "tool_calls": [{"id": "read-greeting", "name": "fs_read", "arguments": {"path": "hello.txt", "offset": 0, "limit": 4096}}],
+      "usage_known": true,
+      "input_tokens": 10,
+      "output_tokens": 4
+    },
+    {
+      "text": "Captured hello.txt was read. This fixture report is unreviewed computation evidence.",
+      "usage_known": true,
+      "input_tokens": 12,
+      "output_tokens": 5
+    }
+  ]
+}

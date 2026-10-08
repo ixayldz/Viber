@@ -187,6 +187,8 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	doc.PendingReplies = nil
 	doc.FinalReady = false
 	doc.FinalSummary = ""
+	doc.FinalArtifactDigest = ""
+	doc.RepairAttempts = 0
 	doc.Blocker = ""
 	doc.AllowUnverified = false
 	documentRaw, err := c.CanonicalV1(doc)

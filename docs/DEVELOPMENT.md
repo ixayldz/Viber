@@ -140,7 +140,7 @@ Profil limiti: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Locks, geçici dosyalar
 
 Store root Unix 0700 veya Windows user+SYSTEM private DACL kullanır. Snapshot/archive/model authority kernel tarafındadır. Host readonly chmod gerçek sandbox assurance sayılmaz. `sandbox-run` explicit operator profile/policy/authority ile pinned, önceden kurulu Linux Docker image'ında non-root, network none, read-only root/source, private tmpfs ve kaynak limitleri uygular. Docker socket/credential mount edilmez. Output bounded; timeout/cancel sonrası container ağacı temizlenir. Exit 0 ve stdout PASS güçlü verification receipt değildir. Tam escape/egress/fencing/OS power-loss conformance kapıları açıktır.
 
-OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol fixture testleriyle geliştirilmiştir. Kullanıcı tercihiyle gerçek inference yapılmadı; CLI yalnız `--offline --fixture` açar. Streaming, gerçek endpoint kabulü, keychain ve provider loop bağlantısı tamamlanmadı.
+OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol fixture testleriyle geliştirilmiştir. Kullanıcı tercihiyle gerçek inference yapılmadı; 0.8 CLI fixture, declared local Ollama, ChatGPT SIWC ve OpenAI/Anthropic API runtime açar. Gerçek endpoint kabulü, complete provider streaming/profile matrix ve enterprise credential lifecycle açık kalır.
 
 ## Henüz desteklenmeyenler
 
@@ -209,3 +209,15 @@ Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup co
 
 Script original yedeği değiştirmez; fresh .cache output altında eski restore, migration öncesi/sonrası backup, yeni restore ve historical replay oluşturur. Pending/unknown task veya yanlış task ID aynı güvenli preflight'te reddedilir.
 0.7 native plan/local runtime/token ledger kullanımı [README](../README.md), kapsam ve açık işler [KEYLESS_PROGRESS](KEYLESS_PROGRESS.md), authority/compatibility kararları [ADR 0007](adr/0007-plan-and-local-runtime.md) ve [ADR 0008](adr/0008-global-token-ledger.md) içindedir. Yeni ledger görevleri fresh store ister; legacy task'ların history/resume sözleşmesi korunur.
+
+## 0.8 provider/check/attempt akışları
+
+Kullanıcı komutları [README](../README.md)’de, scoped contracts [ADR 0009](adr/0009-checks-completion-and-plan-auth.md)’da. check-config pinned runtime digest üretir ve plan eşleşmesini validate eder; source closure/env acceptance çalıştırmaz. Model check_run yalnız operator ID seçebilir. Context/report/check-output exact bounded observations’dır.
+
+Fixture/local/API/SIWC task aynı durable core’u kullanır. Runtime metadata secret value içermez. SIWC auth store source/task store dışında; Windows DPAPI, Unix owner-only files. API keys yalnız fixed environment handles ile okunur. allow-remote explicit consent’tir. Auth tests real account acceptance değil; gerçek callback server + mock official remote exchanges kullanır. Model stream deltas native effect dispatch etmez; terminal seal gerekir.
+
+NoDispatchReceipt usage source KERNEL_NO_DISPATCH sadece inference HTTP transport öncesi refusals içindir. Provider raw response bu authority üretmez. UNKNOWN dispatch reservation release edilmez. Typed attempts terminal history/token ledger’ı reset etmez; interruption tests Created/Scoping commit noktalarını yeni owner ile uzlaştırır.
+
+Yeni opsiyonel document fields ve usage source nedeniyle 0.8 task’ı older binary ile downlevel resume desteklenmez; SQLite schema 2 korunur. Trusted discovery/observer ve güçlü verification kapalıdır. Aynı gerçeklik doctor/release docs’ta gösterilmelidir.
+
+API/local `--stream` canonical request/runtime flag’ıdır; chatgpt implicit SSE’dir. Bounded raw SSE/NDJSON receipt terminal boundary’den önce tools vermez. Anthropic content/argument/thinking signature/cumulative usage, OpenAI terminal output ve Ollama chunks shared validator’a girer. Partial/duplicate/model mismatch/hosted tool/fallback fail-closed; native loop, token reserve, cancellation, backup/fresh restore tests bu sınırı kapsar. Unknown/new stream block/delta types destek profili genişletilmeden reddedilir. UI live delta/reconnect acceptance ayrı ve açıktır. Git CI’nin opt-in Docker turu artık agent check integration testini de çalıştırır.
