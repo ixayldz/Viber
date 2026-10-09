@@ -122,10 +122,10 @@ func TestReviewedObserverGuardedFinalAndFreshRestore(t *testing.T) {
 	if strings.Contains(request.Instructions, "expected_stdout") || strings.Contains(request.Instructions, "observer_suites") {
 		t.Fatal("oracle entered model request")
 	}
-	if _, err = s.readCheckOutput(doc, checkOutputQuery{RunID: "observed-run", Stream: "stdout", Offset: 0, Limit: 16}, false); err == nil {
+	if _, err = s.readCheckOutput(context.Background(), doc, checkOutputQuery{RunID: "observed-run", Stream: "stdout", Offset: 0, Limit: 16}, false); err == nil {
 		t.Fatal("subject echoed oracle bytes into model tool")
 	}
-	if _, err = s.readCheckOutput(doc, checkOutputQuery{RunID: "observed-run", Stream: "stdout", Offset: 0, Limit: 16, CaseID: "bytes", Repeat: 2, Scope: "baseline"}, true); err != nil {
+	if _, err = s.readCheckOutput(context.Background(), doc, checkOutputQuery{RunID: "observed-run", Stream: "stdout", Offset: 0, Limit: 16, CaseID: "bytes", Repeat: 2, Scope: "baseline"}, true); err != nil {
 		t.Fatal("local operator cannot inspect exact retained repeat", err)
 	}
 	events, err := s.Journal.History(context.Background(), options.TaskID, 0, 128)

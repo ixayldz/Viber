@@ -53,7 +53,7 @@ type CheckSummary struct {
 func checkTools() []model.Tool {
 	return []model.Tool{
 		{Name: "check_run", Description: "Run one registered operator check ID in its pinned offline readonly Docker environment. No host fallback. Exit zero is computation evidence only; discovery and goal verification remain UNKNOWN.", Parameters: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"],"additionalProperties":false}`)},
-		{Name: "check_output", Description: "Read an exact-byte page of ordinary untrusted check output. Independent observer output is local operator only because it can echo protected fixture data. Missing pages are not proof of absence.", Parameters: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"},"stream":{"type":"string","enum":["stdout","stderr"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["run_id","stream","offset","limit"],"additionalProperties":false}`)},
+		{Name: "check_output", Description: "Read an exact-byte page of ordinary untrusted check output. Independent observer output is local operator only because it can echo protected fixture data. Optional intent selects source-bound error/build/test/diagnostic spans within limit at offset zero. Missing pages are not proof of absence.", Parameters: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"},"stream":{"type":"string","enum":["stdout","stderr"]},"intent":{"type":"string","enum":["BUILD","TEST","ERROR","DIAGNOSTIC"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["run_id","stream","offset","limit"],"additionalProperties":false}`)},
 	}
 }
 func validateCheckRuntime(doc Document) error {
@@ -186,7 +186,7 @@ func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Docu
 		if err := c.DecodeStrict(call.Arguments, &args); err != nil {
 			return nil, err
 		}
-		return s.readCheckOutput(*doc, args, false)
+		return s.readCheckOutput(ctx, *doc, args, false)
 	}
 	var args struct {
 		CheckID string `json:"check_id"`

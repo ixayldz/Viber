@@ -20,6 +20,8 @@ if failed or not passed or packages != finished or started != passed | skipped:
 required = set()
 if args.docker:
     required |= {
+		"TestActualDockerHostileProcessMatrix",
+		"TestActualDockerPersistentFenceInventoryAndReopen",
         "TestDockerOfflineReadOnlyQuiescenceAndTimeout",
         "TestActualDockerNativeOrphanFencingPreventsLateCreateAndStart",
         "TestActualDockerAgentCheckRetainsEvidenceWithoutFalseVerification",

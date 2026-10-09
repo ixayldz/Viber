@@ -13,6 +13,7 @@ import (
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/outline"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/retrieval"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
@@ -20,6 +21,8 @@ type pageArgs struct {
 	Path      string `json:"path,omitempty"`
 	Directory string `json:"directory,omitempty"`
 	Query     string `json:"query,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Intent    string `json:"intent,omitempty"`
 	Offset    int64  `json:"offset,omitempty"`
 	Limit     int64  `json:"limit,omitempty"`
 	Cursor    string `json:"cursor,omitempty"`
@@ -52,6 +55,10 @@ func readToolParameters(name string) json.RawMessage {
 		offsetSchema["offset"] = map[string]any{"type": "integer", "minimum": 0}
 	}
 	properties := map[string]any{property: map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maximum}, "cursor": map[string]any{"type": "string"}, "candidate_digest": map[string]any{"type": "string"}}
+	if name == "fs_search" {
+		properties["mode"] = map[string]any{"type": "string", "enum": []string{"literal", "ranked"}}
+		properties["intent"] = map[string]any{"type": "string", "enum": []string{"IDENTIFIER", "ERROR", "FEATURE", "REFACTOR"}}
+	}
 	for key, value := range offsetSchema {
 		properties[key] = value
 	}
@@ -77,7 +84,7 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 		primary = "query"
 	}
 	for key := range keys {
-		if key != primary && key != "limit" && key != "cursor" && key != "candidate_digest" && !(key == "offset" && call.Name == "fs_read") {
+		if key != primary && key != "limit" && key != "cursor" && key != "candidate_digest" && !(key == "offset" && call.Name == "fs_read") && !((key == "mode" || key == "intent") && call.Name == "fs_search") {
 			return args, pageCursor{}, c.Fail(c.InvalidArgument, "argument belongs to a different read tool")
 		}
 	}
@@ -116,6 +123,26 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 	}{call.Name, args.Path, args.Directory, args.Query, policyDigest, args.Limit})
 	if err != nil {
 		return args, pageCursor{}, err
+	}
+	if call.Name == "fs_search" {
+		if args.Mode == "" {
+			args.Mode = "literal"
+		}
+		if args.Mode != "literal" && args.Mode != "ranked" || args.Mode == "literal" && args.Intent != "" {
+			return args, pageCursor{}, c.Fail(c.InvalidArgument, "valid retrieval mode and matching intent required")
+		}
+		if args.Mode == "ranked" {
+			if args.Intent == "" {
+				args.Intent = "IDENTIFIER"
+			}
+			if !retrieval.ValidIntent(args.Intent) {
+				return args, pageCursor{}, c.Fail(c.InvalidArgument, "invalid retrieval intent")
+			}
+			scope, err = c.Digest(struct{ Base, Mode, Intent, Version string }{scope, args.Mode, args.Intent, retrieval.Version})
+			if err != nil {
+				return args, pageCursor{}, err
+			}
+		}
 	}
 	cursor := pageCursor{SchemaVersion: 1, Kind: call.Name, Candidate: candidate.Snapshot.Digest, Scope: scope, Position: args.Offset}
 	if args.Cursor == "" {
@@ -311,6 +338,9 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 			Read          c.ReadCondition `json:"read_condition"`
 		}{1, "UNTRUSTED_SOURCE", candidate.Snapshot.Digest, "CAPTURED_POLICY_SCOPE_WITH_EXPLICIT_EXCLUSIONS", items[cursor.Position:end], extent, c.ReadCondition{Path: args.Directory, Kind: "LISTING", Digest: digest}}, nil
 	case "fs_search":
+		if args.Mode == "ranked" {
+			return rankedReadPage(ctx, candidate, layers, action, args, cursor)
+		}
 		if args.Query == "" || len(args.Query) > 256 || !utf8.ValidString(args.Query) {
 			return nil, c.Fail(c.InvalidArgument, "bounded UTF-8 literal query required")
 		}
@@ -396,6 +426,13 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 		if err != nil {
 			return nil, err
 		}
+		excluded := 0
+		for _, path := range candidate.Snapshot.Exclusions {
+			action.Path = path
+			if policy.Admit(layers, action) == nil {
+				excluded++
+			}
+		}
 		return struct {
 			SchemaVersion     int          `json:"schema_version"`
 			Trust             string       `json:"trust"`
@@ -405,7 +442,7 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 			Coverage          pageCoverage `json:"coverage"`
 			ScanComplete      bool         `json:"captured_scan_complete"`
 			ExcludedLocations int          `json:"excluded_locations"`
-		}{1, "UNTRUSTED_SOURCE", candidate.Snapshot.Digest, "CAPTURED_POLICY_SCOPE", matches, extent, true, len(candidate.Snapshot.Exclusions)}, nil
+		}{1, "UNTRUSTED_SOURCE", candidate.Snapshot.Digest, "CAPTURED_POLICY_SCOPE", matches, extent, true, excluded}, nil
 	default:
 		return nil, c.Fail(c.UnsupportedCapability, "unknown paged read tool")
 	}

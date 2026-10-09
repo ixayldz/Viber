@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	packing "github.com/ixayldz/Viber/internal/context"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/runner"
 )
@@ -13,9 +15,10 @@ type checkOutputQuery struct {
 	CaseID string `json:"case_id,omitempty"`
 	Repeat int    `json:"repeat,omitempty"`
 	Scope  string `json:"scope,omitempty"`
+	Intent string `json:"intent,omitempty"`
 }
 
-func (s *Session) readCheckOutput(doc Document, args checkOutputQuery, operator bool) (any, error) {
+func (s *Session) readCheckOutput(ctx context.Context, doc Document, args checkOutputQuery, operator bool) (any, error) {
 	if args.Offset < 0 || args.Limit < 1 || args.Limit > 16384 || args.Stream != "stdout" && args.Stream != "stderr" || args.Repeat < 0 || args.Repeat > 4 || args.Scope != "" && args.Scope != "candidate" && args.Scope != "baseline" {
 		return nil, c.Fail(c.InvalidArgument, "invalid check output byte page")
 	}
@@ -59,6 +62,26 @@ func (s *Session) readCheckOutput(doc Document, args checkOutputQuery, operator 
 			}
 		} else if args.CaseID != "" || args.Repeat != 0 || args.Scope != "" {
 			return nil, c.Fail(c.InvalidArgument, "case/repeat/scope require independent observer")
+		}
+		if args.Intent != "" {
+			if args.Offset != 0 {
+				return nil, c.Fail(c.InvalidArgument, "intent selection requires offset zero; exact pages remain available")
+			}
+			data := result.Stdout
+			if args.Stream == "stderr" {
+				data = result.Stderr
+			}
+			selection, err := packing.SelectLog(ctx, data, args.Intent, int(args.Limit), result.OutputTruncated)
+			if err != nil {
+				return nil, err
+			}
+			return struct {
+				RunID         string               `json:"run_id"`
+				Stream        string               `json:"stream"`
+				ReceiptDigest string               `json:"receipt_digest"`
+				Candidate     string               `json:"candidate"`
+				Selection     packing.LogSelection `json:"selection"`
+			}{args.RunID, args.Stream, ref.Digest, result.CandidateDigest, selection}, nil
 		}
 		return outputPage(args, result)
 	}

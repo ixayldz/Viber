@@ -109,7 +109,7 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 		}
 		return s.CheckSummaries(doc, state)
 	case "check-output":
-		return s.readCheckOutput(doc, checkOutputQuery{RunID: args.RunID, Stream: args.Stream, Offset: args.Offset, Limit: args.Limit, CaseID: args.CaseID, Repeat: args.Repeat, Scope: args.CheckScope}, true)
+		return s.readCheckOutput(ctx, doc, checkOutputQuery{RunID: args.RunID, Stream: args.Stream, Offset: args.Offset, Limit: args.Limit, CaseID: args.CaseID, Repeat: args.Repeat, Scope: args.CheckScope}, true)
 	case "report":
 		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
 			return nil, c.Fail(c.InvalidArgument, "report accepts no page arguments")

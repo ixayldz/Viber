@@ -73,12 +73,18 @@ type Result struct {
 type Docker struct {
 	binary      string
 	config      string
+	endpoint    string
+	engineID    string
 	mu          sync.Mutex
 	closed      bool
 	controlHook func(context.Context, ...string) ([]byte, error)
 }
 
 func OpenDocker() (result *Docker, err error) {
+	endpoint, err := localEndpoint(os.Getenv("VIBER_DOCKER_HOST"))
+	if err != nil {
+		return nil, err
+	}
 	binary, err := exec.LookPath("docker")
 	if err != nil {
 		return nil, c.Fail(c.UnsupportedCapability, "Docker broker unavailable")
@@ -91,7 +97,7 @@ func OpenDocker() (result *Docker, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Docker{binary: binary, config: config}, nil
+	return &Docker{binary: binary, config: config, endpoint: endpoint}, nil
 }
 func (d *Docker) Close() error {
 	d.mu.Lock()
@@ -104,7 +110,11 @@ func (d *Docker) Close() error {
 	return os.Remove(d.config)
 }
 func (d *Docker) command(ctx context.Context, args ...string) *exec.Cmd {
-	command := exec.CommandContext(ctx, d.binary, append([]string{"--config", d.config}, args...)...)
+	prefix := []string{"--config", d.config}
+	if d.endpoint != "" {
+		prefix = append(prefix, "--host", d.endpoint)
+	}
+	command := exec.CommandContext(ctx, d.binary, append(prefix, args...)...)
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "SystemRoot=" + os.Getenv("SystemRoot"), "HOME=" + d.config, "USERPROFILE=" + d.config, "DOCKER_CLI_HINTS=false"}
 	command.WaitDelay = 2 * time.Second
 	return command
@@ -135,32 +145,7 @@ func (d *Docker) Check(ctx context.Context) error {
 	}
 	return d.check(ctx)
 }
-func (d *Docker) check(ctx context.Context) error {
-	raw, err := d.control(ctx, "info", "--format", "{{json .}}")
-	if err != nil {
-		return err
-	}
-	var info struct {
-		OSType          string
-		SecurityOptions []string
-	}
-	if err = json.Unmarshal(raw, &info); err != nil {
-		return c.Fail(c.UnsupportedCapability, "unreadable Docker capability response")
-	}
-	if info.OSType != "linux" {
-		return c.Fail(c.UnsupportedCapability, "Linux container engine required")
-	}
-	seccomp := false
-	for _, option := range info.SecurityOptions {
-		if strings.Contains(option, "name=seccomp") && strings.Contains(option, "profile=builtin") {
-			seccomp = true
-		}
-	}
-	if !seccomp {
-		return c.Fail(c.UnsupportedCapability, "tested built-in seccomp unavailable")
-	}
-	return nil
-}
+func (d *Docker) check(ctx context.Context) error { _, err := d.backend(ctx); return err }
 
 type inspectedMount struct {
 	Destination string
@@ -348,6 +333,11 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if capsule != nil {
 		labels, err = capsule.labels()
 		if err != nil {
+			return result, err
+		}
+	}
+	if owner != nil {
+		if err = d.admitCapacity(ctx, *owner); err != nil {
 			return result, err
 		}
 	}

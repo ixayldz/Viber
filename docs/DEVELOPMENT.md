@@ -16,6 +16,8 @@ Windows binary adı `bin/viber.exe`. Bu checkout'ta portable toolchain `.tools/g
 
 ## Çalışan fixture örneği
 
+Source-bound ranked fs_search ve intent-aware check_output parametreleri ile sentetik benchmark komutları [Context retrieval](CONTEXT_RETRIEVAL.md) belgesindedir. Tam native/race/fuzz/migration/Docker CI, tek foundation kapısında birleşir. Rootless/restart opt-in engine betiği kullanıcı onayı olmadan çalıştırılmaz.
+
 ```sh
 viber run "Update hello.txt to the fixture greeting" --offline --fixture examples/offline/greeting.json --root examples/offline/source --store ../viber-demo-store --task greeting --allow-unverified --json
 viber status greeting --store ../viber-demo-store --json

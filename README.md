@@ -11,6 +11,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 - Anahtar gerektirmeyen deterministik fixture ile görev açabilir, dosya okuyabilir, candidate değişikliği ve diff üretebilirsiniz.
 - ChatGPT hesabıyla giriş yapabilir, hesap seçebilir ve izinli abonelik modeliyle görev başlatabilirsiniz.
 - Kayıtlı check çalıştırabilir; exact çıktı, context ve analysis raporunu inceleyebilirsiniz.
+- Source-bound FTS5/BM25/trigram ranked aramayı ve BUILD/TEST/ERROR/DIAGNOSTIC log seçimini native araçlarla kullanabilirsiniz. [Kullanım, sınırlar ve benchmark](docs/CONTEXT_RETRIEVAL.md).
 - Dondurulmuş terminal adayı ayrı private owner ile gizli STDIO testine alabilir; kernel beyanı ve bağımsız sonucu ayrı görebilirsiniz. [Değerlendirme kullanımı](docs/EVALUATION.md).
 - Önceden tanımlı JSONL ölçümlerini çözüm/kontrol kohortları, tekrarlar, eksik maliyetler ve eşleştirilmiş repo aralıklarıyla raporlayabilirsiniz.
 - Terminal görevden intent ve toplam token hesabını koruyan yeni deneme oluşturabilirsiniz.
@@ -35,7 +36,7 @@ TUI, background owner, detach/attach, durable queue, compaction, kaynak hesaplar
 | İzole process geliştirme testi | Önceden indirilmiş, digest ile sabitlenmiş Linux Docker image'ı ve Linux engine |
 | Store | Kaynak kökün dışında, yerel ve kullanıcı erişimiyle korunan dizin |
 
-Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. macOS/arm64 için çapraz derleme vardır; native macOS kabulü bu çalışma kapsamında gözlenmemiştir. Windows CLI çalışması, Windows'ta native untrusted process sandbox'ının üretime hazır olduğu anlamına gelmez. Docker broker da sınırlı bir geliştirme profilidir.
+Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir; rootless ve gerçek engine restart ölçümleri kullanıcı kararıyla beklemektedir. [Çalışma planı ve ölçümler](docs/FOUNDATION_AND_RETRIEVAL_PLAN.md).
 
 ## Kurulum
 

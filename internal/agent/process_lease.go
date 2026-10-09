@@ -270,6 +270,18 @@ func (s *Session) leasedRunner(doc Document, broker *runner.Docker, phase string
 	if lease.InstanceID != s.instance.ID || lease.ClockDomain != s.clockDomain || lease.Generation != s.Journal.Generation() {
 		return nil, c.Fail(c.StaleAuthority, "native clock domain or owner generation changed")
 	}
+	pinCtx, pinCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer pinCancel()
+	if err := s.bindEngine(pinCtx, broker, lease, true); err != nil {
+		return nil, err
+	}
+	capacity, err := broker.Capacity(pinCtx, lease.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	if capacity.Available < len(doc.Pending.NativeSubjects) {
+		return nil, &runner.DispatchFailure{Cause: c.Fail(c.BudgetLimitReached, "insufficient persistent name capacity for the complete registered subject group"), EffectPossible: false}
+	}
 	expires := s.clockOrigin.Add(time.Duration(lease.DeadlineMillis) * time.Millisecond)
 	return &leasedSubjectRunner{broker: broker, session: s, pending: *doc.Pending, phase: phase, expires: expires}, nil
 }

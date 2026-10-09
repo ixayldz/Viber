@@ -40,17 +40,18 @@ type NativeRiskReceipt struct {
 	AcceptedOutput   bool                  `json:"accepted_output"`
 }
 type NativeRiskView struct {
-	SchemaVersion   int                `json:"schema_version"`
-	TaskID          string             `json:"task_id"`
-	TaskSeq         int64              `json:"task_seq"`
-	Generation      int64              `json:"current_owner_generation"`
-	Lease           *runner.Lease      `json:"pending_lease,omitempty"`
-	SubjectCount    int                `json:"subject_count"`
-	InstanceMatches bool               `json:"physical_instance_matches"`
-	CanFence        bool               `json:"can_fence"`
-	Reason          string             `json:"reason"`
-	Command         *NativeRiskCommand `json:"command_template,omitempty"`
-	CleanupReceipts []string           `json:"cleanup_receipts"`
+	SchemaVersion   int                  `json:"schema_version"`
+	EngineBinding   *NativeEngineBinding `json:"engine_binding,omitempty"`
+	TaskID          string               `json:"task_id"`
+	TaskSeq         int64                `json:"task_seq"`
+	Generation      int64                `json:"current_owner_generation"`
+	Lease           *runner.Lease        `json:"pending_lease,omitempty"`
+	SubjectCount    int                  `json:"subject_count"`
+	InstanceMatches bool                 `json:"physical_instance_matches"`
+	CanFence        bool                 `json:"can_fence"`
+	Reason          string               `json:"reason"`
+	Command         *NativeRiskCommand   `json:"command_template,omitempty"`
+	CleanupReceipts []string             `json:"cleanup_receipts"`
 }
 
 func (s *Session) NativeRiskInfo(ctx context.Context, task string) (NativeRiskView, error) {
@@ -59,6 +60,11 @@ func (s *Session) NativeRiskInfo(ctx context.Context, task string) (NativeRiskVi
 		return NativeRiskView{}, err
 	}
 	view := NativeRiskView{SchemaVersion: 1, TaskID: task, TaskSeq: state.TaskSeq, Generation: s.Journal.Generation(), CleanupReceipts: append([]string{}, doc.NativeCleanupAttempts...), Reason: "NO_OWNED_UNKNOWN_NATIVE_INTENT"}
+	binding, err := s.engineBinding()
+	if err != nil {
+		return view, err
+	}
+	view.EngineBinding = binding
 	if doc.Pending == nil || doc.Pending.NativeLease == nil {
 		return view, nil
 	}
@@ -69,6 +75,10 @@ func (s *Session) NativeRiskInfo(ctx context.Context, task string) (NativeRiskVi
 	r := unresolvedResource(state)
 	view.CanFence = view.InstanceMatches && view.Generation > lease.Generation && doc.UnknownEffect && doc.Pending.Status == "UNKNOWN" && r != nil && r.Kind == "NATIVE_TOOL" && r.Status == "UNKNOWN" && nativeRiskState(state)
 	view.Reason = "OLD_GENERATION_AND_PHYSICAL_INSTANCE_REQUIRED"
+	if binding == nil {
+		view.CanFence = false
+		view.Reason = "ENGINE_PIN_MISSING_OUTCOME_UNKNOWN"
+	}
 	if view.CanFence {
 		view.Reason = "EXPLICIT_BOUND_FENCE_AND_FULL_CHARGE_REQUIRED"
 		view.Command = &NativeRiskCommand{CommandID: "", TaskID: task, ExpectedTaskSeq: state.TaskSeq, LeaseID: lease.ID, ReservationID: r.ID, RequestDigest: r.RequestDigest, ProfileDigest: r.ProfileDigest, Decision: nativeRiskDecision}
@@ -87,8 +97,17 @@ func (s *Session) ReconcileNativeRisk(ctx context.Context, command NativeRiskCom
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reconcileNativeRisk(ctx, command, func() (processReconciler, func() error, error) {
+		_, retained, err := s.Load(ctx, command.TaskID)
+		if err != nil || retained.Pending == nil || retained.Pending.NativeLease == nil {
+			return nil, nil, c.Fail(c.StaleAuthority, "native cleanup lease unavailable")
+		}
+		leaseForCleanup := *retained.Pending.NativeLease
 		broker, err := runner.OpenDocker()
 		if err != nil {
+			return nil, nil, err
+		}
+		if err = s.bindEngine(ctx, broker, leaseForCleanup, false); err != nil {
+			broker.Close()
 			return nil, nil, err
 		}
 		return broker, broker.Close, nil

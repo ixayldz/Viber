@@ -92,10 +92,22 @@ func (e *leaseEngine) control(ctx context.Context, args ...string) ([]byte, erro
 	}
 	switch args[0] {
 	case "info":
-		return []byte(`{"OSType":"linux","SecurityOptions":["name=seccomp,profile=builtin"]}`), nil
+		return []byte(`{"ID":"fixture-engine","OSType":"linux","MemoryLimit":true,"SwapLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"PidsLimit":true,"SecurityOptions":["name=seccomp,profile=builtin"]}`), nil
 	case "ps":
 		ids := []string{}
-		for id := range e.entries {
+		for id, entry := range e.entries {
+			matches := true
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "label=") {
+					pair := strings.SplitN(strings.TrimPrefix(arg, "label="), "=", 2)
+					if len(pair) != 2 || entry.Config.Labels[pair[0]] != pair[1] {
+						matches = false
+					}
+				}
+			}
+			if !matches {
+				continue
+			}
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
