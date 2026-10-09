@@ -47,7 +47,7 @@ func runSandbox(args []string, out, errout io.Writer) int {
 	if err := policy.Admit(layers, policy.Action{Epoch: authority.PolicyEpoch, Generation: authority.KernelGeneration, InputBarrier: authority.InputBarrier, Effect: "process.run"}); err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	archive, err := artifact.Open(*directory)
+	archive, err := openStandaloneArchive(*directory)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

@@ -259,7 +259,7 @@ $restored = Join-Path $demoBase 'restored'
 
 Backup SQLite snapshot + gerekli blob closure + digest/size manifest'i içerir. Restore **yeni dizine** yapılır; mevcut store'u overwrite etmez ve task effect'lerini çalıştırmaz. Yalnız sqlite dosyasını kopyalamak yeterli yedek değildir.
 
-Mevcut backup sınırları: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Yedek/restore aynı makinede aynı source kimliği için tasarlanmıştır; farklı makineye otomatik path rebinding yoktur. Backup imzalı değildir. Retention/delete henüz yoktur: deletion watermark 0 ve `UNSUPPORTED_NO_DELETIONS` gerçek sınırlamayı gösterir.
+Mevcut backup sınırları: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Current backup schema 2 bağımsız private silme authority'sini ve mevcut watermark'ı gerektirir. Eski watermark, eksik authority ve kayıt dışı kopya restore edilemez. Eski schema 1 backup manifest'i normal restore akışına kabul edilmez; migration mevcut legacy store üzerinde bound recovery doğrulaması yapar. Farklı makine/path rebinding ve imzalı backup kapsamı yoktur. [Görev içeriği silme kılavuzu](docs/PRIVACY_DELETION.md) kapsamı ve retry akışını açıklar; otomatik retention ayrı geliştirmedir.
 
 ## Eski store'u yükseltme
 
@@ -273,7 +273,7 @@ Yeni store format 2 kullanır. Format 1 kendiliğinden yükseltilmez. Eski store
 
 `OLD_STORE`/`NEW_BACKUP_PATH` gerçek yollarla değiştirilmelidir. Migration öncesi backup **fresh restore ile doğrulanır**. Yarım migration read-only recovery bırakır; receipt/backup bağını koruyarak aynı command ID ve aynı backup yolu ile uzlaştırılır. Unsupported downgrade mevcut store'u değiştirmez. Dizin/marker silerek veya yeni ID ile bu korumaları atlamayın.
 
-[ADR 0006](docs/adr/0006-store-migration.md) kapsamı ve [migration demo script'i](scripts/migration-demo.ps1) tam native örneği açıklar.
+[ADR 0006](docs/adr/0006-store-migration.md) tarihsel kapsamı kaydeder. [Migration demo script'i](scripts/migration-demo.ps1) mevcut legacy store'u açık `-AllowInPlaceMigration` seçimiyle yükseltir; eski backup'ı aktif bir store'a restore etmez.
 
 ## Anahtarsız yerel model: Ollama (0.7)
 

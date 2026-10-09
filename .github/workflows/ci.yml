@@ -38,7 +38,7 @@ jobs:
           mkdir -p evidence
           set -o pipefail
           go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
-          python scripts/verify-test-results.py evidence/tests.jsonl
+          python scripts/verify-test-results.py evidence/tests.jsonl --privacy
       - name: Migration regression
         run: |
           set -o pipefail
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -o pipefail
           go test -race -p 1 -json -count=1 -timeout 15m ./... | tee evidence/race.jsonl
-          python scripts/verify-test-results.py evidence/race.jsonl
+          python scripts/verify-test-results.py evidence/race.jsonl --privacy
       - name: All fuzz targets
         if: runner.os == 'Linux'
         run: bash scripts/fuzz.sh evidence

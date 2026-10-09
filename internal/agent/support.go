@@ -9,6 +9,7 @@ import (
 )
 
 type SupportTask struct {
+	ContentDeletion     string           `json:"content_deletion,omitempty"`
 	Ordinal             int              `json:"ordinal"`
 	Execution           c.ExecutionState `json:"execution_state"`
 	Outcome             c.Outcome        `json:"outcome"`
@@ -71,6 +72,10 @@ func (s *Session) Support(ctx context.Context) (SupportReport, error) {
 		return report, c.Fail(c.BudgetLimitReached, "support task count exceeds bounded profile")
 	}
 	for i, id := range ids {
+		if state := states[id]; state.Deletion != nil {
+			report.Tasks = append(report.Tasks, SupportTask{Ordinal: i + 1, Execution: state.Execution, Outcome: state.Outcome, Quality: state.Quality, Fulfillment: state.Fulfillment, TaskSeq: state.TaskSeq, RequiredObligations: state.OpenRequiredObligations, ContentDeletion: state.Deletion.Status, Provider: "REDACTED"})
+			continue
+		}
 		state, doc, err := s.Load(ctx, id)
 		if err != nil {
 			return report, err
@@ -149,6 +154,19 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 		return report, err
 	}
 	defer root.Close()
+	states, err := s.Journal.Replay(ctx, "")
+	if err != nil {
+		return report, err
+	}
+	tasks := []string{}
+	for task, state := range states {
+		if state.Deletion == nil {
+			tasks = append(tasks, task)
+		}
+	}
+	if err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks); err != nil {
+		return report, err
+	}
 	if err = fileguard.Publish(root, "support.json", raw); err != nil {
 		return report, err
 	}

@@ -16,11 +16,11 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 18 | Privacy fallback | Restriction intersection, no remote fixture loop, redirect/proxy deny; full lineage eksik | PARTIAL |
 | 19 | Plugin isolation | Plugin runtime yok | NOT_IMPLEMENTED |
 | 20–21 | Corruption/two owners | Journal/projection/historical checkpoint/dedup receipt hash/replay + explicit restore-tested v1→v2 migration + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
-| 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; workspace restore/stream reconnect/delete yok | PARTIAL |
+| 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; task-content delete var; workspace restore/stream reconnect açık | PARTIAL |
 | 25–28 | Guards/origin/integrity/delivery | Pure predicate + frozen artifact + scoped limited delivery; durable typed origin, tree/absence check weakening guard, revision/recovery/backup closure; full interval protected verifier eksik | PARTIAL |
 | 29 | Clock/lease | Monotonic clock domain, deadline, physical store/engine binding ve actual stale-name/container fencing var; rootless/gerçek restart ölçümü kullanıcı kararıyla bekliyor | PARTIAL |
 | 30–32 | Owner/children/pause/dedup | Lock/generation, Docker cleanup, native pause/cancel; bound one-shot approval ve active command dedup; Ctrl+C pause; tam supervisor/children fencing eksik | PARTIAL |
-| 33–34 | Reserve/delete/backup | Global model/native reserve/settle, UNKNOWN tutulması, physical control reserve, orphan GC, CAS+SQLite backup, migration/read-only recovery/lineage restore var; privacy tombstone/managed purge ve tam upgrade/power-loss matrisi açık | PARTIAL |
+| 33–34 | Reserve/delete/backup | Global model/native reserve/settle, UNKNOWN tutulması, physical control reserve, orphan GC, CAS+SQLite backup, migration/read-only recovery/lineage restore; durable task tombstone/external watermark/ordinary managed-copy purge var; TTL/metadata/content-wide/eval lineage ve tam upgrade/power-loss matrisi açık | PARTIAL |
 | 35–36 | Sequence/replay/intent | Current/historical replay, task/global cursor ayrımı, raw input closure, event paging | PARTIAL |
 | 37 | Independent evaluator | Ayrı owner hidden oracle candidate eval, bütün attempt paydası/UNKNOWN maliyeti ve paired report var; gerçek dataset/preregistration/pilot ve hardware p95 kabulü açık | PARTIAL |
 | 38 | Host Git/OSC/secret output | Capture Git executable çalıştırmaz; OSC escaped; provider error secret redaction | PARTIAL |

@@ -303,6 +303,26 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.AttachPage(ctx, request.TaskID, query)
+	case "delete", "delete-preview":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "privacy deletion requires a quiescent owner")
+		}
+		if request.Command == "delete-preview" {
+			if err := nullPayload(request.Payload); err != nil {
+				return nil, err
+			}
+			return o.Session.DeletionPreview(ctx, request.TaskID)
+		}
+		var command agent.DeletionCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.CommandID != request.ID || command.Plan.TaskID != request.TaskID {
+			return nil, c.Fail(c.InvalidArgument, "deletion envelope binding mismatch")
+		}
+		return o.Session.DeleteContent(ctx, command)
 	case "store-gc", "store-gc-preview":
 		o.mu.Lock()
 		defer o.mu.Unlock()

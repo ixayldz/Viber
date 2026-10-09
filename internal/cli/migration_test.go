@@ -76,7 +76,17 @@ func TestCLIMigrationAndRestoreOfOldAndNewFormats(t *testing.T) {
 		}
 		restored := filepath.Join(t.TempDir(), "restored")
 		out.Reset()
-		if exit := Execute([]string{"store-restore", "--backup", path, "--store", restored, "--json"}, &out, &stderr); exit != 0 {
+		exit := Execute([]string{"store-restore", "--backup", path, "--store", restored, "--json"}, &out, &stderr)
+		if format == "before" {
+			if exit != 4 || !bytes.Contains(out.Bytes(), []byte("UNSUPPORTED_CAPABILITY")) {
+				t.Fatal("legacy restore trusted without authority", exit, out.String())
+			}
+			if _, err := os.Stat(restored); !os.IsNotExist(err) {
+				t.Fatal("legacy restore published", err)
+			}
+			continue
+		}
+		if exit != 0 {
 			t.Fatal(exit, out.String())
 		}
 		session, err := agent.OpenExisting(context.Background(), restored)

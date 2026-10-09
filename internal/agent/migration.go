@@ -35,7 +35,7 @@ func validateMigrationBackup(ctx context.Context, backup string, expected Backup
 	if err != nil {
 		return err
 	}
-	restored, err := RestoreBackup(ctx, backup, filepath.Join(directory, "validated-store"))
+	restored, err := restoreBackup(ctx, backup, filepath.Join(directory, "validated-store"), true)
 	if err != nil {
 		return err
 	}

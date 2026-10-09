@@ -149,6 +149,7 @@ type PromptRef struct {
 	Bytes  int64  `json:"bytes"`
 }
 type TaskState struct {
+	Deletion                *TaskDeletion    `json:"content_deletion,omitempty"`
 	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
 	Resources               *ResourceAccount `json:"resource_account,omitempty"`
 	Tokens                  *TokenAccount    `json:"token_account,omitempty"`
@@ -185,6 +186,7 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
+	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
 	Verification        *VerificationFinalization `json:"verification,omitempty"`
 	QueueID             string                    `json:"queue_id,omitempty"`
 	Resources           *ResourceMutation         `json:"resource_mutation,omitempty"`

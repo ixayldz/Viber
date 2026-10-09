@@ -111,6 +111,9 @@ type Document struct {
 	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
+	publicationMu  sync.RWMutex
+	privacy        *PrivacyAuthority
+	privacyOwner   *privacyOwner
 	retrievalCache *retrieval.Cache
 	instance       RuntimeInstance
 	clockOrigin    time.Time
@@ -163,12 +166,24 @@ func Open(ctx context.Context, directory string) (*Session, error) {
 		journal.Close()
 		return nil, err
 	}
+	if err = session.attachPrivacy(ctx); err != nil {
+		session.Close()
+		return nil, err
+	}
+	info, err := journal.SnapshotInfo(ctx)
+	if err == nil && info.SchemaVersion == 2 {
+		err = session.ensurePrivacy(ctx)
+	}
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
 	return session, nil
 }
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close())
+	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close(), s.privacyOwner.Close())
 }
 func newID(prefix string) string {
 	var nonce [16]byte
@@ -182,7 +197,13 @@ func (s *Session) State(ctx context.Context, task string) (c.TaskState, error) {
 	if err != nil {
 		return c.TaskState{}, err
 	}
-	return states[task], nil
+	state := states[task]
+	if state.Deletion == nil {
+		if err := s.contentAvailable(task); err != nil {
+			return state, err
+		}
+	}
+	return state, nil
 }
 func (s *Session) Load(ctx context.Context, task string) (c.TaskState, Document, error) {
 	state, err := s.State(ctx, task)
@@ -200,6 +221,16 @@ func (s *Session) Inspect(ctx context.Context, task string, sequence int64) (c.T
 }
 func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error) {
 	task := state.TaskID
+	if err := s.contentAvailable(task); err != nil {
+		return state, Document{}, err
+	}
+	current, err := s.State(context.Background(), task)
+	if err != nil {
+		return state, Document{}, err
+	}
+	if state.Deletion != nil || current.Deletion != nil {
+		return state, Document{}, c.Fail(c.PolicyDenied, "deleted task has no readable current or historical content")
+	}
 	raw, err := s.Archive.GetBytes(task, state.DocumentDigest)
 	if err != nil {
 		return state, Document{}, err
@@ -368,11 +399,24 @@ type StartOptions struct {
 func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createLocked(ctx, options)
+}
+func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.TaskState, error) {
 	if err := s.Journal.Writable(); err != nil {
 		return c.TaskState{}, err
 	}
 	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
+	}
+	if err := s.contentAvailable(options.TaskID); err != nil {
+		return c.TaskState{}, err
+	}
+	states, err := s.Journal.Replay(ctx, "")
+	if err != nil {
+		return c.TaskState{}, err
+	}
+	if existing, exists := states[options.TaskID]; exists {
+		return existing, c.Fail(c.CommandIDConflict, "task identity already exists; new content cannot be published")
 	}
 	resourcePolicy, err := s.creationResourcePolicy(ctx, options.ResourcePolicy)
 	if err != nil {
@@ -396,6 +440,9 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	}
 	if !disjointSession(s.directory, absolute) {
 		return c.TaskState{}, c.Fail(c.PolicyDenied, "session store must be outside source")
+	}
+	if s.privacy != nil && !fileguard.Disjoint(absolute, s.privacy.Directory) {
+		return c.TaskState{}, c.Fail(c.PolicyDenied, "source capture cannot contain deletion authority metadata")
 	}
 	if options.Runtime == nil {
 		if _, err = ParseFixture(options.Fixture); err != nil {

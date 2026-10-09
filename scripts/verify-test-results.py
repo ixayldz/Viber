@@ -8,6 +8,7 @@ parser.add_argument("evidence", type=Path)
 parser.add_argument("--docker", action="store_true")
 parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
+parser.add_argument("--privacy", action="store_true")
 args = parser.parse_args()
 events = [json.loads(line) for line in args.evidence.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
 started = {(e["Package"], e["Test"]) for e in events if e.get("Action") == "run" and e.get("Test")}
@@ -19,6 +20,24 @@ finished = {e["Package"] for e in events if e.get("Action") in {"pass", "skip"} 
 if failed or not passed or packages != finished or started != passed | skipped:
     raise SystemExit("FAIL: incomplete or failing Go test evidence")
 required = set()
+if args.privacy:
+    required |= {
+        "TestTaskContentDeletionPurgesCASMaterializationsAndManagedBackups",
+        "TestTaskContentDeletionRefusesUnknownActiveAndRetainedDescendants",
+        "TestDeletionIntentRecoversAfterProcessRestartAndPartialUnlink",
+        "TestDeletionRejectsStalePlanAndChangedManagedCopyWithoutFalseReceipt",
+        "TestDeletionAuthorityLossAndConcurrentRestoredOwnerFailClosed",
+        "TestPrivacyDeletesExportPreviewSupportAndInterruptedAllocation",
+        "TestPrivacyDeletesInterruptedRestoreBeforePublication",
+        "TestPrivacyCopyAddedAfterIntentRemainsPendingAndExactRetryRecovers",
+        "TestPrivacyCopyAllocationRejectsForeignFileAndRootReplacement",
+        "TestPrivacyDuplicateCommandIDRejectedBeforeIrreversibleIntent",
+        "TestPrivacyCLIThroughOwnerPreviewDeleteDedupAndDeletedObservations",
+        "TestPrivacyMissingStoreAndTaskCommandMismatchHaveNoEffects",
+        "TestPrivacyAuthorityWriteOnceCASSurvivesReplayAndRejectsCorruption",
+        "TestTaskDeletionPreservesHistoricalLedgerButRevokesContentSuccess",
+        "TestTaskDeletionCannotWaiveRiskOrManufactureQuality",
+    }
 if args.vault:
     required.add("TestActualOSVaultRoundTripAndEnvironmentIsolation")
 if args.docker:

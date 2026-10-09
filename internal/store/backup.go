@@ -112,7 +112,7 @@ func (s *Store) DocumentReferences(ctx context.Context) ([]DocumentRef, error) {
 	if s.db == nil {
 		return nil, os.ErrClosed
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT task_id,body FROM payloads ORDER BY task_id,digest")
+	rows, err := s.db.QueryContext(ctx, "SELECT task_id,body FROM payloads WHERE task_id<>'' ORDER BY task_id,digest")
 	if err != nil {
 		return nil, err
 	}

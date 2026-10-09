@@ -68,7 +68,14 @@ func (s *Session) bindEnginePin(ctx context.Context, expected NativeEngineBindin
 	if err != nil {
 		return err
 	}
+	states, err := s.Journal.Replay(ctx, "")
+	if err != nil {
+		return err
+	}
 	for _, ref := range refs {
+		if states[ref.TaskID].Deletion != nil {
+			continue
+		}
 		raw, err := s.Archive.GetBytes(ref.TaskID, ref.Digest)
 		if err != nil {
 			return err

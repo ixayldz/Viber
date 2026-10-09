@@ -79,9 +79,13 @@ func TestApplicationMigrationValidatesBackupAndPreservesFullHistory(t *testing.T
 	if err != nil || !reflect.DeepEqual(before, state) || !reflect.DeepEqual(doc, after) {
 		t.Fatal("migration changed task bytes", err)
 	}
-	// Old-format backup remains independently restorable and is never upgraded.
+	// Legacy bundles have no authoritative deletion watermark. Public restore is
+	// denied; isolated migration validation still verifies the original format.
 	oldRestore := filepath.Join(t.TempDir(), "old")
-	if _, err = RestoreBackup(ctx, backup, oldRestore); err != nil {
+	if _, err = RestoreBackup(ctx, backup, oldRestore); err == nil {
+		t.Fatal("legacy backup trusted without deletion authority")
+	}
+	if _, err = restoreBackup(ctx, backup, oldRestore, true); err != nil {
 		t.Fatal(err)
 	}
 	old, err := OpenExisting(ctx, oldRestore)

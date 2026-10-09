@@ -34,6 +34,8 @@ Usage:
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
   viber attempt TASK --store PATH --new-task ID --parent-seq N [--fixture FILE] [--allow-unverified] [--detach] [--json]
   viber store-gc-preview --store PATH [--json]
+  viber delete-preview TASK --store PATH [--json]
+  viber delete TASK --store PATH --command-file FILE [--json]
   viber store-gc --store PATH --command-file FILE [--json]
   viber store-backup --store PATH --output NEW_PATH [--json]
   viber store-restore --backup PATH --store NEW_PATH [--json]
@@ -208,7 +210,9 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runTaskControl(args[0], args[1:], out, errout)
 	case "steer", "revise":
 		return runSteering(args[0], args[1:], out, errout)
-	case "apply", "restore", "delete":
+	case "delete", "delete-preview":
+		return runPrivacy(args[0], args[1:], out, errout)
+	case "apply", "restore":
 		jsonMode := false
 		for _, arg := range args {
 			if arg == "--json" {
@@ -240,7 +244,7 @@ func runDoctor(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unexpected arguments"), *jsonMode)
 	}
 	_, gitErr := exec.LookPath("git")
-	d := doctor{Continuity: "SOURCE_BOUND_HISTORY_PIN_LOCKED_PROVIDER_SWITCH", ResourceAccounting: "CONSERVATIVE_GLOBAL_VECTOR; PHYSICAL_CONTROL_RESERVE", ArchiveGC: "TYPED_ROOTS_ORPHAN_GC; TASK_DELETION_PENDING", Supervisor: "DETACHED_OWNER_CURSOR_ATTACH; HOSTILE_FENCING_ACCEPTANCE_PENDING", SupportReport: "NUMERIC_ALLOWLIST_SUPPORT_V1", CredentialStorage: "WINDOWS_DPAPI_OR_UNIX_OS_VAULT; NATIVE_UNIX_ACCEPTANCE_PENDING", SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	d := doctor{Continuity: "SOURCE_BOUND_HISTORY_PIN_LOCKED_PROVIDER_SWITCH", ResourceAccounting: "CONSERVATIVE_GLOBAL_VECTOR; PHYSICAL_CONTROL_RESERVE", ArchiveGC: "TYPED_ROOTS_ORPHAN_GC; TASK_CONTENT_DELETE_WITH_EXTERNAL_WATERMARK; RETENTION_PENDING", Supervisor: "DETACHED_OWNER_CURSOR_ATTACH; HOSTILE_FENCING_ACCEPTANCE_PENDING", SupportReport: "NUMERIC_ALLOWLIST_SUPPORT_V1", CredentialStorage: "WINDOWS_DPAPI_OR_UNIX_OS_VAULT; NATIVE_UNIX_ROUNDTRIP_CI_TESTED; HOST_AVAILABILITY_NOT_PROBED", SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4

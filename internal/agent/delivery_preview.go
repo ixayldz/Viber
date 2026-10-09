@@ -86,6 +86,9 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 		return result, err
 	}
 	defer root.Close()
+	if err = s.allocateManagedCopy(ctx, root, "DELIVERY_PREVIEW", []string{task}); err != nil {
+		return result, err
+	}
 	publish := func(name string, raw []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err

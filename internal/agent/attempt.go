@@ -24,8 +24,13 @@ type AttemptOptions struct {
 // NewAttempt never reopens terminal state or resets its ledger. A stable new
 // task ID reconciles lost creation responses. Live source is freshly captured.
 func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.TaskState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if options.ParentTask == "" || options.NewTask == "" || options.NewTask == options.ParentTask || options.ExpectedParentSequence < 1 {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "distinct stable new task and exact parent sequence required")
+	}
+	if err := s.contentAvailable(options.NewTask); err != nil {
+		return c.TaskState{}, err
 	}
 	digest, err := c.Digest(options)
 	if err != nil {
@@ -44,8 +49,6 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 			return state, c.Fail(c.CommandIDConflict, "new task ID already used with different attempt input")
 		}
 		if state.Execution == c.Created || state.Execution == c.Scoping {
-			s.mu.Lock()
-			defer s.mu.Unlock()
 			state, _, err = s.Load(ctx, options.NewTask)
 			if err != nil {
 				return state, err
@@ -126,7 +129,7 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 	if err != nil {
 		return parent, err
 	}
-	return s.Create(ctx, StartOptions{Config: doc.Config, Root: base.Snapshot.Root, Git: base.Snapshot.Git != nil, Prompt: raw, TaskID: options.NewTask, Budget: budget, Autonomy: doc.Autonomy, AllowUnverified: options.AllowUnverified, Runtime: doc.Runtime, Fixture: options.Fixture, CheckPlan: checkPlan, CheckRuntime: doc.CheckRuntime, TaskKind: taskKind(doc), MaxRepairs: doc.MaxRepairs, inheritedSpec: &inherited, AttemptOrigin: origin})
+	return s.createLocked(ctx, StartOptions{Config: doc.Config, Root: base.Snapshot.Root, Git: base.Snapshot.Git != nil, Prompt: raw, TaskID: options.NewTask, Budget: budget, Autonomy: doc.Autonomy, AllowUnverified: options.AllowUnverified, Runtime: doc.Runtime, Fixture: options.Fixture, CheckPlan: checkPlan, CheckRuntime: doc.CheckRuntime, TaskKind: taskKind(doc), MaxRepairs: doc.MaxRepairs, inheritedSpec: &inherited, AttemptOrigin: origin})
 }
 func (s *Session) validateAttempt(doc Document) error {
 	if doc.AttemptOrigin == nil {

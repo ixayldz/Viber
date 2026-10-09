@@ -54,6 +54,9 @@ func (s *Session) Export(ctx context.Context, task, output string) (ExportManife
 		return result, err
 	}
 	defer root.Close()
+	if err = s.allocateManagedCopy(ctx, root, "EXPORT", []string{task}); err != nil {
+		return result, err
+	}
 	publish := func(name string, raw []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err

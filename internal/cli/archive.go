@@ -43,7 +43,7 @@ func runSnapshotSave(args []string, out, errout io.Writer) int {
 	if !fileguard.Disjoint(absolute, capture.Snapshot.Root) {
 		return report(out, errout, c.Fail(c.PolicyDenied, "store must be outside source"), *jsonMode)
 	}
-	archive, err := artifact.Open(*directory)
+	archive, err := openStandaloneArchive(*directory)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
@@ -72,7 +72,7 @@ func runSnapshotList(args []string, out, errout io.Writer) int {
 	if f.NArg() != 0 || *directory == "" || *task == "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "store and task required"), *jsonMode)
 	}
-	archive, err := artifact.Open(*directory)
+	archive, err := openStandaloneArchive(*directory)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
@@ -118,7 +118,7 @@ func runProposalMaterialize(args []string, out, errout io.Writer) int {
 	if err := readJSON(*authorityFile, &authority); err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	archive, err := artifact.Open(*directory)
+	archive, err := openStandaloneArchive(*directory)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

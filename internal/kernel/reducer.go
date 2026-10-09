@@ -122,10 +122,19 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && !deletionAllowed(next, event, p) && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
+		if next.Deletion != nil && event.Type != "TaskDeletionPurged" && event.Type != "ControlAcknowledged" {
+			return next, c.Fail(c.PolicyDenied, "deleted task cannot regain content or effect authority")
+		}
 		switch event.Type {
+		case "TaskContentDeleted", "TaskDeletionPurged":
+			if !deletionAllowed(next, event, p) {
+				return next, c.Fail(c.PolicyDenied, "content deletion requires bound quiescent task and immutable tombstone")
+			}
+			deletion := *p.Deletion
+			next.Deletion = &deletion
 		case "ControlAcknowledged":
 			if event.Actor != "kernel" || p.DocumentDigest != next.DocumentDigest || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) {
 				return next, c.Fail(c.PolicyDenied, "control receipt requires unchanged durable binding")
@@ -336,6 +345,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		}
 		next.KernelGeneration = event.KernelGeneration
 	}
+	if p.Deletion != nil && event.Type != "TaskContentDeleted" && event.Type != "TaskDeletionPurged" {
+		return next, c.Fail(c.PolicyDenied, "content deletion only allowed in explicit deletion events")
+	}
 	if p.Verification != nil && event.Type != "VerifiedResultFinalized" && event.Type != "VerificationAssessed" {
 		return next, c.Fail(c.PolicyDenied, "verification authority only allowed in guarded final transaction")
 	}
@@ -375,9 +387,12 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 }
 
 func StrictSuccess(s c.TaskState) bool {
-	return s.Execution == c.Terminated && s.Outcome == c.Finished && s.Quality == c.Verified && s.Fulfillment == c.Satisfied && s.OpenRequiredObligations == 0 && !s.InputBarrier && len(s.PendingInputIDs) == 0
+	return s.Deletion == nil && s.Execution == c.Terminated && s.Outcome == c.Finished && s.Quality == c.Verified && s.Fulfillment == c.Satisfied && s.OpenRequiredObligations == 0 && !s.InputBarrier && len(s.PendingInputIDs) == 0
 }
 func InvocationExit(s c.TaskState, interrupted bool) int {
+	if s.Deletion != nil {
+		return 4
+	}
 	if interrupted || s.Outcome == c.Cancelled {
 		return 130
 	}

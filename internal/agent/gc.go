@@ -222,6 +222,12 @@ func (s *Session) gcRoots(ctx context.Context) (map[string]bool, error) {
 	}
 	g := gcTracer{s, map[string]bool{}, map[store.DocumentRef]bool{}, map[artifact.Ref]bool{}}
 	for _, state := range states {
+		if state.Deletion != nil {
+			if state.Deletion.Status != "PURGED" {
+				return nil, c.Fail(c.PolicyDenied, "pending deletion pins maintenance")
+			}
+			continue
+		}
 		if state.Execution == c.Running || state.Execution == c.Verifying || state.Execution == c.Delivering || state.Execution == c.Scoping || state.Execution == c.Pausing {
 			return nil, c.Fail(c.PolicyDenied, "GC requires every task to be at a quiescent boundary")
 		}
@@ -310,6 +316,9 @@ func (s *Session) gcRoots(ctx context.Context) (map[string]bool, error) {
 		return nil, err
 	}
 	for _, ref := range refs {
+		if states[ref.TaskID].Deletion != nil {
+			continue
+		}
 		if err = g.document(ref.TaskID, ref.Digest); err != nil {
 			return nil, err
 		}

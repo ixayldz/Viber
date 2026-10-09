@@ -206,7 +206,7 @@ Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup co
 Önceki schema 1 tam yedeğinizle ayrı native CLI süreçleri üzerinden upgrade/restore smoke çalıştırmak için:
 
 ~~~powershell
-.\scripts\migration-demo.ps1 -LegacyBackup C:\private\viber-v1-backup -Task greeting
+.\scripts\migration-demo.ps1 -LegacyStore C:\private\viber-v1-store -AllowInPlaceMigration -Task greeting
 ~~~
 
 Script original yedeği değiştirmez; fresh .cache output altında eski restore, migration öncesi/sonrası backup, yeni restore ve historical replay oluşturur. Pending/unknown task veya yanlış task ID aynı güvenli preflight'te reddedilir.

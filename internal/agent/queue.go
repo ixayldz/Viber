@@ -21,6 +21,9 @@ type QueuedPrompt struct {
 }
 
 func (s *Session) queueFromState(state c.TaskState) ([]QueuedPrompt, error) {
+	if err := s.contentAvailable(state.TaskID); err != nil {
+		return nil, err
+	}
 	result := []QueuedPrompt{}
 	if len(state.PromptQueue) > 64 {
 		return nil, c.Fail(c.StoreIntegrityError, "prompt queue quota exceeded")
@@ -50,11 +53,16 @@ func (s *Session) PromptQueue(ctx context.Context, task string) ([]QueuedPrompt,
 // QueueControl uses journal optimistic admission, not the work-loop mutex.
 // Queueing cannot alter the running spec, candidate, policy or input barrier.
 func (s *Session) QueueControl(ctx context.Context, command QueueCommand) (c.TaskState, error) {
+	s.publicationMu.RLock()
+	defer s.publicationMu.RUnlock()
 	if command.CommandID == "" || len(command.CommandID) > 128 || command.TaskID == "" ||
 		(command.Action != "add" && command.Action != "remove") ||
 		command.Action == "add" && (command.QueueID != "" || len(command.Text) < 1 || len(command.Text) > 64<<10 || !utf8.ValidString(command.Text)) ||
 		command.Action == "remove" && (command.QueueID == "" || command.Text != "") {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "bounded queue command required")
+	}
+	if err := s.contentAvailable(command.TaskID); err != nil {
+		return c.TaskState{}, err
 	}
 	digest, _ := c.Digest(command)
 	kind := "PromptQueued"
@@ -70,6 +78,13 @@ func (s *Session) QueueControl(ctx context.Context, command QueueCommand) (c.Tas
 			return prior, c.Fail(c.CommandIDConflict, "queue command ID conflict")
 		}
 		return prior, nil
+	}
+	current, err := s.State(ctx, command.TaskID)
+	if err != nil {
+		return current, err
+	}
+	if current.Deletion != nil || current.Execution == c.Terminated {
+		return current, c.Fail(c.PolicyDenied, "terminal or deleted task cannot publish new queue content")
 	}
 	extra := c.EventPayload{InputID: command.QueueID, Reason: digest}
 	if command.Action == "add" {

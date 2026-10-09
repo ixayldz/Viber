@@ -1,9 +1,11 @@
 param(
- [Parameter(Mandatory=$true)][string]$LegacyBackup,
+ [Parameter(Mandatory=$true)][string]$LegacyStore,
+ [switch]$AllowInPlaceMigration,
  [string]$Task = 'greeting',
  [string]$OutputRoot
 )
 $ErrorActionPreference='Stop'
+if (!$AllowInPlaceMigration) {throw 'Migration updates the named existing store. Pass -AllowInPlaceMigration explicitly.'}
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskBinary=Join-Path $taskRoot 'bin/viber.exe'
 if (!(Test-Path -LiteralPath $taskBinary)) {throw 'Build bin/viber.exe first.'}
@@ -11,7 +13,7 @@ if (!$OutputRoot) {$OutputRoot=Join-Path $taskRoot ('.cache/migration-demo-'+[gu
 $demoRoot=[IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $demoRoot) {throw 'Demo output must be fresh.'}
 [IO.Directory]::CreateDirectory($demoRoot) | Out-Null
-$demoStore=Join-Path $demoRoot 'legacy-store'
+$demoStore=[IO.Path]::GetFullPath($LegacyStore)
 $demoBefore=Join-Path $demoRoot 'before-migration'
 $demoAfter=Join-Path $demoRoot 'after-migration'
 $demoRestored=Join-Path $demoRoot 'restored'
@@ -21,8 +23,6 @@ function Invoke-DemoCommand {
  if ($LASTEXITCODE -ne 0) {throw ('CLI failed with exit '+$LASTEXITCODE+': '+$raw)}
  return ($raw | ConvertFrom-Json)
 }
-$old=Invoke-DemoCommand @('store-restore','--backup',$LegacyBackup,'--store',$demoStore,'--json')
-if ($old.store.schema_version -ne 1) {throw 'A completed schema 1 backup is required.'}
 $before=Invoke-DemoCommand @('status',$Task,'--store',$demoStore,'--json')
 $oldStatus=Invoke-DemoCommand @('store-migration-status','--store',$demoStore,'--json')
 if ($oldStatus.snapshot.schema_version -ne 1) {throw 'Restore performed an automatic migration.'}
@@ -43,7 +43,7 @@ $null=Invoke-DemoCommand @('replay',$Task,'--store',$demoRestored,'--until','1',
 [ordered]@{
  schema_version=1
  status='PASS'
- source_backup=[IO.Path]::GetFullPath($LegacyBackup)
+ source_store=[IO.Path]::GetFullPath($LegacyStore)
  artifacts=$demoRoot
  from_schema=1
  to_schema=2

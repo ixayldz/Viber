@@ -268,6 +268,9 @@ type HistoryPage struct {
 
 func (s *Session) HistoryPage(doc Document, digest string, offset, limit int64) (HistoryPage, error) {
 	page := HistoryPage{SchemaVersion: 1, Representation: "RETAINED_CANONICAL_V1", Digest: digest, Offset: offset}
+	if err := s.contentAvailable(doc.TaskID); err != nil {
+		return page, err
+	}
 	if err := historyPageAdmission(doc, digest, offset, limit); err != nil {
 		return page, err
 	}

@@ -42,14 +42,26 @@ func (s *Session) SteeringReceipt(ctx context.Context, input SteeringInput) (c.T
 // first; the journal barrier fences an in-flight candidate pointer transaction.
 // Only the offline/native profile currently exposes this concurrent boundary.
 func (s *Session) RecordSteering(ctx context.Context, input SteeringInput) (c.TaskState, error) {
+	s.publicationMu.RLock()
+	defer s.publicationMu.RUnlock()
 	if err := s.Journal.Writable(); err != nil {
 		return c.TaskState{}, err
 	}
 	if input.CommandID == "" || len(input.CommandID) > 128 || input.TaskID == "" || len(input.Text) == 0 || len(input.Text) > 64<<10 || !utf8.ValidString(input.Text) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "bounded UTF-8 steering input required")
 	}
+	if err := s.contentAvailable(input.TaskID); err != nil {
+		return c.TaskState{}, err
+	}
 	if state, found, err := s.SteeringReceipt(ctx, input); found || err != nil {
 		return state, err
+	}
+	current, err := s.State(ctx, input.TaskID)
+	if err != nil {
+		return current, err
+	}
+	if current.Deletion != nil || current.Execution == c.Terminated {
+		return current, c.Fail(c.PolicyDenied, "terminal or deleted task cannot publish new raw steering content")
 	}
 	digest, err := s.Archive.PutBytes(input.TaskID, []byte(input.Text))
 	if err != nil {
@@ -84,6 +96,9 @@ func (s *Session) RecordSteering(ctx context.Context, input SteeringInput) (c.Ta
 	return c.TaskState{}, c.Fail(c.Conflict, "steering admission could not reach a journal boundary")
 }
 func (s *Session) pendingInput(ctx context.Context, task, id string) ([]byte, error) {
+	if err := s.contentAvailable(task); err != nil {
+		return nil, err
+	}
 	_, event, payload, found, err := s.Journal.CommandReceipt(ctx, id)
 	if err != nil {
 		return nil, err
