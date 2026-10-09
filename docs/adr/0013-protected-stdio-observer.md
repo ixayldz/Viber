@@ -1,0 +1,19 @@
+# ADR 0013: external STDIO observer, source-bound goal review and guarded finalization
+
+Date: 2026-10-09. Status: implemented V4 engineering slice; full verifier/backend/platform acceptance remains open.
+
+The subject process cannot write a verification receipt. The kernel contains a fixed exact-byte comparison driver and executes no repository code in that observer. It sends only a registered input and fixed operator argv to each isolated Docker subject. Expected stdout/stderr/exit and the oracle manifest remain outside subject mounts. The whole subject source is read-only, network denied, non-root, bounded and privately namespaced; scratch is fresh per case/repeat. Image, profile, argv, input and candidate are bound by canonical digests. Broker acknowledgement or process cleanup uncertainty never becomes PASS.
+
+Every declared external case executes two to four times, with a distinct container identity. Discovery is the protected fixed case list, not a repository framework's own reported discovery. All attempts and a baseline comparison are retained. Any failing attempt remains negative evidence on that exact binding; rerunning the same candidate cannot wash it out. Incomplete, timed out, OOM, truncated, mismatched or unknown observations cannot contribute positive evidence. Flaky baseline/current results cannot grant guarded success.
+
+This driver is V4 external STDIO behavior only. It does not turn generic test-framework stdout/exit into trusted discovery, and does not claim V0/V1/V2/V3/V5/framework conformance. The operator must choose an actual application behavior and review that the case set covers the raw goal. Concrete-case acceptance is not a proof over every possible input.
+
+Before mutation, the protected origin binds both the suite digest and runner profile. The source-bound operator goal review names every raw input digest, required criterion/check mapping and protected dependency review. It is explicit user authority, not a model interpretation or repo config. The accepted record owns all arrays and binds the full spec/check set. A new raw/spec revision makes the old review stale; a model cannot rewrite it. General authorized check revisions and dependency discovery remain separate work.
+
+Subject output may contain an echo of hidden fixture data. Such output is available to the local operator with case/repeat/baseline paging; it is denied to model check_output. The model receives bounded case verdict/count metadata, never the oracle object. Numeric support and the compiled model request do not carry raw oracle bytes. Backup is a private full-state operation, not a public declassified export.
+
+Nonfinal assessment publishes only UNVERIFIED/PARTIAL/FAILED; VERIFIED requires the distinct frozen candidate/report final transaction. That transaction recomputes the trusted predicate, current spec/candidate/check/environment/policy binding, reviewed coverage, required gates, input barrier and unresolved reservations. The candidate-only artifact, report and evidence references are durable before FINISHED/VERIFIED/SATISFIED is published. Ordinary registered commands still produce computation evidence only. stdout PASS, zero-test discovery, approval and a model summary never grant quality.
+
+The finalization event carries a source-bound minimal spec projection rather than duplicating the raw goal in permanent metadata. Full raw intent remains in task-scoped payload storage; this change is not complete privacy deletion. Historical report/source/observer artifacts participate in typed GC and backup/fresh restore validation.
+
+Native Windows fixtures, Linux race and the real pinned Linux Docker profile are recorded separately. Native macOS, rootless/hostile-principal enforcement, signed release, independent pilot, full framework verifier families and authorized check revisions are not inferred from a successful STDIO example.

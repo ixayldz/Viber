@@ -19,7 +19,7 @@ func CheckProtection(doc Document) *ProtectionInfo {
 	if doc.Protection == nil {
 		return nil
 	}
-	return &ProtectionInfo{OriginDigest: doc.Spec.ProtectedOrigin, Provenance: doc.Protection.Provenance, ClosureCoverage: doc.Protection.ClosureCoverage, CheckCount: len(doc.Protection.Plan.Checks), ProtectedScopes: len(doc.Protection.Protected)}
+	return &ProtectionInfo{OriginDigest: doc.Spec.ProtectedOrigin, Provenance: doc.Protection.Provenance, ClosureCoverage: doc.Protection.ClosureCoverage, CheckCount: len(doc.Protection.Plan.Checks), ProtectedScopes: len(doc.Protection.Protected), StrongVerificationAvailable: doc.CheckRuntime != nil && len(doc.CheckRuntime.ObserverSuites) > 0 && verify.CoverageCurrent(doc.GoalCoverage, doc.Spec, checkSetDigest(doc))}
 }
 func ParseCheckPlan(raw []byte) (verify.CheckPlan, error) {
 	plan := verify.CheckPlan{SchemaVersion: 1, Checks: []verify.CheckDefinition{}}

@@ -1,5 +1,17 @@
 # Doğrulama kaydı
 
+## 0.9 V4 independent observer — 9 Ekim 2026
+
+Frozen .cache/validation-0.9-observer Windows full suite: **579 test/alt test PASS / 6 SKIP / 0 FAIL** (.cache/windows-0.9-observer-full.jsonl). SKIP: dört opt-in Docker ve iki Windows symlink privilege fixture. Format/vet/native CLI build PASS. Aynı sabit kopyanın Linux full race turu: **585 PASS / 4 SKIP / 0 FAIL** (.cache/linux-0.9-observer-full.jsonl). Module verify/vet/Linux build/doctor PASS; bütün Darwin arm64 paketleri ve CLI binary COMPILE_ONLY. Dört opt-in Docker SKIP ayrı gerçek Docker turuyla değerlendirilir; native macOS PASS değildir.
+
+Actual pinned Linux Docker subject acceptance: **PASS**. Baseline FAIL → native candidate proposal → current PASS → FINISHED/VERIFIED/SATISFIED; self-report stdout PASS → admissible FAIL/FAILED; unchanged live source; no-op current goal accepted by its concrete cases. Both baseline and all repeated attempts are retained. Separate ordinary broker readonly/quiescence/timeout fixture PASS. This is V4 fixed STDIO case acceptance; generic framework discovery, V0–V5 or whole hostile backend conformance is not inferred.
+
+Native CLI observer-demo PASS: fresh external recipe binding, raw-goal/dependency review, private source/store, current verification matrix, exact baseline case/repeat byte page; source SHA unchanged. Evidence .cache/native-observer-demo.txt; demo root .cache/observer-demo-6866c3347a754afabb973f05bb0dd0c3. Two script setup failures (incomplete neutral config and obsolete calls field) were fixed and rerun; no failed run is labeled PASS.
+
+Unit guards cover fake PASS, stale/changed oracle/input/profile/candidate, missing/zero discovery, incomplete receipt, shared subject identity, lost broker response, cancel-before-dispatch, repeated fail/flake, denied model access to protected stdout, raw-goal-free final event, scoped review invalidation, immutable report and backup/fresh restore. Kernel recomputes strict final predicate and rejects missing independent evidence, pending barriers, unsupported live delivery and model-origin authority.
+
+[ADR 0013](adr/0013-protected-stdio-observer.md) defines the trust boundary. A/B/stable gates remain CLOSED; C04 broader keyless work and C05–C11 acceptance continue.
+
 ## 0.9 güncel dilim — 9 Ekim 2026
 
 Windows sabit .cache/validation-0.9-ui kaynak kopyası full suite: **539 test/alt test PASS, 4 SKIP, 0 FAIL**. Paket-level sonuçlar bu sayıya dahil değildir. SKIP: iki opt-in Docker fixture ve iki host symlink-privilege fixture. Önceki turda opt-in Docker agent/runner gerçekten çalıştırılıp PASS oldu; sonraki değişiklikler için aynı kabulü otomatik genişletmiyoruz.

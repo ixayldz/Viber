@@ -19,6 +19,9 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 	historyDigest := f.String("history-digest", "", "retained task-bound history archive digest")
 	runID := f.String("run-id", "", "retained check run ID")
 	stream := f.String("stream", "stdout", "stdout or stderr")
+	caseID := f.String("case", "", "retained independent observer case ID")
+	repeat := f.Int("repeat", 0, "retained independent observer repeat")
+	scope := f.String("scope", "", "candidate or baseline observer phase")
 	jsonMode := f.Bool("json", false, "structured result")
 	if err := f.Parse(args); err != nil {
 		return 4
@@ -30,6 +33,9 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 	}
 	invalid := false
 	f.Visit(func(v *flag.Flag) {
+		if (v.Name == "case" || v.Name == "repeat" || v.Name == "scope") && command != "check-output" {
+			invalid = true
+		}
 		if v.Name == "history-digest" && command != "history-page" {
 			invalid = true
 		}
@@ -40,7 +46,7 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 	if invalid || task == "" || *directory == "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "task/store and command-specific page flags required"), *jsonMode)
 	}
-	query := agent.Observation{Kind: command}
+	query := agent.Observation{Kind: command, CaseID: *caseID, Repeat: *repeat, CheckScope: *scope}
 	if command == "context-page" || command == "check-output" || command == "history-page" {
 		query.Offset = *offset
 		query.Limit = *limit

@@ -76,6 +76,9 @@ func resourceUpper(doc Document, modelOperation bool) c.ResourceVector {
 		upper.DiskBytes = 64 << 20
 		if doc.CheckRuntime != nil {
 			p := doc.CheckRuntime.Profile
+			// Broker reconciliation/removal has bounded independent cleanup contexts.
+			upper.WallMillis += 60000
+			upper.CPUMillis += 60000 * int64(runtime.NumCPU())
 			upper.Children = p.Pids
 			upper.CPUMillis += min(remaining, p.TimeoutSeconds*1000) * p.CPUs
 			upper.DiskBytes += p.ScratchBytes

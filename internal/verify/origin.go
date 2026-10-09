@@ -17,6 +17,7 @@ type CheckPlan struct {
 	Checks        []CheckDefinition `json:"checks"`
 }
 type CheckDefinition struct {
+	ObserverDigest string       `json:"observer_digest,omitempty"`
 	ID             string       `json:"id"`
 	Kind           string       `json:"kind"`
 	RequirementIDs []string     `json:"requirement_ids"`
@@ -82,6 +83,9 @@ func (p CheckPlan) Validate() error {
 			return c.Fail(c.InvalidArgument, "invalid check definition or bounded discovery contract")
 		}
 		ids[check.ID] = true
+		if check.ObserverDigest != "" && (check.Kind != "TEST" || !c.ValidDigest(check.ObserverDigest)) {
+			return c.Fail(c.InvalidArgument, "invalid protected observer identity")
+		}
 		if check.Kind != "TEST" && check.Kind != "STATIC" && check.Kind != "BEHAVIOR" {
 			return c.Fail(c.InvalidArgument, "unsupported check kind")
 		}

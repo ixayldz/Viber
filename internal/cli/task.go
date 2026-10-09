@@ -23,6 +23,7 @@ import (
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/owner"
 	"github.com/ixayldz/Viber/internal/plan"
+	"github.com/ixayldz/Viber/internal/verify"
 )
 
 func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, jsonMode bool, protection *agent.ProtectionInfo, checks []agent.CheckSummary) int {
@@ -94,6 +95,8 @@ func runTask(args []string, out, errout io.Writer) int {
 	git := f.Bool("git", false, "native Git-aware capture")
 	allow := f.Bool("allow-unverified", false, "explicitly allow a limited UNVERIFIED candidate-only result (exit 2)")
 	autonomy := f.String("autonomy", "guided", "review, guided or auto native tools")
+	combinedChecksFile := f.String("check-config", "", "bound operator plan/runtime JSON from check-config")
+	goalReviewFile := f.String("goal-review", "", "explicit raw-goal/protected-dependency review JSON outside source")
 	resourcePolicyFile := f.String("resource-policy", "", "immutable store resource limits and operator versioned model prices JSON")
 	storeInput := f.Int64("store-input-tokens", 64<<20, "immutable store-wide input token work limit; first task only")
 	storeOutput := f.Int64("store-output-tokens", 4<<20, "immutable store-wide output token work limit; first task only")
@@ -352,6 +355,35 @@ func runTask(args []string, out, errout io.Writer) int {
 			}
 		}
 	}
+	if *combinedChecksFile != "" {
+		if *checkPlanFile != "" || *checkRuntimeFile != "" {
+			return report(out, errout, c.Fail(c.InvalidArgument, "check-config cannot mix with check-plan/check-runtime"), *jsonMode)
+		}
+		combined, configErr := readOperatorChecks(*combinedChecksFile)
+		if configErr != nil {
+			return report(out, errout, configErr, *jsonMode)
+		}
+		checkPlan, _ = c.CanonicalV1(combined.Plan)
+		checkRuntime = &combined.Runtime
+		*checkRuntimeFile = *combinedChecksFile
+	}
+	var goalReview *verify.GoalReview
+	if *goalReviewFile != "" {
+		goalReview = &verify.GoalReview{}
+		if err = readJSON(*goalReviewFile, goalReview); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+	}
+	if checkRuntime != nil && len(checkRuntime.ObserverSuites) > 0 {
+		for _, inputFile := range []string{*checkRuntimeFile, *goalReviewFile} {
+			if inputFile != "" {
+				absolute, pathErr := filepath.Abs(inputFile)
+				if pathErr != nil || !fileguard.Disjoint(source, absolute) {
+					return report(out, errout, c.Fail(c.PolicyDenied, "observer/review configuration must be outside source"), *jsonMode)
+				}
+			}
+		}
+	}
 	if *task == "" {
 		var nonce [16]byte
 		if _, err = rand.Read(nonce[:]); err != nil {
@@ -378,7 +410,7 @@ func runTask(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	_, err = session.Create(ctx, agent.StartOptions{Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

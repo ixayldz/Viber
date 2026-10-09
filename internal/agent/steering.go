@@ -189,6 +189,7 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	doc.FinalReady = false
 	doc.FinalSummary = ""
 	doc.FinalArtifactDigest = ""
+	doc.VerificationReport = ""
 	doc.RepairAttempts = 0
 	doc.Blocker = ""
 	doc.AllowUnverified = false

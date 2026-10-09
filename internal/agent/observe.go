@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/diskguard"
@@ -11,6 +10,9 @@ import (
 )
 
 type Observation struct {
+	CaseID        string `json:"case_id,omitempty"`
+	Repeat        int    `json:"repeat,omitempty"`
+	CheckScope    string `json:"check_scope,omitempty"`
 	Path          string `json:"path,omitempty"`
 	Query         string `json:"query,omitempty"`
 	Candidate     string `json:"candidate,omitempty"`
@@ -44,6 +46,9 @@ type ContextExplanation struct {
 }
 
 func (s *Session) Observe(ctx context.Context, task string, args Observation) (any, error) {
+	if args.Kind != "check-output" && (args.CaseID != "" || args.Repeat != 0 || args.CheckScope != "") {
+		return nil, c.Fail(c.InvalidArgument, "observer output parameters require check-output")
+	}
 	state, doc, err := s.Load(ctx, task)
 	if err != nil {
 		return nil, err
@@ -88,19 +93,18 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 			Ledger store.ResourceLedgerView `json:"ledger"`
 			Disk   diskguard.Status         `json:"disk"`
 		}{ledger, disk}, nil
+	case "verification":
+		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
+			return nil, c.Fail(c.InvalidArgument, "verification accepts no page arguments")
+		}
+		return s.deriveVerification(doc, state)
 	case "checks":
 		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
 			return nil, c.Fail(c.InvalidArgument, "checks accepts no page arguments")
 		}
 		return s.CheckSummaries(doc, state)
 	case "check-output":
-		raw, _ := json.Marshal(struct {
-			RunID  string `json:"run_id"`
-			Stream string `json:"stream"`
-			Offset int64  `json:"offset"`
-			Limit  int64  `json:"limit"`
-		}{args.RunID, args.Stream, args.Offset, args.Limit})
-		return s.executeCheck(ctx, state, &doc, model.Call{Name: "check_output", Arguments: raw})
+		return s.readCheckOutput(doc, checkOutputQuery{RunID: args.RunID, Stream: args.Stream, Offset: args.Offset, Limit: args.Limit, CaseID: args.CaseID, Repeat: args.Repeat, Scope: args.CheckScope}, true)
 	case "report":
 		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
 			return nil, c.Fail(c.InvalidArgument, "report accepts no page arguments")

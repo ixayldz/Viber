@@ -151,8 +151,8 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	case "/diff", "/requests":
 		raw, err := u.call(ctx, command[1:], nil)
 		return string(raw), false, err
-	case "/context", "/why", "/evidence", "/budget", "/trace":
-		kind := map[string]string{"/context": "continuity-info", "/why": "context-why", "/evidence": "checks", "/budget": "resources", "/trace": "events"}[command]
+	case "/context", "/why", "/evidence", "/verification", "/budget", "/trace":
+		kind := map[string]string{"/context": "continuity-info", "/why": "context-why", "/evidence": "checks", "/verification": "verification", "/budget": "resources", "/trace": "events"}[command]
 		var raw json.RawMessage
 		var err error
 		if kind == "events" {

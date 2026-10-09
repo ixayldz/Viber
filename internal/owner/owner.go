@@ -326,7 +326,7 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "GC envelope ID mismatch")
 		}
 		return o.Session.CollectGarbage(ctx, command)
-	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "report", "history-page", "continuity-info", "resources":
+	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources":
 		var args agent.Observation
 		if err := c.DecodeStrict(request.Payload, &args); err != nil {
 			return nil, err

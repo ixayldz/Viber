@@ -47,6 +47,7 @@ func DefaultProfile(image string) Profile {
 }
 
 type Invocation struct {
+	Stdin           *[]byte  `json:"stdin,omitempty"`
 	CandidateDigest string   `json:"candidate_digest"`
 	Argv            []string `json:"argv"`
 }
@@ -172,6 +173,7 @@ type inspected struct {
 		Error     string
 	}
 	Config struct {
+		OpenStdin  bool
 		User       string
 		Image      string
 		WorkingDir string
@@ -211,7 +213,7 @@ func (d *Docker) inspect(ctx context.Context, id string) (inspected, error) {
 	return values[0], nil
 }
 func validateInspect(info inspected, p Profile, source string, inv Invocation) error {
-	if info.Config.Image != p.Image || info.Config.WorkingDir != "/workspace" || len(info.Config.Entrypoint) != 1 || len(inv.Argv) == 0 || info.Config.Entrypoint[0] != inv.Argv[0] || len(info.Config.Cmd) != len(inv.Argv)-1 {
+	if info.Config.OpenStdin != (inv.Stdin != nil) || info.Config.Image != p.Image || info.Config.WorkingDir != "/workspace" || len(info.Config.Entrypoint) != 1 || len(inv.Argv) == 0 || info.Config.Entrypoint[0] != inv.Argv[0] || len(info.Config.Cmd) != len(inv.Argv)-1 {
 		return c.Fail(c.PolicyDenied, "container image or invocation binding mismatch")
 	}
 	for i, arg := range info.Config.Cmd {
@@ -290,7 +292,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 			return result, c.Fail(c.InvalidArgument, "invalid argv")
 		}
 	}
-	if argvBytes > 65536 {
+	if argvBytes > 65536 || inv.Stdin != nil && len(*inv.Stdin) > 64<<10 {
 		return result, c.Fail(c.InvalidArgument, "invocation argv exceeds quota")
 	}
 	absolute, err := filepath.Abs(source)
@@ -322,6 +324,9 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	}
 	name := "viber-" + hex.EncodeToString(nonce[:])
 	args := []string{"create", "--pull=never", "--name", name, "--label", "io.viber.runtime=offline-v1", "--user", "65532:65532", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin", "--pids-limit", fmt.Sprint(p.Pids), "--memory", fmt.Sprint(p.MemoryBytes), "--memory-swap", fmt.Sprint(p.MemoryBytes), "--cpus", fmt.Sprint(p.CPUs), "--ipc", "private", "--init", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go-mod", "--env", "GOTOOLCHAIN=local", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--mount", "type=bind,src=" + absolute + ",dst=/workspace,readonly,bind-propagation=rprivate", "--tmpfs", "/tmp:" + scratchOptions(p), "--entrypoint", inv.Argv[0], p.Image}
+	if inv.Stdin != nil {
+		args = append([]string{"create", "--interactive"}, args[1:]...)
+	}
 	args = append(args, inv.Argv[1:]...)
 	dispatched = true
 	raw, err := d.control(ctx, args...)
@@ -376,7 +381,14 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	stdout, stderr := &boundedOutput{limit: p.MaxOutputBytes}, &boundedOutput{limit: p.MaxOutputBytes}
 	stdout.onLimit = cancel
 	stderr.onLimit = cancel
-	command := d.command(runCtx, "start", "--attach", id)
+	startArgs := []string{"start", "--attach", id}
+	if inv.Stdin != nil {
+		startArgs = []string{"start", "--attach", "--interactive", id}
+	}
+	command := d.command(runCtx, startArgs...)
+	if inv.Stdin != nil {
+		command.Stdin = bytes.NewReader(*inv.Stdin)
+	}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	started := time.Now()

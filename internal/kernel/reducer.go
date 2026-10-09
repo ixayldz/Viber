@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/verify"
 )
 
 func active(s c.ExecutionState) bool {
@@ -157,6 +158,45 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			next.DocumentDigest = p.DocumentDigest
 			next.CandidateDigest = p.SnapshotDigest
 			next.Quality = c.Unverified
+		case "VerificationAssessed":
+			proof := p.Verification
+			if event.Actor != "kernel" || !nonterminal(next.Execution) || proof == nil || proof.PolicyEpoch != next.PolicyEpoch || proof.Binding.TaskID != next.TaskID || proof.Binding.SpecVersion != next.SpecVersion || proof.Binding.CandidateDigest != next.CandidateDigest || p.SnapshotDigest != next.CandidateDigest || !c.ValidDigest(p.DocumentDigest) || proof.Spec.Goal != c.VerificationProjectionGoal || !c.ValidDigest(proof.SourceSpecDigest) || proof.ArtifactDigest != "" || proof.Guards.ManifestCoherent || p.Fulfillment != "" || p.Outcome != "" || p.Quality == c.Verified || p.Quality == c.AcceptedWithWaiver {
+				return next, c.Fail(c.PolicyDenied, "nonfinal assessment cannot grant completion or frozen verification")
+			}
+			digest, err := c.AssessmentProofDigest(*proof)
+			if err != nil || digest != proof.ReportDigest || digest != p.Reason || verify.Assess(proof.Spec, proof.Binding, proof.Receipts, proof.Guards).Quality != p.Quality {
+				return next, c.Fail(c.PolicyDenied, "assessment predicate/binding mismatch")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.Quality = p.Quality
+		case "VerifiedResultFinalized":
+			proof := p.Verification
+			if event.Actor != "kernel" || next.Execution != c.Delivering || next.InputBarrier || len(next.PendingInputIDs) > 0 || !c.ValidDigest(p.DocumentDigest) || p.SnapshotDigest != next.CandidateDigest || p.Quality != c.Verified || p.Fulfillment != c.Satisfied || proof == nil || proof.PolicyEpoch != next.PolicyEpoch || proof.Binding.TaskID != next.TaskID || proof.Binding.SpecVersion != next.SpecVersion || proof.Binding.CandidateDigest != next.CandidateDigest || proof.Spec.TaskID != next.TaskID || proof.Spec.Version != next.SpecVersion || proof.Spec.DeliveryPolicy != "CANDIDATE_ONLY" || proof.Spec.Goal != c.VerificationProjectionGoal || !c.ValidDigest(proof.SourceSpecDigest) || !c.ValidDigest(proof.ArtifactDigest) || !c.ValidDigest(proof.ReportDigest) || proof.ReportDigest != p.Reason || p.RequiredObligations != 0 {
+				return next, c.Fail(c.PolicyDenied, "verified final binding/preconditions missing")
+			}
+			if next.Tokens != nil {
+				for _, r := range next.Tokens.Reservations {
+					if r.Status != "SETTLED" {
+						return next, c.Fail(c.PolicyDenied, "unsettled token exposure blocks strict final")
+					}
+				}
+			}
+			if next.Resources != nil {
+				for _, r := range next.Resources.Reservations {
+					if r.Status != "SETTLED" {
+						return next, c.Fail(c.PolicyDenied, "unsettled resource exposure blocks strict final")
+					}
+				}
+			}
+			if verify.Assess(proof.Spec, proof.Binding, proof.Receipts, proof.Guards).Quality != c.Verified {
+				return next, c.Fail(c.PolicyDenied, "trusted verification predicate unresolved")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.Execution = c.Terminated
+			next.Outcome = c.Finished
+			next.Quality = c.Verified
+			next.Fulfillment = c.Satisfied
+			next.OpenRequiredObligations = 0
 		case "LimitedResultFinalized":
 			if event.Actor != "kernel" || next.Execution != c.Delivering || next.InputBarrier || !c.ValidDigest(p.SnapshotDigest) || !c.ValidDigest(next.DocumentDigest) || !c.ValidDigest(p.DocumentDigest) || p.SnapshotDigest != next.CandidateDigest || p.Reason != "EXPLICIT_LIMITED_RESULT_POLICY" || p.Quality != c.Unverified || p.Fulfillment != c.Satisfied {
 				return next, c.Fail(c.PolicyDenied, "limited final transaction preconditions missing")
@@ -290,6 +330,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			next.PromptQueue = nil
 		}
 		next.KernelGeneration = event.KernelGeneration
+	}
+	if p.Verification != nil && event.Type != "VerifiedResultFinalized" && event.Type != "VerificationAssessed" {
+		return next, c.Fail(c.PolicyDenied, "verification authority only allowed in guarded final transaction")
 	}
 	if (p.Tokens != nil && p.Tokens.Reservation.UsageSource == "OPERATOR_ASSUMED_UPPER_BOUND" || p.Resources != nil && p.Resources.Reservation.Meter == "OPERATOR_ASSUMED_UPPER_BOUND") && (event.Type != "ModelRiskReconciled" || event.Actor != "user") {
 		return next, c.Fail(c.PolicyDenied, "operator risk accounting cannot be manufactured by a kernel/model event")

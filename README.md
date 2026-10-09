@@ -2,7 +2,7 @@
 
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.
 
-**Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü ve güçlü doğrulama tamamlanmamıştır.
+**Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.
 
 [Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
@@ -18,9 +18,9 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 - Exact before/after byte'ları ve patch içeren teslim paketi çıkarabilir; store'u yedekleyip yeni dizine geri yükleyebilirsiniz.
 - Mevcut format 1 store'larını açık migration komutuyla format 2'ye yükseltebilirsiniz.
 
-Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Mevcut profil `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
+Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Varsayılan fixture profili `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, tam retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -188,7 +188,7 @@ Onay task/attempt/spec/policy/candidate/action'a bağlı, 24 saat süreli ve tek
 
 | run/resume exit | Anlam |
 |---|---|
-| 0 | FINISHED + VERIFIED + SATISFIED ve açık zorunlu yükümlülük yok; mevcut offline profil bunu üretmez |
+| 0 | FINISHED + VERIFIED + SATISFIED ve açık zorunlu yükümlülük yok; varsayılan fixture profili bunu üretmez; kaynak bağlı operator review + bağımsız V4 gözlemci için kullanılabilir |
 | 2 | FINISHED; strict success olmayan sınırlı final sonuç |
 | 3 | Kullanıcı/kaynak/onay/block bekleniyor; task terminal failure değildir |
 | 4 | Runtime/task hatası veya final quality FAILED |
@@ -276,7 +276,7 @@ Yeni store format 2 kullanır. Format 1 kendiliğinden yükseltilmez. Eski store
 
 Context kapasitesini kurulu modelin doğrulanmış sınırına göre seçin. `num_ctx`/`num_predict` request'e bağlanır; mevcut preflight conservative byte üst sınırıdır, provider tokenizer conformance değildir. Zorunlu içerik sığmazsa çağrıdan önce WAITING_RESOURCE olur. [Ollama chat API](https://docs.ollama.com/api/chat) ve [context yapılandırması](https://docs.ollama.com/context-length).
 
-Review onayları fixture örneğindeki gibi `requests/respond/resume` ile verilir. Model gerçek tool çağrıları üretse de source doğrudan değişmez; sonuç UNVERIFIED kalır. Usage kaybı, timeout/transport belirsizliği veya bildirilen model uyuşmazlığı BLOCKED ve korunmuş reservation bırakır; kör tekrar yoktur. Ollama için --stream NDJSON yolu vardır; thinking profili henüz desteklenmez. Kayıtlı Docker check 0.8 ile bağlıdır; trusted discovery/observer ve güçlü verification yoktur.
+Review onayları fixture örneğindeki gibi `requests/respond/resume` ile verilir. Model gerçek tool çağrıları üretse de source doğrudan değişmez; varsayılan sonuç UNVERIFIED kalır; aşağıdaki kaynak bağlı V4 observer yolu ayrıdır. Usage kaybı, timeout/transport belirsizliği veya bildirilen model uyuşmazlığı BLOCKED ve korunmuş reservation bırakır; kör tekrar yoktur. Ollama için --stream NDJSON yolu vardır; thinking profili henüz desteklenmez. Sıradan kayıtlı Docker check computation evidence verir. Bağımsız V4 observer, fixed case discovery ve reviewed coverage ile ayrıca yapılandırılır.
 
 ## Native dependency planı (0.7)
 
@@ -624,4 +624,31 @@ Secretsiz global config varsayılan olarak OS user config dizinindeki `viber/con
 
 `allowed_providers: []` bütün provider'ları yasaklar; alanın bulunmaması veya null olması ek restriction koymaz. Proje remote=true deseydi bile user remote=false kararını açamazdı. Config dosyasında API anahtarı bulunmaz; bilinmeyen alan ve parse hataları içeriği echo etmeden reddedilir. Hassas source dosyaları CAS'a girmeden filtrelenir; project config'in ham içeriği de capture edilmez. Gerekli Git/ignore metadata'sı privacy scope tarafından yasaklanırsa `--git` fail-closed olur; directory capture kullanılabilir. Mevcut görevin config'i task'ta saklanır; bir config dosyasını sonradan değiştirmek aktif görevin yetkisini gizlice değiştirmez.
 
-Bu arayüz 0.9 engineering dilimidir. Generic extension/MCP, trusted verifier, exclusive live apply/restore, tam lifecycle deletion ve beta/platform kabulü ayrı geliştirme gerektirir. [Yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) gerçek kapsamı, [ADR 0012](docs/adr/0012-queue-terminal-and-config.md) sınırları kaydeder.
+Bu arayüz 0.9 engineering dilimidir. Generic extension/MCP, full verifier/framework kapsamı, exclusive live apply/restore, tam lifecycle deletion ve beta/platform kabulü ayrı geliştirme gerektirir. [Yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) gerçek kapsamı, [ADR 0012](docs/adr/0012-queue-terminal-and-config.md) sınırları kaydeder.
+
+## Bağımsız V4 davranış doğrulaması
+
+Önceden kurulu pinned Linux Docker image'ıyla, model API anahtarı olmadan:
+
+~~~powershell
+./scripts/observer-demo.ps1
+~~~
+
+Demo private bir source/store açar, ayrı operator senaryolarını kaydeder, iki tekrar ve baseline karşılaştırması yapar. Kaynak değişmeden kalır. Beklenen sonuç bu belirli senaryolar için FINISHED / VERIFIED / SATISFIED ve exit 0'dır; release_ready yine false'tur. İlk offline patch demosunun exit 2 sözleşmesi aynıdır.
+
+Kendi STDIO uygulamanız için recipe JSON'un plan ve runtime alanlarını tanımlayın. Runtime'da pinned profile ve observer_suites bulunur; suite schema_version=1, level=V4, protocol=KERNEL_STDIO_EXACT_V1, repeats=2..4 taşır. Her case benzersiz id, base64 input/expected_stdout/expected_stderr ve expected_exit_code taşır. Check kind=TEST, expected_tests exact case ID listesi, argv yalnız test edilen uygulama komutu ve closure gerçek bağımlılık kapsamıdır. Beklenen sonuçları değiştiren dosyaları source'a koymayın.
+
+~~~powershell
+viber check-prepare --file .\recipe.json --output .\checks.json
+viber run "Ham hedef" --root .\project --store .\private-store --offline --fixture .\fixture.json --check-config .\checks.json --goal-review .\goal-review.json --json
+viber verification TASK --store .\private-store --json
+viber check-output TASK --store .\private-store --run-id RUN --case CASE --repeat 2 --scope baseline --offset 0 --limit 16384 --json
+~~~
+
+check-prepare yalnız canonical oracle/profile bağlarını oluşturur; process veya model çalıştırmaz, mevcut output'u değiştirmez. Eski check-config --runtime FILE --plan FILE --json komutu korunur. --check-config ile --check-plan/--check-runtime aynı görevde karıştırılmaz. Observer ve review dosyaları source kökünün dışında olmalıdır.
+
+Goal review operator tarafından hazırlanır: schema_version=1, input_digests ham girdilerin SHA-256 değerleri, coverage her required requirement_id için check_ids, dependency_checks bütün protected check ID'leri ve acknowledgement=RAW_GOALS_AND_EXECUTION_DEPENDENCIES_REVIEWED_V1. Bu ifade, ham hedefin ve gerçek check bağımlılıklarının incelendiğine dair kullanıcı kabulüdür. Model veya proje config'i bunu kendiliğinden vermez. Yeni scope/raw input review'ı current olmaktan çıkarır.
+
+Her deneme saklanır. Beklenmeyen çıktı, sıfır/eksik senaryo, stale digest, unknown cleanup ve başarısız tekrar PASS'e dönüşmez. Aynı candidate üzerinde sonradan PASS almak önceki FAIL'i silmez. Gizli fixture verisi stdout'a yazılabileceği için protected observer çıktısı model tool'una verilmez; yerel kullanıcı exact byte sayfalarını okuyabilir. /verification TUI'da aynı kaynak bağlı kriter tablosunu gösterir.
+
+Bu V4 external STDIO case kabulüdür. Genel repository test runner'ının kendi “PASS” beyanı, arbitrary framework discovery, bütün V0–V5 katmanları, analysis raporunun semantik kabulü veya üretim release'i değildir. [Güven zinciri ve sınırlar](docs/adr/0013-protected-stdio-observer.md).

@@ -7,22 +7,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 )
 
-type Guards struct {
-	RawIntentAvailable       bool
-	GoalCoverageReviewed     bool
-	ManifestCoherent         bool
-	ManifestIntact           bool
-	ProtectedOriginIntact    bool
-	SourceEnforcement        bool
-	ProcessTreeQuiescent     bool
-	NoRelevantUnknownEffects bool
-	NoStalePreconditions     bool
-	NoPolicyViolation        bool
-	PolicyViolation          bool
-	RequiredGateFailed       bool
-	RequiredGatesPass        bool
-	NoPendingInput           bool
-}
+type Guards = c.VerificationGuards
 type Assessment struct {
 	Quality  c.Quality            `json:"quality_verdict"`
 	Criteria map[string]c.Verdict `json:"criteria"`

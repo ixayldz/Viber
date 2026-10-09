@@ -17,25 +17,27 @@ import (
 // CheckRuntime is operator input. Models select IDs, never command lines,
 // images, profiles or observer authority.
 type CheckRuntime struct {
-	SchemaVersion int            `json:"schema_version"`
-	Profile       runner.Profile `json:"profile"`
+	ObserverSuites []verify.StdioSuite `json:"observer_suites,omitempty"`
+	SchemaVersion  int                 `json:"schema_version"`
+	Profile        runner.Profile      `json:"profile"`
 }
 type CheckRunRef struct {
 	ID     string `json:"id"`
 	Digest string `json:"digest"`
 }
 type CheckRun struct {
-	SchemaVersion int           `json:"schema_version"`
-	TaskID        string        `json:"task_id"`
-	CallID        string        `json:"call_id"`
-	CheckID       string        `json:"check_id"`
-	SpecVersion   int64         `json:"spec_version"`
-	PolicyEpoch   int64         `json:"policy_epoch"`
-	Generation    int64         `json:"generation"`
-	OriginDigest  string        `json:"origin_digest"`
-	Outcome       string        `json:"computation_outcome"`
-	Discovery     string        `json:"discovery_authority"`
-	Result        runner.Result `json:"result"`
+	Observer      *ObservedEvidence `json:"observer,omitempty"`
+	SchemaVersion int               `json:"schema_version"`
+	TaskID        string            `json:"task_id"`
+	CallID        string            `json:"call_id"`
+	CheckID       string            `json:"check_id"`
+	SpecVersion   int64             `json:"spec_version"`
+	PolicyEpoch   int64             `json:"policy_epoch"`
+	Generation    int64             `json:"generation"`
+	OriginDigest  string            `json:"origin_digest"`
+	Outcome       string            `json:"computation_outcome"`
+	Discovery     string            `json:"discovery_authority"`
+	Result        runner.Result     `json:"result"`
 }
 type CheckSummary struct {
 	CheckID      string `json:"check_id"`
@@ -50,7 +52,7 @@ type CheckSummary struct {
 func checkTools() []model.Tool {
 	return []model.Tool{
 		{Name: "check_run", Description: "Run one registered operator check ID in its pinned offline readonly Docker environment. No host fallback. Exit zero is computation evidence only; discovery and goal verification remain UNKNOWN.", Parameters: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"],"additionalProperties":false}`)},
-		{Name: "check_output", Description: "Read an exact-byte page of retained untrusted check stdout or stderr by run ID. Offset is a byte position; missing pages are not proof of absence.", Parameters: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"},"stream":{"type":"string","enum":["stdout","stderr"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["run_id","stream","offset","limit"],"additionalProperties":false}`)},
+		{Name: "check_output", Description: "Read an exact-byte page of ordinary untrusted check output. Independent observer output is local operator only because it can echo protected fixture data. Missing pages are not proof of absence.", Parameters: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"},"stream":{"type":"string","enum":["stdout","stderr"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":16384}},"required":["run_id","stream","offset","limit"],"additionalProperties":false}`)},
 	}
 }
 func validateCheckRuntime(doc Document) error {
@@ -62,6 +64,9 @@ func validateCheckRuntime(doc Document) error {
 	}
 	if doc.CheckRuntime.SchemaVersion != 1 || doc.CheckRuntime.Profile.Validate() != nil || doc.Protection == nil || len(doc.Protection.Plan.Checks) == 0 || len(doc.CheckRuns) > 256 {
 		return c.Fail(c.InvalidArgument, "registered protected checks and valid bounded runtime required")
+	}
+	if err := validateObserverConfig(doc); err != nil {
+		return err
 	}
 	digest, err := c.Digest(doc.CheckRuntime.Profile)
 	if err != nil {
@@ -100,6 +105,9 @@ func (s *Session) readCheckRun(doc Document, ref CheckRunRef) (CheckRun, error) 
 	}
 	if err = c.DecodeStrict(raw, &record); err != nil {
 		return record, err
+	}
+	if record.Observer != nil {
+		return record, s.validateObservedEvidence(doc, ref, record)
 	}
 	if doc.CheckRuntime == nil || doc.Protection == nil || record.SchemaVersion != 1 || record.TaskID != doc.TaskID || record.CallID != ref.ID || record.CallID == "" || record.SpecVersion < 1 || record.SpecVersion > doc.Spec.Version || record.PolicyEpoch < 1 || record.Generation < 1 || record.OriginDigest != doc.Spec.ProtectedOrigin || record.Discovery != "UNTRUSTED_UNRESOLVED" || record.Outcome != checkOutcome(record.Result) || record.Result.SchemaVersion != 1 || record.Result.DurationMillis < 0 || !c.ValidDigest(record.Result.ContainerID) {
 		return record, c.Fail(c.StoreIntegrityError, "check receipt authority binding mismatch")
@@ -156,6 +164,13 @@ func (s *Session) CheckSummaries(doc Document, state c.TaskState) ([]CheckSummar
 				continue
 			}
 			summary = CheckSummary{CheckID: check.ID, RunID: ref.ID, Digest: ref.Digest, Candidate: record.Result.CandidateDigest, Current: record.Result.CandidateDigest == doc.Candidate.SnapshotDigest && record.SpecVersion == doc.Spec.Version && record.PolicyEpoch == state.PolicyEpoch, Outcome: record.Outcome, Verification: "UNKNOWN"}
+			if record.Observer != nil {
+				summary.Candidate = record.Observer.Binding.CandidateDigest
+				summary.Current = observedCurrent(doc, state, record)
+				if summary.Current && observerFacts(record.Observer.Current) && observerFacts(record.Observer.Baseline) {
+					summary.Verification = string(record.Observer.Current.Verdict)
+				}
+			}
 		}
 		result = append(result, summary)
 	}
@@ -163,44 +178,11 @@ func (s *Session) CheckSummaries(doc Document, state c.TaskState) ([]CheckSummar
 }
 func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Document, call model.Call) (any, error) {
 	if call.Name == "check_output" {
-		var args struct {
-			RunID  string `json:"run_id"`
-			Stream string `json:"stream"`
-			Offset int64  `json:"offset"`
-			Limit  int64  `json:"limit"`
-		}
+		var args checkOutputQuery
 		if err := c.DecodeStrict(call.Arguments, &args); err != nil {
 			return nil, err
 		}
-		if args.Offset < 0 || args.Limit < 1 || args.Limit > 16384 || args.Stream != "stdout" && args.Stream != "stderr" {
-			return nil, c.Fail(c.InvalidArgument, "invalid check output byte page")
-		}
-		for _, ref := range doc.CheckRuns {
-			if ref.ID != args.RunID {
-				continue
-			}
-			record, err := s.readCheckRun(*doc, ref)
-			if err != nil {
-				return nil, err
-			}
-			data := record.Result.Stdout
-			if args.Stream == "stderr" {
-				data = record.Result.Stderr
-			}
-			if args.Offset > int64(len(data)) {
-				return nil, c.Fail(c.InvalidArgument, "output offset outside retained bytes")
-			}
-			end := min(args.Offset+args.Limit, int64(len(data)))
-			return struct {
-				RunID    string `json:"run_id"`
-				Stream   string `json:"stream"`
-				Bytes    []byte `json:"untrusted_exact_bytes"`
-				Total    int64  `json:"total_bytes"`
-				Next     int64  `json:"next_offset"`
-				Complete bool   `json:"complete"`
-			}{args.RunID, args.Stream, data[args.Offset:end], int64(len(data)), end, end == int64(len(data))}, nil
-		}
-		return nil, c.Fail(c.InvalidArgument, "run ID unavailable in this task")
+		return s.readCheckOutput(*doc, args, false)
 	}
 	var args struct {
 		CheckID string `json:"check_id"`
@@ -259,6 +241,9 @@ func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Docu
 	}
 	if err = policy.Admit(s.layers(fresh, *doc), policy.Action{Epoch: fresh.PolicyEpoch, Generation: fresh.KernelGeneration, InputBarrier: fresh.InputBarrier, Effect: "check.run"}); err != nil {
 		return nil, err
+	}
+	if suite, check, ok := observerSuite(*doc, args.CheckID); ok {
+		return s.executeObservedCheck(ctx, fresh, doc, call, broker, materialized.SourceDirectory, check, suite)
 	}
 	result, runErr := broker.Run(ctx, materialized.SourceDirectory, doc.CheckRuntime.Profile, runner.Invocation{CandidateDigest: doc.Candidate.SnapshotDigest, Argv: argv})
 	if runErr != nil {

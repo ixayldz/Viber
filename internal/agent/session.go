@@ -1,6 +1,7 @@
 // Package agent coordinates an offline fixture coding loop through durable
 // intents, immutable candidate artifacts and bounded native tools. It is a
-// controlled engineering profile; it cannot issue VERIFIED or live writes.
+// controlled engineering profile. Reviewed external V4 behavior can finalize
+// VERIFIED candidate-only results; there is no live-write or release-ready claim.
 package agent
 
 import (
@@ -63,44 +64,46 @@ type Pending struct {
 	Status          string `json:"status"`
 }
 type Document struct {
-	Config              *config.Resolved    `json:"retained_config,omitempty"`
-	ResourcePolicy      *c.ResourcePolicy   `json:"store_resource_policy,omitempty"`
-	Compactions         []CompactionRef     `json:"compactions,omitempty"`
-	Pins                []ContextPin        `json:"context_pins,omitempty"`
-	ProfileHistory      []RuntimeProfileRef `json:"profile_history,omitempty"`
-	AttemptOrigin       *AttemptOrigin      `json:"attempt_origin,omitempty"`
-	TaskKind            string              `json:"task_kind,omitempty"`
-	MaxRepairs          int                 `json:"max_repairs,omitempty"`
-	RepairAttempts      int                 `json:"repair_attempts,omitempty"`
-	FinalArtifactDigest string              `json:"final_artifact_digest,omitempty"`
-	CheckRuntime        *CheckRuntime       `json:"check_runtime,omitempty"`
-	CheckRuns           []CheckRunRef       `json:"check_runs,omitempty"`
-	StoreTokens         *c.TokenLimits      `json:"store_token_limits,omitempty"`
-	Runtime             *LocalRuntime       `json:"runtime,omitempty"`
-	Plan                *plan.State         `json:"plan,omitempty"`
-	Protection          *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
-	Context             *ContextAudit       `json:"context,omitempty"`
-	Requests            []UserRequest       `json:"requests,omitempty"`
-	SchemaVersion       int                 `json:"schema_version"`
-	TaskID              string              `json:"task_id"`
-	Spec                c.TaskSpec          `json:"spec"`
-	Baseline            artifact.Ref        `json:"baseline"`
-	Candidate           artifact.Ref        `json:"candidate"`
-	Messages            []model.Message     `json:"messages"`
-	ToolCursor          int64               `json:"tool_cursor"`
-	PendingReplies      []model.Reply       `json:"pending_replies"`
-	Budget              Budget              `json:"budget"`
-	AllowUnverified     bool                `json:"allow_unverified"`
-	Autonomy            string              `json:"autonomy"`
-	FixtureDigest       string              `json:"fixture_digest"`
-	FixtureCursor       int64               `json:"fixture_cursor"`
-	Pending             *Pending            `json:"pending"`
-	UnknownEffect       bool                `json:"unknown_effect"`
-	Blocker             string              `json:"blocker"`
-	FinalSummary        string              `json:"final_summary"`
-	FinalReady          bool                `json:"final_ready"`
-	LastNoDispatch      bool                `json:"last_no_dispatch,omitempty"`
-	LastResponseBlob    string              `json:"last_response_blob"`
+	GoalCoverage        *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
+	VerificationReport  string                   `json:"verification_report,omitempty"`
+	Config              *config.Resolved         `json:"retained_config,omitempty"`
+	ResourcePolicy      *c.ResourcePolicy        `json:"store_resource_policy,omitempty"`
+	Compactions         []CompactionRef          `json:"compactions,omitempty"`
+	Pins                []ContextPin             `json:"context_pins,omitempty"`
+	ProfileHistory      []RuntimeProfileRef      `json:"profile_history,omitempty"`
+	AttemptOrigin       *AttemptOrigin           `json:"attempt_origin,omitempty"`
+	TaskKind            string                   `json:"task_kind,omitempty"`
+	MaxRepairs          int                      `json:"max_repairs,omitempty"`
+	RepairAttempts      int                      `json:"repair_attempts,omitempty"`
+	FinalArtifactDigest string                   `json:"final_artifact_digest,omitempty"`
+	CheckRuntime        *CheckRuntime            `json:"check_runtime,omitempty"`
+	CheckRuns           []CheckRunRef            `json:"check_runs,omitempty"`
+	StoreTokens         *c.TokenLimits           `json:"store_token_limits,omitempty"`
+	Runtime             *LocalRuntime            `json:"runtime,omitempty"`
+	Plan                *plan.State              `json:"plan,omitempty"`
+	Protection          *verify.CheckOrigin      `json:"protected_check_origin,omitempty"`
+	Context             *ContextAudit            `json:"context,omitempty"`
+	Requests            []UserRequest            `json:"requests,omitempty"`
+	SchemaVersion       int                      `json:"schema_version"`
+	TaskID              string                   `json:"task_id"`
+	Spec                c.TaskSpec               `json:"spec"`
+	Baseline            artifact.Ref             `json:"baseline"`
+	Candidate           artifact.Ref             `json:"candidate"`
+	Messages            []model.Message          `json:"messages"`
+	ToolCursor          int64                    `json:"tool_cursor"`
+	PendingReplies      []model.Reply            `json:"pending_replies"`
+	Budget              Budget                   `json:"budget"`
+	AllowUnverified     bool                     `json:"allow_unverified"`
+	Autonomy            string                   `json:"autonomy"`
+	FixtureDigest       string                   `json:"fixture_digest"`
+	FixtureCursor       int64                    `json:"fixture_cursor"`
+	Pending             *Pending                 `json:"pending"`
+	UnknownEffect       bool                     `json:"unknown_effect"`
+	Blocker             string                   `json:"blocker"`
+	FinalSummary        string                   `json:"final_summary"`
+	FinalReady          bool                     `json:"final_ready"`
+	LastNoDispatch      bool                     `json:"last_no_dispatch,omitempty"`
+	LastResponseBlob    string                   `json:"last_response_blob"`
 }
 type Session struct {
 	creationFault func(c.ExecutionState) error
@@ -199,6 +202,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 		return state, doc, err
 	}
 	if err = s.validateFinalArtifact(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateVerificationReport(state, doc); err != nil {
 		return state, doc, err
 	}
 	if err = s.validateChecks(doc); err != nil {
@@ -302,6 +308,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	GoalReview      *verify.GoalReview
 	Config          *config.Resolved
 	ResourcePolicy  *c.ResourcePolicy
 	AttemptOrigin   *AttemptOrigin
@@ -425,6 +432,13 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 		return c.TaskState{}, err
 	}
 	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	if options.GoalReview != nil {
+		reviewed, reviewErr := verify.ReviewCoverage(doc.Spec, doc.Protection.Plan, checkSetDigest(doc), *options.GoalReview)
+		if reviewErr != nil {
+			return c.TaskState{}, reviewErr
+		}
+		doc.GoalCoverage = &reviewed
+	}
 	if err = validateLoop(doc); err != nil {
 		return c.TaskState{}, err
 	}
@@ -455,7 +469,7 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 			return state, err
 		}
 	}
-	return s.transition(ctx, state, c.Ready, "", "restricted registered tools; strong verification unavailable")
+	return s.transition(ctx, state, c.Ready, "", "restricted registered tools; independent observer requires current operator review")
 }
 func disjointSession(a, b string) bool { return fileguard.Disjoint(a, b) }
 func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
@@ -492,6 +506,9 @@ func (s *Session) final(ctx context.Context, state c.TaskState, doc Document) (c
 	}
 	if blocker != "" {
 		return s.repairFinal(ctx, state, doc, blocker)
+	}
+	if verified, done, err := s.tryVerifiedFinal(ctx, state, doc); err != nil || done {
+		return verified, err
 	}
 	requestIndex := -1
 	if !doc.AllowUnverified {
@@ -891,6 +908,12 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		state, err = s.record(commitCtx, state, doc, kind, payload)
 		if err != nil {
 			return state, doc, err
+		}
+		if call.Name == "check_run" && doc.CheckRuntime != nil && len(doc.CheckRuntime.ObserverSuites) > 0 {
+			state, err = s.recordObservedAssessment(commitCtx, state, doc)
+			if err != nil {
+				return state, doc, err
+			}
 		}
 		var resourceError *c.Error
 		if errors.As(toolErr, &resourceError) && resourceError.Code == c.BudgetLimitReached {

@@ -13,7 +13,7 @@ Her paket için contract + gerçek agent/CLI wiring + anlamlı saldırgan/recove
 | C01 | FR-16/17/18: bounded archive compaction, source-bound history page, context pin, safe model switch | Pending/UNKNOWN dispatch switch/compaction engeli; bütün authoritative state korunur; provider opaque continuation taşınmaz; backup/fresh restore lineage; context overflow dispatch öncesi | IMPLEMENTING |
 | C02 | FR-09/NFR-06: multi-resource admission/control reserve | Transaction-atomic money/CPU/disk/time/child; physical reserve exhaustion/cancel fixtures; unknown reconciliation | IMPLEMENTING |
 | C03 | FR-26/NFR-07/09/11: retention/delete/GC | Silinebilir payload vs envelope; tombstone/shared refs/managed copies; backup watermark no-revival; quiescence | IMPLEMENTING |
-| C04 | FR-11/NFR-03: trusted verifier/goal coverage | Protected observer, result/discovery protocol, closure review/revision, V0-V5/baseline/flaky; fake PASS ve stale receipt reddi | OPEN |
+| C04 | FR-11/NFR-03: trusted verifier/goal coverage | Protected observer, result/discovery protocol, closure review/revision, V0-V5/baseline/flaky; fake PASS ve stale receipt reddi | IMPLEMENTING |
 | C05 | FR-07/08/15/33: environment/process/fencing/mutex | Gerçek Docker/WSL namespace/credential/child/rootless/race matrix; old owner publish engeli; env invalidation | OPEN |
 | C06 | FR-21: apply/restore | Teknik exclusive-access capability, per-file receipts, partial-write reconciliation, conflict + kullanıcı edit koruması, merge reverify; unsupported backend fail-closed | OPEN |
 | C07 | FR-12/25/NFR-10: supervisor/JSONL | Background lifecycle, secure detach/attach, cursor/gap/resync, backpressure, orphan recovery | IMPLEMENTING |
@@ -61,3 +61,11 @@ Güncel sabit kaynak kopyası Windows full suite: **539 PASS / 4 SKIP / 0 FAIL**
 Root LICENSE kararı kod sahibinden beklenmektedir. Paketleme/signature/independent pilot ve gerçek hesap/native platform kabulü anahtarsız dış karar/kabul işleridir. Bunlar API anahtarı bekleyen provider testleri diye yeniden sınıflandırılmaz.
 
 C11: exact committed revision source archive, pinned offline dependency verification, dependency/Go license material, CycloneDX inventory, twice-built byte-identical binaries ve manifest-last hashes komutu uygulandı. Temporary Git fixture smoke PASS. Root LICENSE kararı, signing/install/update/rollback/pilot gate bu komutla kapanmaz.
+
+## C04 korunan V4 gözlemci dilimi
+
+Kernel-owned exact STDIO observer aday kodu observer içinde çalıştırmaz. Golden case/oracle source mount'una veya model context'ine girmez. Profile/image/argv/stdin/candidate bound fresh non-root readonly/network-none Docker subject, explicit case discovery, 2..4 repeats, distinct container identities, baseline comparison, fail-preserving attempts ve unknown cleanup guard uygulanmıştır. Protected output model tool'una verilmez; local operator case/repeat/baseline paging ile okuyabilir.
+
+Operator raw-input/required-goal/dependency review pre-mutation origin ve suite digest'lerine bağlıdır. Nonfinal quality PARTIAL/FAILED olabilir; frozen artifact/report transaction bütün guards ile VERIFIED candidate-only finalization ve exit 0 verebilir. Bu generic framework self-report, whole V0–V5 veya release-ready iddiası değildir. Authorized check revision/dependency discovery/framework verifier families ayrı geliştirme olarak sürmektedir; API anahtarı beklemezler.
+
+Sabit .cache/validation-0.9-observer kaynak kopyası Windows full suite: 579 PASS / 6 SKIP / 0 FAIL. Dört opt-in Docker ve iki symlink privilege SKIP vardır. Gerçek pinned Docker acceptance ayrıca PASS: no-op verified candidate; baseline FAIL→changed candidate PASS; fake stdout PASS→FAILED; source unchanged; all attempts retained. Native CLI observer-demo (recipe→goal review→verification→exact case paging) PASS. Aynı sabit kopyanın Linux full race turu 585 PASS / 4 SKIP / 0 FAIL; module verify/vet/Linux build/doctor PASS. Bütün Darwin arm64 paketleri ve binary COMPILE_ONLY; native macOS acceptance değildir. ADR 0013 ve VALIDATION ayrıntıları korur.

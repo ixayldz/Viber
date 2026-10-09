@@ -81,7 +81,7 @@ func (s *Session) finalBlocker(doc Document, state c.TaskState) (string, error) 
 			return "", err
 		}
 		for _, check := range checks {
-			if !check.Current || check.Outcome != "EXIT_ZERO" {
+			if !check.Current || (check.Outcome != "EXIT_ZERO" && check.Outcome != "OBSERVER_PASS") {
 				return "CURRENT_REGISTERED_CHECKS_REQUIRED", nil
 			}
 		}
@@ -95,6 +95,7 @@ func (s *Session) repairFinal(ctx context.Context, state c.TaskState, doc Docume
 	doc.RepairAttempts++
 	doc.FinalReady = false
 	doc.FinalArtifactDigest = ""
+	doc.VerificationReport = ""
 	doc.Blocker = ""
 	doc.Messages = append(doc.Messages, model.Message{Role: "user", Text: "Kernel completion feedback (not new user intent or permissions): " + reason + ". Continue the existing authorized goal through native tools. Complete pending plan nodes and run current registered checks. Return a bounded final summary only when these obligations are resolved. This repair consumes the existing work budget."})
 	return s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})

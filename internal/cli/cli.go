@@ -28,7 +28,8 @@ Usage:
   viber auth login|status|profiles|select|models|logout|migrate-storage [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber check-config --runtime FILE [--plan FILE] [--json]
-  viber context-why|checks|report TASK --store PATH [--json]
+  viber check-prepare --file RECIPE --output FRESH_FILE
+  viber context-why|checks|verification|report TASK --store PATH [--json]
   viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
   viber attempt TASK --store PATH --new-task ID --parent-seq N [--fixture FILE] [--allow-unverified] [--detach] [--json]
@@ -72,7 +73,8 @@ Usage:
 Snapshot and proposal-check are developer previews. They do not write source.
 Offline Docker broker and provider protocol fixtures are engineering surfaces.
 Production backend/provider conformance is pending. Offline fixture sessions
-never produce VERIFIED; limited delivery requires --allow-unverified and exits 2.
+Default fixtures remain UNVERIFIED; limited delivery exits 2. Reviewed external V4
+STDIO evidence can issue VERIFIED candidate-only results. ReleaseReady stays false.
 The implementation/release plan is in docs/IMPLEMENTATION_PLAN.md.
 `
 
@@ -143,11 +145,13 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runContinuityEdit(args[0], args[1:], out, errout)
 	case "check-config":
 		return runCheckConfig(args[1:], out, errout)
+	case "check-prepare":
+		return runCheckPrepare(args[1:], out, errout)
 	case "auth":
 		return runAuth(args[1:], out, errout)
 	case "attempt":
 		return runAttempt(args[1:], out, errout)
-	case "context-why", "context-page", "checks", "check-output", "report", "history-page", "continuity-info", "resources":
+	case "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources":
 		return runObservation(args[0], args[1:], out, errout)
 	case "budget":
 		return runTokenLedger(args[1:], out, errout)

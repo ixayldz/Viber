@@ -122,7 +122,7 @@ func (g *gcTracer) document(task, digest string) error {
 			return err
 		}
 	}
-	for _, digest := range []string{doc.FixtureDigest, doc.LastResponseBlob, doc.FinalArtifactDigest} {
+	for _, digest := range []string{doc.FixtureDigest, doc.LastResponseBlob, doc.FinalArtifactDigest, doc.VerificationReport} {
 		if err = g.blob(task, digest); err != nil {
 			return err
 		}
@@ -167,7 +167,7 @@ func (g *gcTracer) document(task, digest string) error {
 		if err != nil {
 			return err
 		}
-		if err = g.snapshot(artifact.Ref{SchemaVersion: 1, TaskID: task, SnapshotDigest: record.Result.CandidateDigest}); err != nil {
+		if err = g.snapshot(artifact.Ref{SchemaVersion: 1, TaskID: task, SnapshotDigest: checkCandidate(record)}); err != nil {
 			return err
 		}
 	}
