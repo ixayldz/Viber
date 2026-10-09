@@ -217,3 +217,31 @@ func FuzzBoundLiteralQuerySourceValidity(f *testing.F) {
 		}
 	})
 }
+func TestSQLitePageExhaustionIsTypedFallbackAndPreservesCancellation(t *testing.T) {
+	index := openIndex(t, []Document{document("src/source", "value")})
+	ctx := context.Background()
+	if _, err := index.db.ExecContext(ctx, "CREATE TABLE bounded_test(v)"); err != nil {
+		t.Fatal(err)
+	}
+	var pages int
+	if err := index.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.db.ExecContext(ctx, fmt.Sprintf("PRAGMA max_page_count=%d", pages)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := index.db.ExecContext(ctx, "INSERT INTO bounded_test VALUES(zeroblob(1048576))")
+	if err == nil {
+		t.Fatal("fixture did not exhaust SQLite pages")
+	}
+	mapped := boundedBuildError(ctx, err)
+	var failure *c.Error
+	if !errors.As(mapped, &failure) || failure.Code != c.UnsupportedCapability {
+		t.Fatal("resource bound not usable as literal fallback", mapped)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if !errors.Is(boundedBuildError(canceled, err), context.Canceled) {
+		t.Fatal("cancellation reinterpreted as fallback")
+	}
+}

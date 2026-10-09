@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/policy"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const Version = "SOURCE_FTS5_BM25_TRIGRAM_RRF_V1"
@@ -69,10 +70,13 @@ func New(ctx context.Context, binding Binding, documents []Document) (*Index, er
 	refs := []struct{ Path, Digest string }{}
 	for _, doc := range ordered {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, boundedBuildError(ctx, err)
 		}
 		if int64(len(doc.Bytes)) > MaxBytes-index.manifest.SourceBytes {
 			return nil, c.Fail(c.UnsupportedCapability, "index source byte bound exceeded")
+		}
+		if len(doc.Path) > 4096 {
+			return nil, c.Fail(c.UnsupportedCapability, "index source path bound exceeded")
 		}
 		doc.Bytes = bytes.Clone(doc.Bytes)
 		if !policy.SafePath(doc.Path) || !c.ValidDigest(doc.Digest) || c.HashBytes(doc.Bytes) != doc.Digest {
@@ -123,11 +127,11 @@ func New(ctx context.Context, binding Binding, documents []Document) (*Index, er
 	var err error
 	index.manifest.SourceSet, err = c.Digest(refs)
 	if err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	index.db, err = sql.Open("sqlite", ":memory:")
 	if err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	index.db.SetMaxOpenConns(1)
 	success := false
@@ -147,25 +151,25 @@ func New(ctx context.Context, binding Binding, documents []Document) (*Index, er
 	}
 	tx, err := index.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	defer tx.Rollback()
 	for n, item := range index.chunks {
 		for _, table := range []string{"lexical", "substrings"} {
 			if _, err = tx.ExecContext(ctx, "INSERT INTO "+table+"(rowid,path,body) VALUES(?,?,?)", n+1, item.path, item.text); err != nil {
-				return nil, err
+				return nil, boundedBuildError(ctx, err)
 			}
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	var pages, size int64
 	if err = index.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	if err = index.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size); err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	index.manifest.SQLiteBytes = pages * size
 	index.manifest.Chunks = len(index.chunks)
@@ -175,7 +179,17 @@ func New(ctx context.Context, binding Binding, documents []Document) (*Index, er
 }
 func (index *Index) Close() error       { return index.db.Close() }
 func (index *Index) Manifest() Manifest { return index.manifest }
-func phrase(query string) string        { return `"` + strings.ReplaceAll(query, `"`, `""`) + `"` }
+func boundedBuildError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var sqliteError *sqlite.Error
+	if errors.As(err, &sqliteError) && (sqliteError.Code()&255 == 7 || sqliteError.Code()&255 == 13) {
+		return c.Fail(c.UnsupportedCapability, "bounded SQLite memory/page capacity exhausted; use literal search")
+	}
+	return err
+}
+func phrase(query string) string { return `"` + strings.ReplaceAll(query, `"`, `""`) + `"` }
 func terms(query string) string {
 	words := strings.FieldsFunc(query, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r >= 128 || r == '_')
@@ -195,14 +209,14 @@ func (index *Index) rows(ctx context.Context, table, query string) ([]int, error
 	}
 	rows, err := index.db.QueryContext(ctx, fmt.Sprintf("SELECT rowid FROM %s WHERE %s MATCH ? ORDER BY bm25(%s, 2.0, 1.0), rowid LIMIT 512", table, table, table), query)
 	if err != nil {
-		return nil, err
+		return nil, boundedBuildError(ctx, err)
 	}
 	defer rows.Close()
 	ids := []int{}
 	for rows.Next() {
 		var id int
 		if err = rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, boundedBuildError(ctx, err)
 		}
 		if id < 1 || id > len(index.chunks) {
 			return nil, c.Fail(c.StoreIntegrityError, "invalid index reference")
