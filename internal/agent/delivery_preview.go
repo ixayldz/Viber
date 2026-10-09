@@ -142,5 +142,15 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 	if err != nil {
 		return result, err
 	}
+	physical, err := fileguard.DirectoryIdentity(root)
+	if err != nil {
+		return result, err
+	}
+	files := append([]BackupFile{}, result.Files...)
+	files = append(files, BackupFile{Path: "manifest.json", Digest: c.HashBytes(raw), Size: int64(len(raw))})
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	if err = s.registerManagedCopy(ctx, ManagedCopy{Kind: "DELIVERY_PREVIEW", Directory: root.Name(), PhysicalRoot: physical, Files: files, Tasks: []string{task}}); err != nil {
+		return result, err
+	}
 	return result, fileguard.Publish(root, "manifest.json", raw)
 }

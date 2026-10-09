@@ -10,6 +10,7 @@ parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
 parser.add_argument("--privacy", action="store_true")
 parser.add_argument("--retrieval", action="store_true")
+parser.add_argument("--delivery", action="store_true")
 args = parser.parse_args()
 events = [json.loads(line) for line in args.evidence.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
 started = {(e["Package"], e["Test"]) for e in events if e.get("Action") == "run" and e.get("Test")}
@@ -21,6 +22,15 @@ finished = {e["Package"] for e in events if e.get("Action") in {"pass", "skip"} 
 if failed or not passed or packages != finished or started != passed | skipped:
     raise SystemExit("FAIL: incomplete or failing Go test evidence")
 required = set()
+if args.delivery:
+    required |= {
+        "TestMergedReverificationImportsFreshImmutableCandidateWithoutOldAuthority",
+        "TestMergedReverificationRejectsStaleTamperedAndUnregisteredPreviews",
+        "TestMergedReverificationReconcilesCreatedTaskAfterRestart",
+        "TestDeliveryReverificationCLIUsesOwnerAndDeduplicatesImmutableCreation",
+        "TestDeliveryReverificationMissingStoreAndTaskMismatchHaveNoEffects",
+        "TestOperatorDeliveryPreviewPreservesUserBytesAndHistoricalTask",
+    }
 if args.retrieval:
     required |= {
         "TestContextEffectivenessRelevanceAndExactSources",
@@ -69,6 +79,7 @@ if args.docker:
         "TestActualObserverBaselineFailCandidatePassAndForgedPASS",
         "TestActualNativeOwnerCrashRecoveryFencesOrphanAndKeepsVerificationUnknown",
         "TestActualIndependentHiddenFailureOverridesSelfVerifiedOnlyInEvaluation",
+        "TestActualDockerMergedCandidateReverificationRunsFreshRegisteredChecks",
     }
 if args.migration:
     required |= {

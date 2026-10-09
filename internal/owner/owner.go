@@ -323,6 +323,20 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "deletion envelope binding mismatch")
 		}
 		return o.Session.DeleteContent(ctx, command)
+	case "delivery-reverify":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "merged task creation requires a quiescent owner")
+		}
+		var command agent.DeliveryReverificationCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.CommandID != request.ID || command.ParentTask != request.TaskID {
+			return nil, c.Fail(c.InvalidArgument, "delivery command envelope mismatch")
+		}
+		return o.Session.CreateDeliveryReverification(ctx, command)
 	case "store-gc", "store-gc-preview":
 		o.mu.Lock()
 		defer o.mu.Unlock()

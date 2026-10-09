@@ -244,7 +244,7 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	sort.Slice(plan.Copies, func(i, j int) bool { return plan.Copies[i].Directory < plan.Copies[j].Directory })
 	// Validate exact registered bytes now; mutations after preview remain failures.
 	for _, copy := range plan.Copies {
-		if err = checkManagedCopy(copy, true); err != nil {
+		if err = checkManagedCopy(ctx, copy, true); err != nil {
 			return plan, err
 		}
 	}
@@ -257,7 +257,10 @@ func (s *Session) DeletionPreview(ctx context.Context, task string) (DeletionPla
 	defer s.mu.Unlock()
 	return s.deletionPlanLocked(ctx, task)
 }
-func checkManagedCopy(copy ManagedCopy, permitAbsent bool) error {
+func checkManagedCopy(ctx context.Context, copy ManagedCopy, permitAbsent bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	root, err := os.OpenRoot(copy.Directory)
 	if errors.Is(err, os.ErrNotExist) && permitAbsent {
 		return nil
@@ -275,7 +278,7 @@ func checkManagedCopy(copy ManagedCopy, permitAbsent bool) error {
 	}
 	inventory := copy
 	inventory.Files = []BackupFile{}
-	inventory, err = captureManagedAllocation(context.Background(), inventory)
+	inventory, err = captureManagedAllocation(ctx, inventory)
 	if err != nil {
 		return err
 	}
@@ -290,6 +293,9 @@ func checkManagedCopy(copy ManagedCopy, permitAbsent bool) error {
 		}
 	}
 	for _, f := range copy.Files {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		raw, err := fileguard.ReadRegular(root, f.Path, backupMaxBytes)
 		if errors.Is(err, os.ErrNotExist) && permitAbsent {
 			continue
@@ -306,8 +312,8 @@ func checkManagedCopy(copy ManagedCopy, permitAbsent bool) error {
 	}
 	return nil
 }
-func purgeManagedCopy(copy ManagedCopy) error {
-	if err := checkManagedCopy(copy, true); err != nil {
+func purgeManagedCopy(ctx context.Context, copy ManagedCopy) error {
+	if err := checkManagedCopy(ctx, copy, true); err != nil {
 		return err
 	}
 	root, err := os.OpenRoot(copy.Directory)
@@ -319,12 +325,15 @@ func purgeManagedCopy(copy ManagedCopy) error {
 	}
 	defer root.Close()
 	for _, f := range copy.Files {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := fileguard.RemoveBound(root, f.Path, f.Digest, f.Size, backupMaxBytes); err != nil {
 			return err
 		}
 	}
 	copy.Files = []BackupFile{}
-	return checkManagedCopy(copy, true)
+	return checkManagedCopy(ctx, copy, true)
 }
 
 // DeleteContent publishes a separate authority intent before any byte removal.
@@ -482,7 +491,7 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	// Verify remaining paths before side effects. Missing paths are only valid
 	// because the external intent and journal tombstone are already durable.
 	for _, copy := range plan.Copies {
-		if err = checkManagedCopy(copy, true); err != nil {
+		if err = checkManagedCopy(ctx, copy, true); err != nil {
 			return result, err
 		}
 	}
@@ -498,7 +507,7 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		if err = ctx.Err(); err != nil {
 			return result, err
 		}
-		if err = purgeManagedCopy(copy); err != nil {
+		if err = purgeManagedCopy(ctx, copy); err != nil {
 			return result, err
 		}
 	}

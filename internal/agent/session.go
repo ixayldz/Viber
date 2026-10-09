@@ -68,6 +68,7 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
+	MergedDelivery        *MergedDeliveryOrigin    `json:"merged_delivery_origin,omitempty"`
 	NativeCleanupAttempts []string                 `json:"native_cleanup_receipts,omitempty"`
 	GoalCoverage          *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
 	VerificationReport    string                   `json:"verification_report,omitempty"`
@@ -375,6 +376,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	mergedDelivery    *MergedDeliveryOrigin
 	evaluationCapture *workspace.Capture
 	GoalReview        *verify.GoalReview
 	Config            *config.Resolved
@@ -522,6 +524,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 		return c.TaskState{}, err
 	}
 	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	doc.MergedDelivery = options.mergedDelivery
 	if options.GoalReview != nil {
 		reviewed, reviewErr := verify.ReviewCoverage(doc.Spec, doc.Protection.Plan, checkSetDigest(doc), *options.GoalReview)
 		if reviewErr != nil {

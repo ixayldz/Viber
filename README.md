@@ -141,6 +141,8 @@ Task bittikten sonra kaynakta bağımsız kullanıcı editleri varsa B/C/U üç 
 
 READY çıktısında `merged/` tam birleşmiş candidate'ı, `changes.patch` güncel kaynak → merged farkını taşır. Çakışmada path kararları çıkar, kısmi merged dosyası yayımlanmaz. Canlı kaynak ve Git index değişmez; merged sonuç `UNVERIFIED` olarak yeniden doğrulama ister. [Kullanım, binding, conflict ve sınırlar](docs/DELIVERY_PREVIEW.md).
 
+Parent kayıtlı check runtime'ı içeriyorsa `delivery-reverify` reviewed manifest'ten yeni immutable `ANALYSIS` task'ı oluşturur; `resume` fresh native check'leri çalıştırır. Static local scheduler API anahtarı istemez. Eski PASS/onay/goal review taşınmaz; source/protected closure değişmişse import reddedilir. [Komut dosyası, retry ve kalite sınırı](docs/DELIVERY_PREVIEW.md#birleşmiş-candidateı-tekrar-doğrulama).
+
 Export kullanıcı tarafından istenen yerel bir teslim işlemidir; görevi `VERIFIED` yapmaz ve canlı workspace'e uygulamaz. Bu paket tam store yedeği veya training dataset'i değildir. İçerik kaynak kodu/duyarlı veri taşıyabilir; paylaşmadan önce inceleyin. Genel secret-safe redaction ve privacy deletion henüz tamamlanmamıştır.
 
 ## Review modu: değişiklik öncesi onay

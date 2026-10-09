@@ -38,7 +38,7 @@ jobs:
           mkdir -p evidence
           set -o pipefail
           go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
-          python scripts/verify-test-results.py evidence/tests.jsonl --privacy --retrieval
+          python scripts/verify-test-results.py evidence/tests.jsonl --privacy --retrieval --delivery
       - name: Migration regression
         run: |
           set -o pipefail
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -o pipefail
           go test -race -p 1 -json -count=1 -timeout 15m ./... | tee evidence/race.jsonl
-          python scripts/verify-test-results.py evidence/race.jsonl --privacy --retrieval
+          python scripts/verify-test-results.py evidence/race.jsonl --privacy --retrieval --delivery
       - name: All fuzz targets
         if: runner.os == 'Linux'
         run: bash scripts/fuzz.sh evidence
@@ -82,7 +82,7 @@ jobs:
           docker pull "$VIBER_DOCKER_TEST_IMAGE"
           set -o pipefail
           go test -p 1 -json -count=1 -timeout 15m ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation | tee evidence/docker.jsonl
-          python3 scripts/verify-test-results.py evidence/docker.jsonl --docker
+          python3 scripts/verify-test-results.py evidence/docker.jsonl --docker --delivery
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
