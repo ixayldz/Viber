@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -206,7 +207,10 @@ func TestApplicationMigrationRejectsActiveUnknownAndCorruptEvidence(t *testing.T
 func TestPendingMigrationStopsAdmissionBeforeArtifactOrFixtureWork(t *testing.T) {
 	ctx := context.Background()
 	s, options := migrationFixture(t)
-	backup := filepath.Join(t.TempDir(), "backup")
+	backup, err := fileguard.ResolveProspective(filepath.Join(t.TempDir(), "backup"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	m, err := s.Backup(ctx, backup)
 	if err != nil {
 		t.Fatal(err)
