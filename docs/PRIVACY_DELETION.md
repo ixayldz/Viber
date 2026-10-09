@@ -9,7 +9,7 @@ Görev terminal durumda olmalıdır. Pending/UNKNOWN etkiler, unsettled rezervas
 ```powershell
 $plan = .\bin\viber.exe delete-preview greeting --store $store --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Silme önizlemesi alınamadı.' }
-# objects, managed_copies ve restored_stores alanlarını inceleyin.
+# objects, managed_copies, restored_stores ve staged_attempts alanlarını inceleyin.
 # Paylaşılan backup/support paketi bütün dosyalarıyla silinebilir.
 @{ command_id = 'delete-greeting-001'; plan = $plan } |
     ConvertTo-Json -Depth 64 | Set-Content -Encoding utf8NoBOM .\delete-command.json
@@ -25,6 +25,7 @@ CLI ve background owner aynı sözleşmeyi kullanır. Komuttaki task, CLI task'�
 - Kayıtlı store backup, changeset export, delivery preview ve support türevleri; son marker oluşmamış allocation ve geçici dosyalar dahil.
 - Aynı authority'ye bağlı, bu sürümün restore ettiği private store'larda aynı görev içeriği; her kopya kendi journal cursor/document ve exact dosya envanteriyle plana bağlanır.
 - Restore ilk içerik yazımından önce allocation kaydı oluşturur; henüz journal açılamayan yarım restore stage'leri, SQLite yan dosyaları ve control reserve dahil plana alınır.
+- New attempt ilk inherited input kopyalamadan önce parent/cursor/document/request ve fiziksel owner lineage'ını durable kaydeder. TaskCreated öncesi çöken attempt raw dosyaları parent silme manifest'ine girer. Published child parent'ı pin eder; önce child silinir. Kayıtlı staged ID başka Create/request tarafından devralınamaz; parent silindikten sonra yeniden yayımlanamaz.
 - Retrieval cache scope'u iptal edilir; aktif lease belleği okuyucu bırakınca kapanır. Fiziksel bellek overwrite garantisi verilmez.
 
 Source workspace ve Git index silinmez. Her dosya private root altında single-link regular file, SHA-256/size ve fiziksel root kimliği ile kontrol edilir. Değişmiş/yabancı dosya veya root replacement `PURGED` sonucunu engeller. Recursive host path silme yapılmaz; boş dizinler kalabilir.
@@ -43,4 +44,4 @@ Eski schema 1 backup manifest'i normal `store-restore` tarafından reddedilir. M
 
 `PURGED_MANAGED_LOCAL_CONTENT` yalnız plana bağlı local içerik, kayıtlı ordinary derivative ve restore scope'ları için verilir. Hata sırasında external intent erişimi kapalı tutar, tombstone `PENDING` kalır; aynı komutla devam edilir.
 
-Otomatik TTL retention, metadata/audit retention, farklı scope'lardaki aynı içerik için content-wide deletion, eski/kayıt dışı kopyalar, journal task oluşmadan kesilmiş staged attempt lineage ve ayrı authority kullanan hidden-eval bundle lineage K06'nın kalan işidir. Provider-side silme yapılmaz. SSD/OS kalıntısı, page cache, crash dump veya bağımsız kullanıcı kopyaları için fiziksel erasure iddiası yoktur.
+Otomatik TTL retention, metadata/audit retention, farklı scope'lardaki aynı içerik için content-wide deletion, eski/kayıt dışı kopyalar ve ayrı authority kullanan hidden-eval bundle lineage K06'nın kalan işidir. Provider-side silme yapılmaz. SSD/OS kalıntısı, page cache, crash dump veya bağımsız kullanıcı kopyaları için fiziksel erasure iddiası yoktur.

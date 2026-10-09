@@ -89,6 +89,9 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 	} else if len(options.Fixture) != 0 {
 		return parent, c.Fail(c.InvalidArgument, "local attempt cannot change runtime into a fixture")
 	}
+	if err = s.registerAttemptLineage(ctx, options, parent, digest); err != nil {
+		return parent, err
+	}
 	// Preserve every raw input and source-bound requirement, rather than reducing
 	// the old task into a model narrative or carrying old PASS/approvals.
 	inherited := doc.Spec
@@ -104,6 +107,11 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 		}
 		if _, err = s.Archive.PutBytes(options.NewTask, raw); err != nil {
 			return parent, err
+		}
+		if s.attemptStageFault != nil {
+			if err = s.attemptStageFault(i + 1); err != nil {
+				return parent, err
+			}
 		}
 		inherited.Inputs[i].PayloadRef = "blob://" + options.NewTask + "/" + input.Digest
 	}

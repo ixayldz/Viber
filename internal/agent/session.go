@@ -111,18 +111,19 @@ type Document struct {
 	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
-	publicationMu  sync.RWMutex
-	privacy        *PrivacyAuthority
-	privacyOwner   *privacyOwner
-	retrievalCache *retrieval.Cache
-	instance       RuntimeInstance
-	clockOrigin    time.Time
-	clockDomain    string
-	creationFault  func(c.ExecutionState) error
-	mu             sync.Mutex
-	directory      string
-	Journal        *store.Store
-	Archive        *artifact.Archive
+	publicationMu     sync.RWMutex
+	privacy           *PrivacyAuthority
+	privacyOwner      *privacyOwner
+	retrievalCache    *retrieval.Cache
+	instance          RuntimeInstance
+	clockOrigin       time.Time
+	clockDomain       string
+	creationFault     func(c.ExecutionState) error
+	attemptStageFault func(int) error
+	mu                sync.Mutex
+	directory         string
+	Journal           *store.Store
+	Archive           *artifact.Archive
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {
@@ -417,6 +418,9 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	}
 	if existing, exists := states[options.TaskID]; exists {
 		return existing, c.Fail(c.CommandIDConflict, "task identity already exists; new content cannot be published")
+	}
+	if err := s.validateAttemptAllocation(ctx, options.TaskID, options.AttemptOrigin); err != nil {
+		return c.TaskState{}, err
 	}
 	resourcePolicy, err := s.creationResourcePolicy(ctx, options.ResourcePolicy)
 	if err != nil {

@@ -56,6 +56,7 @@ type privacyRecord struct {
 	Type          string           `json:"type"`
 	Copy          *ManagedCopy     `json:"copy,omitempty"`
 	Command       *DeletionCommand `json:"command,omitempty"`
+	Attempt       *privacyAttempt  `json:"attempt,omitempty"`
 }
 type privacyView struct {
 	Sequence  int64
@@ -63,6 +64,7 @@ type privacyView struct {
 	Watermark int64
 	Copies    []ManagedCopy
 	Deletions map[string]DeletionCommand
+	Attempts  []privacyAttempt
 }
 
 func (authority PrivacyAuthority) validate() error {
@@ -165,7 +167,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 		}
 		switch record.Type {
 		case "MANAGED_COPY":
-			if record.Copy == nil || record.Command != nil || validateManagedCopy(*record.Copy) != nil {
+			if record.Copy == nil || record.Command != nil || record.Attempt != nil || validateManagedCopy(*record.Copy) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "managed copy record invalid")
 			}
 			replaced := false
@@ -184,7 +186,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				view.Copies = append(view.Copies, *record.Copy)
 			}
 		case "DELETE_INTENT":
-			if record.Command == nil || record.Copy != nil || validateDeletionCommand(*record.Command) != nil {
+			if record.Command == nil || record.Copy != nil || record.Attempt != nil || validateDeletionCommand(*record.Command) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "privacy intent invalid")
 			}
 			command := *record.Command
@@ -193,6 +195,22 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			}
 			view.Watermark++
 			view.Deletions[command.Plan.TaskID] = command
+		case "ATTEMPT_LINEAGE":
+			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Attempt.validate() != nil {
+				return view, c.Fail(c.StoreIntegrityError, "invalid durable attempt lineage")
+			}
+			for _, prior := range view.Attempts {
+				if prior.Scope.PhysicalRoot == record.Attempt.Scope.PhysicalRoot && prior.ChildTask == record.Attempt.ChildTask {
+					return view, c.Fail(c.StoreIntegrityError, "attempt lineage identity was registered twice")
+				}
+			}
+			if _, deleted := view.Deletions[record.Attempt.ParentTask]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "attempt was allocated after parent deletion")
+			}
+			if _, deleted := view.Deletions[record.Attempt.ChildTask]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "attempt was allocated after child deletion")
+			}
+			view.Attempts = append(view.Attempts, *record.Attempt)
 		default:
 			return view, c.Fail(c.StoreIntegrityError, "unknown privacy journal record")
 		}
@@ -407,6 +425,13 @@ func (s *Session) contentAvailable(task string) error {
 	}
 	if _, deleted := view.Deletions[task]; deleted {
 		return c.Fail(c.PolicyDenied, "task content was deleted; only the minimal journal remains accessible")
+	}
+	for _, attempt := range view.Attempts {
+		if attempt.ChildTask == task {
+			if _, deleted := view.Deletions[attempt.ParentTask]; deleted {
+				return c.Fail(c.PolicyDenied, "deleted parent revoked its unpublished derived task")
+			}
+		}
 	}
 	return nil
 }

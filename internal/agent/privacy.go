@@ -15,6 +15,7 @@ import (
 )
 
 type DeletionPlan struct {
+	StagedAttempts    []DeletionAttempt  `json:"staged_attempts,omitempty"`
 	OwnerScopesDigest string             `json:"owner_scopes_digest"`
 	Stores            []DeletionStore    `json:"restored_stores"`
 	SchemaVersion     int                `json:"schema_version"`
@@ -37,6 +38,7 @@ type DeletionCommand struct {
 	Plan      DeletionPlan `json:"plan"`
 }
 type DeletionResult struct {
+	StagedAttempts int    `json:"staged_attempts,omitempty"`
 	RestoredStores int    `json:"restored_stores"`
 	SchemaVersion  int    `json:"schema_version"`
 	TaskID         string `json:"task_id"`
@@ -57,14 +59,34 @@ func deletionDigest(plan DeletionPlan) string {
 }
 func deletionObjectsDigest(plan DeletionPlan) string {
 	digest, _ := c.Digest(struct {
-		Stores  []DeletionStore   `json:"stores"`
-		Objects []artifact.Object `json:"objects"`
-		Copies  []ManagedCopy     `json:"copies"`
-	}{plan.Stores, plan.Objects, plan.Copies})
+		Attempts []DeletionAttempt `json:"staged_attempts,omitempty"`
+		Stores   []DeletionStore   `json:"stores"`
+		Objects  []artifact.Object `json:"objects"`
+		Copies   []ManagedCopy     `json:"copies"`
+	}{plan.StagedAttempts, plan.Stores, plan.Objects, plan.Copies})
 	return digest
 }
 func validateDeletionCommand(command DeletionCommand) error {
 	plan := command.Plan
+	if len(plan.StagedAttempts) > 128 {
+		return c.Fail(c.InvalidArgument, "staged attempt inventory quota exceeded")
+	}
+	previousAttempt := ""
+	for _, attempt := range plan.StagedAttempts {
+		if attempt.Allocation.validate() != nil || attempt.Allocation.ParentTask != plan.TaskID || attemptKey(attempt.Allocation) <= previousAttempt || len(attempt.Objects) > 32768 {
+			return c.Fail(c.InvalidArgument, "invalid staged attempt deletion binding")
+		}
+		previousAttempt = attemptKey(attempt.Allocation)
+		previousObject := ""
+		total := int64(0)
+		for _, object := range attempt.Objects {
+			if !artifact.TaskContentPath(attempt.Allocation.ChildTask, object.Path) || object.Path <= previousObject || !c.ValidDigest(object.Digest) || object.Size < 0 || object.Size > 64<<20 || object.Size > backupMaxBytes-total {
+				return c.Fail(c.InvalidArgument, "invalid staged attempt object inventory")
+			}
+			previousObject = object.Path
+			total += object.Size
+		}
+	}
 	if !c.ValidDigest(plan.OwnerScopesDigest) || len(plan.Stores) > 128 {
 		return c.Fail(c.InvalidArgument, "bounded managed store binding required")
 	}
@@ -176,6 +198,10 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	}
 	if _, exists := view.Deletions[task]; exists {
 		return plan, c.Fail(c.PolicyDenied, "deletion intent already exists; retry its original command")
+	}
+	plan.StagedAttempts, err = s.stagedAttemptPlans(ctx, task, view)
+	if err != nil {
+		return plan, err
 	}
 	plan.Store, err = s.Journal.SnapshotInfo(ctx)
 	if err != nil {
@@ -309,7 +335,7 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	s.publicationMu.Lock()
 	defer s.publicationMu.Unlock()
 	plan := command.Plan
-	result := DeletionResult{SchemaVersion: 1, TaskID: plan.TaskID, CommandID: command.CommandID, PlanDigest: plan.Digest, Watermark: plan.Watermark, Status: "PENDING", LocalObjects: len(plan.Objects), ManagedCopies: len(plan.Copies), RestoredStores: len(plan.Stores), ExternalCopies: "UNMANAGED_OR_PROVIDER_COPIES_NOT_ERASED", MediaErasure: "NO_PHYSICAL_MEDIA_ERASURE_GUARANTEE"}
+	result := DeletionResult{SchemaVersion: 1, TaskID: plan.TaskID, CommandID: command.CommandID, PlanDigest: plan.Digest, Watermark: plan.Watermark, Status: "PENDING", LocalObjects: len(plan.Objects), ManagedCopies: len(plan.Copies), RestoredStores: len(plan.Stores), StagedAttempts: len(plan.StagedAttempts), ExternalCopies: "UNMANAGED_OR_PROVIDER_COPIES_NOT_ERASED", MediaErasure: "NO_PHYSICAL_MEDIA_ERASURE_GUARANTEE"}
 	if err := validateDeletionCommand(command); err != nil {
 		return result, err
 	}
@@ -478,6 +504,11 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	}
 	for _, bound := range plan.Stores {
 		if err = purgeDeletionStore(ctx, bound, *s.privacy, command); err != nil {
+			return result, err
+		}
+	}
+	for _, attempt := range plan.StagedAttempts {
+		if err = s.purgeStagedAttempt(ctx, attempt); err != nil {
 			return result, err
 		}
 	}
