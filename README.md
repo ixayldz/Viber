@@ -11,6 +11,8 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 - Anahtar gerektirmeyen deterministik fixture ile görev açabilir, dosya okuyabilir, candidate değişikliği ve diff üretebilirsiniz.
 - ChatGPT hesabıyla giriş yapabilir, hesap seçebilir ve izinli abonelik modeliyle görev başlatabilirsiniz.
 - Kayıtlı check çalıştırabilir; exact çıktı, context ve analysis raporunu inceleyebilirsiniz.
+- Dondurulmuş terminal adayı ayrı private owner ile gizli STDIO testine alabilir; kernel beyanı ve bağımsız sonucu ayrı görebilirsiniz. [Değerlendirme kullanımı](docs/EVALUATION.md).
+- Önceden tanımlı JSONL ölçümlerini çözüm/kontrol kohortları, tekrarlar, eksik maliyetler ve eşleştirilmiş repo aralıklarıyla raporlayabilirsiniz.
 - Terminal görevden intent ve toplam token hesabını koruyan yeni deneme oluşturabilirsiniz.
 - Candidate yazısını `review` modunda inceleyip tek işleme bağlı onay verebilirsiniz.
 - Durumu, bütçeyi, bekleyen istekleri, geçmiş olayları ve replay sonucunu inceleyebilirsiniz.
@@ -320,7 +322,7 @@ Görev store'u ham kullanıcı niyeti, captured kaynak byte'ları, model/fixture
 
 Snapshot varsayılan olarak en çok 10.000 dosya, dosya başına 2 MiB ve toplam 32 MiB captured içerikle sınırlıdır. Binary baseline ve desteklenmeyen path/index türleri dışlanır veya reddedilir; excluded dosya için yokluk iddia edilmez. İki scan eşitliği `BEST_EFFORT` capture'dır; atomik filesystem snapshot değildir.
 
-Policy/path/hash kontrolü gerçek OS sandbox'ıyla aynı güvenceyi vermez. `sandbox-run` ayrı operator profile/policy/authority ve pinned image gerektiren advanced geliştirme yüzeyidir. Model keyfi shell komutu gönderemez. --check-runtime seçilirse yalnız --check-plan içindeki operator argv/image/profile çalışır. Protected `--check-plan` origin'i mutation öncesi bağlar ve check weakening'i sınırlar; henüz trusted test observer veya güçlü verification receipt üretmez.
+Policy/path/hash kontrolü gerçek OS sandbox'ıyla aynı güvenceyi vermez. `sandbox-run` ayrı operator profile/policy/authority ve pinned image gerektiren advanced geliştirme yüzeyidir. Model keyfi shell komutu gönderemez. --check-runtime seçilirse yalnız --check-plan içindeki operator argv/image/profile çalışır. Protected `--check-plan` origin'i mutation öncesi bağlar ve check weakening'i sınırlar; Ordinary check sonucu UNVERIFIED kalır; ayrıca kayıtlı protected V4 STDIO observer ve kaynak bağlı goal review sınırlı candidate-only verification receipt üretebilir.
 
 Telemetry/training bildirimi varsayılan OFF'tur; geniş config/privacy/secret-safe export ve türev verileri silme sistemi henüz tamamlanmamıştır. Kaynak/backup/delivery dizinlerini Git'e eklemeyin.
 
@@ -670,3 +672,6 @@ Background owner hâlâ eski generation'da çalışıyorsa önce `owner-stop --s
 Komut kayıp check çıktısını başarı saymaz. Eski subject'leri exact kimlikleriyle temizleyip gecikmiş create/start'ı engelleyen, hiç çalıştırılmayan fence container'larını tutar. Tam native kaynak üst sınırı charge edilir; task budget tükenebilir. Eksik kanıtta UNKNOWN rezervasyon kalır; aynı command ID effect'i yeniden çalıştırmaz. Yeni deneme için önce current cursor'u inceleyip yeni command ID kullanın. TUI'de `/runtime` aynı görünümü verir.
 
 Fence container'larını otomatik prune etmeyin: eski owner'ın gecikmiş create isteğine karşı tutulan isim rezervasyonlarıdır. Restore edilen store kendi physical runtime kimliğini alır ve özgün store'un süreçlerine dokunamaz. Legacy unowned intent bu cleanup yolu ile serbest bırakılamaz. Tam backend/rootless/host process lifetime kabulü hâlâ geliştirme kapsamındadır; [ADR 0014](docs/adr/0014-owned-process-fences.md) ayrıntıları açıklar.
+## Bağımsız değerlendirme
+
+Anahtar ve model çağrısı gerektirmeyen raporlama için eval-report/eval-report-inspect; ayrı Docker owner ile gizli candidate testi için eval-candidate/eval-inspect kullanılır. [Adım adım kılavuz](docs/EVALUATION.md) protokol, fixture, maliyet, belirsizlik, çıkış kodu ve recovery sınırlarını anlatır. scripts/independent-eval-demo.ps1 görünür testten VERIFIED alan eksik uppercase uygulamasının gizli testte FAIL olarak kaydedildiğini, asıl görev ve source aynı kalırken gösterir. İçe aktarılan raporlar unattested metadata; native aday testleri post-hoc exact STDIO kapsamıdır. Bu komutlar tek başına production veya harness superiority gate açmaz.

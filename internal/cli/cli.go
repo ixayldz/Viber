@@ -45,6 +45,10 @@ Usage:
   viber context-edit TASK --store PATH --command-file FILE [--json]
   viber model-switch TASK --store PATH --command-file FILE [--json]
   viber reconcile-model-risk TASK --store PATH --command-file FILE [--json]
+  viber eval-candidate TASK --store PATH --recipe BOUND_HIDDEN_FILE --output NEW_PATH [--json]
+  viber eval-inspect --bundle PATH [--json]
+  viber eval-report-inspect --bundle PATH [--json]
+  viber eval-report --protocol FILE --observations JSONL --output NEW_PATH [--json]
   viber runtime-info TASK --store PATH [--json]
   viber reconcile-native-risk TASK --store PATH --command-file FILE [--json]
   viber history-page TASK --store PATH --history-digest SHA256 --offset N --limit N [--json]
@@ -145,6 +149,12 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runGC(args[0], args[1:], out, errout)
 	case "context-edit", "model-switch", "reconcile-model-risk", "reconcile-native-risk":
 		return runContinuityEdit(args[0], args[1:], out, errout)
+	case "eval-candidate", "eval-inspect":
+		return runEvaluationCandidate(args[0], args[1:], out, errout)
+	case "eval-report-inspect":
+		return runEvaluationReportInspect(args[1:], out, errout)
+	case "eval-report":
+		return runEvaluationReport(args[1:], out, errout)
 	case "check-config":
 		return runCheckConfig(args[1:], out, errout)
 	case "check-prepare":

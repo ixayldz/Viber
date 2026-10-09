@@ -331,25 +331,26 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
-	GoalReview      *verify.GoalReview
-	Config          *config.Resolved
-	ResourcePolicy  *c.ResourcePolicy
-	AttemptOrigin   *AttemptOrigin
-	inheritedSpec   *c.TaskSpec
-	TaskKind        string
-	MaxRepairs      int
-	CheckRuntime    *CheckRuntime
-	StoreTokens     *c.TokenLimits
-	Runtime         *LocalRuntime
-	CheckPlan       []byte
-	Root            string
-	Prompt          []byte
-	Git             bool
-	TaskID          string
-	Budget          Budget
-	Autonomy        string
-	AllowUnverified bool
-	Fixture         []byte
+	evaluationCapture *workspace.Capture
+	GoalReview        *verify.GoalReview
+	Config            *config.Resolved
+	ResourcePolicy    *c.ResourcePolicy
+	AttemptOrigin     *AttemptOrigin
+	inheritedSpec     *c.TaskSpec
+	TaskKind          string
+	MaxRepairs        int
+	CheckRuntime      *CheckRuntime
+	StoreTokens       *c.TokenLimits
+	Runtime           *LocalRuntime
+	CheckPlan         []byte
+	Root              string
+	Prompt            []byte
+	Git               bool
+	TaskID            string
+	Budget            Budget
+	Autonomy          string
+	AllowUnverified   bool
+	Fixture           []byte
 }
 
 func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState, error) {
@@ -408,7 +409,10 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	}
 	captureLimits := configuredCaptureLimits(options.Config)
 	var base workspace.Capture
-	if options.Git {
+	if options.evaluationCapture != nil {
+		base = *options.evaluationCapture
+		err = workspace.VerifyCapture(base)
+	} else if options.Git {
 		base, err = workspace.CaptureRepository(options.Root, captureLimits)
 	} else {
 		base, err = workspace.CaptureDirectory(options.Root, captureLimits)

@@ -72,3 +72,9 @@ Trusted observer/discovery ve protected check revision; full process fencing/orp
 [ADR 0009](adr/0009-checks-completion-and-plan-auth.md) yeni trust/credential/accounting sınırlarını; [README](../README.md) kullanıcı akışını; [VALIDATION](VALIDATION.md) gözlenen testi kaydeder. A/B/stable gates CLOSED.
 
 0.8 test kanıtı: Windows full + final usage regression 449 benzersiz PASS/2 SKIP/0 FAIL; Linux full race/vet/build, Darwin COMPILE_ONLY; README native source-preserving workflow ve gerçek Docker registered check. Details/limitation [VALIDATION](VALIDATION.md).
+
+## 0.9 bağımsız evaluation — 9 Ekim 2026
+
+eval-report/eval-report-inspect artık fixed assignment, cohort, retry/UNKNOWN/missing maliyet, yanlış kalite beyanları ve paired cluster interval hesaplarını kullanıcıya açar. Imported metadata release/adoption yetkisi vermez. eval-candidate/eval-inspect ayrı private ownerda original immutable CAS candidateı hidden STDIO cases ile çalıştırır; original modele hidden feedback gitmez. Native-owned complete FAIL ve PASS bağımsız kaydedilir. Snapshot metadata ve source beyanı protected journal girdisine bağlıdır; rehashed sahte rapor/claim kabul edilmez.
+
+Bu C10 dilimi gerçek model üstünlüğü veya tam PRD evaluator/performance kabulü değildir. Tam dataset preregistration/runner/conditions-build lineage, continuation/localization/reference p95 ve bütün keyless scope hâlâ yürütme planının kapsamındadır. [Kullanım](EVALUATION.md), [ADR](adr/0015-independent-evaluation.md), [test kaydı](VALIDATION.md).
