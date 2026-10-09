@@ -1,6 +1,6 @@
 module github.com/ixayldz/Viber
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/Microsoft/go-winio v0.6.2

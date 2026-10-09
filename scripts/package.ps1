@@ -1,7 +1,7 @@
 param([string]$Revision='HEAD',[string]$Output='',[string[]]$Targets=@('windows/amd64','linux/amd64','darwin/arm64'))
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
-$taskGo=Join-Path $taskRoot '.tools/go/bin/go.exe'
+$taskGo=Join-Path $taskRoot '.tools/go1.27.2/go/bin/go.exe'
 if(!(Test-Path -LiteralPath $taskGo)){$taskGo=(Get-Command go -ErrorAction Stop).Source}
 $taskRevision=(& git -C $taskRoot rev-parse --verify ($Revision+'^{commit}')).Trim()
 if($LASTEXITCODE-ne 0 -or $taskRevision-notmatch '^[0-9a-f]{40}$'){throw 'Exact Git commit required'}
@@ -11,6 +11,7 @@ foreach($target in $Targets){if($target-notin @('windows/amd64','linux/amd64','d
 if($Targets.Count-eq 0 -or ($Targets | Select-Object -Unique).Count-ne $Targets.Count){throw 'Unique supported target list required'}
 if($Output-eq ''){$Output=Join-Path $taskRoot ('.cache/package-'+$taskRevision.Substring(0,12))}
 $taskOutput=[IO.Path]::GetFullPath($Output)
+$taskComparison=[StringComparison]::OrdinalIgnoreCase
 $taskWorkspace=[IO.Path]::GetFullPath($taskRoot)+[IO.Path]::DirectorySeparatorChar
 if(!$taskOutput.StartsWith($taskWorkspace,$taskComparison)){throw 'Build output must stay inside this workspace'}
 if(Test-Path -LiteralPath $taskOutput){throw 'Fresh output required'}

@@ -12,7 +12,7 @@
         "-c",
         "test \"$(cat /workspace/hello.txt)\" = hello"
       ],
-      "runner_digest": "3eda6db113c61235985243ee78796b5975aaa5baa238c359c6ca71c5c343f962",
+      "runner_digest": "8e74800c56d16e65106067a63ee93bb50ca1214f39f89fa8aecd346840d11078",
       "selection": "explicit captured greeting check",
       "expected_tests": [],
       "closure": [

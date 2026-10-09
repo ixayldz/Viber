@@ -4,41 +4,99 @@ on:
   pull_request:
 permissions:
   contents: read
+env:
+  GOTOOLCHAIN: local
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
-      - run: go mod verify
-      - run: go vet ./...
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-      - run: go test -count=1 ./...
+      - name: Toolchain and dependencies
+        run: |
+          test "$(go env GOVERSION)" = "go1.27.2"
+          go mod verify
+      - name: Formatting and vet
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+      - name: Reachable vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Full tests
+        run: |
+          mkdir -p evidence
+          set -o pipefail
+          go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
+          python scripts/verify-test-results.py evidence/tests.jsonl
+      - name: Migration regression
+        run: |
+          set -o pipefail
+          go test -json -count=3 -timeout 5m ./internal/store ./internal/agent ./internal/cli -run 'Migration|LegacyOpen|FormatAndMigration' | tee evidence/migration.jsonl
+          python scripts/verify-test-results.py evidence/migration.jsonl --migration
       - run: go build -trimpath ./cmd/viber
       - run: go run ./cmd/viber doctor --json
-      - name: Formatting
-        if: runner.os != 'Windows'
-        run: test -z "$(gofmt -l cmd internal)"
       - name: Race detector
         if: runner.os == 'Linux'
-        run: go test -race -p 1 -count=1 -timeout 15m ./...
-      - name: Encoding fuzz
-        if: runner.os == 'Linux'
-        run: go test ./internal/contracts -run '^$' -fuzz FuzzStrictDecode -fuzztime 10s
-      - name: Git index fuzz
-        if: runner.os == 'Linux'
-        run: go test ./internal/workspace -run '^$' -fuzz FuzzGitIndex -fuzztime 10s
-      - name: Offline Docker engineering profile
-        if: runner.os == 'Linux'
-        env:
-          VIBER_DOCKER_TEST_IMAGE: golang:1.27.1-bookworm@sha256:8d48e12ec56735e9358640898b9d9b9fcca110612ed8a5567438c0a1baa24e66
         run: |
+          set -o pipefail
+          go test -race -p 1 -json -count=1 -timeout 15m ./... | tee evidence/race.jsonl
+          python scripts/verify-test-results.py evidence/race.jsonl
+      - name: All fuzz targets
+        if: runner.os == 'Linux'
+        run: bash scripts/fuzz.sh evidence
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: core-${{ matrix.os }}-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
+  docker:
+    needs: test
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    env:
+      VIBER_DOCKER_TEST_IMAGE: golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+      - name: Real Docker acceptance
+        shell: bash
+        run: |
+          mkdir -p evidence
+          docker version > evidence/docker-version.txt
+          docker info > evidence/docker-info.txt
           docker pull "$VIBER_DOCKER_TEST_IMAGE"
-          go test -count=1 ./internal/runner ./internal/cli ./internal/agent
+          set -o pipefail
+          go test -p 1 -json -count=1 -timeout 15m ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation | tee evidence/docker.jsonl
+          python3 scripts/verify-test-results.py evidence/docker.jsonl --docker
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docker-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
+  foundation:
+    if: always()
+    needs: [test, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every foundation job
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: test "$TEST_RESULT" = success && test "$DOCKER_RESULT" = success

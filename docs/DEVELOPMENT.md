@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.9.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
+Go 1.27.2; tek Go module. Ürün sürümü 0.9.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
 
 ## Derleme
 
@@ -12,7 +12,7 @@ go build -trimpath -o bin/viber ./cmd/viber
 ./bin/viber doctor --json
 ```
 
-Windows binary adı `bin/viber.exe`. Bu checkout'ta portable toolchain `.tools/go/bin/go.exe`, cache `.cache` altında. `scripts/check.ps1` format/mod/vet/test/build/doctor kontrollerini çalıştırır. Toolchain, cache, binary ve yerel store Git'e girmez.
+Windows binary adı `bin/viber.exe`. Bu checkout'ta portable toolchain `.tools/go1.27.2/go/bin/go.exe`, cache `.cache` altında. `scripts/check.ps1` format/mod/vet/test/build/doctor kontrollerini çalıştırır. Toolchain, cache, binary ve yerel store Git'e girmez.
 
 ## Çalışan fixture örneği
 

@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $taskRoot
-$taskGo = Join-Path $taskRoot '.tools\go\bin\go.exe'
+$taskGo = Join-Path $taskRoot '.tools\go1.27.2\go\bin\go.exe'
 if (-not (Test-Path -LiteralPath $taskGo)) { $taskGo = (Get-Command go -ErrorAction Stop).Source }
 $env:GOCACHE = Join-Path $taskRoot '.cache\go-build'
 $env:GOMODCACHE = Join-Path $taskRoot '.cache\go-mod'

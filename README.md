@@ -28,7 +28,7 @@ TUI, background owner, detach/attach, durable queue, compaction, kaynak hesaplar
 
 | Bileşen | Gereksinim |
 |---|---|
-| Derleme | `go.mod` ile eşleşen Go 1.27.1 |
+| Derleme | `go.mod` ile eşleşen Go 1.27.2 |
 | Repo'yu indirme | Git |
 | Normal fixture kullanımı | Model anahtarı ve Docker gerekmez |
 | Git-aware capture | `--git`; desteklenen index/repo biçimi. Capture host Git executable'ını çalıştırmaz |
