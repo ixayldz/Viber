@@ -136,20 +136,24 @@ func (s *Session) validateTokenReceipts(state c.TaskState, doc Document) error {
 	if state.Tokens == nil {
 		return nil
 	}
-	provider, capacity, estimator := contextProfile(doc)
 	for _, r := range state.Tokens.Reservations {
+		receiptDoc, profileErr := profileDocument(doc, r.ProfileDigest)
+		if profileErr != nil {
+			return profileErr
+		}
+		provider, capacity, estimator := contextProfile(receiptDoc)
 		raw, err := s.Archive.GetBytes(doc.TaskID, r.RequestDigest)
 		if err != nil {
 			return c.Fail(c.StoreIntegrityError, "token reservation request unavailable")
 		}
 		var request model.Request
-		if c.DecodeStrict(raw, &request) != nil || model.ValidateRequest(request, provider) != nil || request.ID != r.ID || request.Stream != (doc.Runtime != nil && doc.Runtime.Stream) || request.MaxOutputTokens != r.Upper.Output || r.ProfileDigest != tokenProfile(doc) {
+		if c.DecodeStrict(raw, &request) != nil || model.ValidateRequest(request, provider) != nil || request.ID != r.ID || request.Stream != (receiptDoc.Runtime != nil && receiptDoc.Runtime.Stream) || request.MaxOutputTokens != r.Upper.Output || r.ProfileDigest != tokenProfile(receiptDoc) {
 			return c.Fail(c.StoreIntegrityError, "token request/profile lineage invalid")
 		}
 		_, manifest, countErr := boundedContext(request, capacity, estimator)
 		expectedModel, expectedContext := "offline-fixture-v1", int64(0)
-		if doc.Runtime != nil {
-			expectedModel, expectedContext = doc.Runtime.Model, requestContextWindow(doc.Runtime)
+		if receiptDoc.Runtime != nil {
+			expectedModel, expectedContext = receiptDoc.Runtime.Model, requestContextWindow(receiptDoc.Runtime)
 		}
 		if countErr != nil || manifest.InputTokens+4096 != r.Upper.Input || request.Model != expectedModel || request.ContextWindow != expectedContext {
 			return c.Fail(c.StoreIntegrityError, "token upper bound or model profile differs from retained request")
@@ -162,13 +166,18 @@ func (s *Session) validateTokenReceipts(state c.TaskState, doc Document) error {
 			return c.Fail(c.StoreIntegrityError, "token usage receipt unavailable")
 		}
 		var usage model.Usage
-		if r.UsageSource == "KERNEL_NO_DISPATCH" {
+		if r.UsageSource == "OPERATOR_ASSUMED_UPPER_BOUND" {
+			if err := s.validateRiskReceipt(receiptDoc, r, raw); err != nil {
+				return err
+			}
+			usage = model.Usage{Known: true, Input: r.Used.Input, Output: r.Used.Output}
+		} else if r.UsageSource == "KERNEL_NO_DISPATCH" {
 			var proof model.NoDispatchReceipt
-			if doc.Runtime == nil || c.DecodeStrict(raw, &proof) != nil || proof.SchemaVersion != 1 || proof.Decision != "KERNEL_PREFLIGHT_DECLINED" || proof.RequestID != r.ID || proof.RequestDigest != r.RequestDigest || proof.ProfileDigest != r.ProfileDigest || proof.Provider != provider || proof.Model != request.Model || r.Used != (c.TokenLimits{}) {
+			if receiptDoc.Runtime == nil || c.DecodeStrict(raw, &proof) != nil || proof.SchemaVersion != 1 || proof.Decision != "KERNEL_PREFLIGHT_DECLINED" || proof.RequestID != r.ID || proof.RequestDigest != r.RequestDigest || proof.ProfileDigest != r.ProfileDigest || proof.Provider != provider || proof.Model != request.Model || r.Used != (c.TokenLimits{}) {
 				return c.Fail(c.StoreIntegrityError, "kernel preflight receipt binding invalid")
 			}
 			usage = model.Usage{Known: true}
-		} else if doc.Runtime == nil {
+		} else if receiptDoc.Runtime == nil {
 			var turn Turn
 			if c.DecodeStrict(raw, &turn) != nil || r.UsageSource != "FIXTURE_REPORTED" {
 				return c.Fail(c.StoreIntegrityError, "fixture usage receipt invalid")

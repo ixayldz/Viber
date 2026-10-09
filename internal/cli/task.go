@@ -71,6 +71,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	prompt, args := promptFirst(args)
 	f := flags("run", errout)
 	root := f.String("root", ".", "live source root")
+	userConfigFile := f.String("user-config", "", "secret-free global config; default OS user config directory")
 	directory := f.String("store", "", "private session store outside source")
 	task := f.String("task", "", "task ID (default random)")
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
@@ -93,12 +94,14 @@ func runTask(args []string, out, errout io.Writer) int {
 	git := f.Bool("git", false, "native Git-aware capture")
 	allow := f.Bool("allow-unverified", false, "explicitly allow a limited UNVERIFIED candidate-only result (exit 2)")
 	autonomy := f.String("autonomy", "guided", "review, guided or auto native tools")
+	resourcePolicyFile := f.String("resource-policy", "", "immutable store resource limits and operator versioned model prices JSON")
 	storeInput := f.Int64("store-input-tokens", 64<<20, "immutable store-wide input token work limit; first task only")
 	storeOutput := f.Int64("store-output-tokens", 4<<20, "immutable store-wide output token work limit; first task only")
 	maxInputTokens := f.Int64("max-input-tokens", 512<<10, "task input token work limit")
 	maxOutputTokens := f.Int64("max-output-tokens", 0, "task output work limit; default 32768 local/fixture or 1048576 ChatGPT")
 	steps := f.Int64("max-steps", 16, "bounded model turns")
 	tools := f.Int64("max-tool-calls", 64, "bounded native tool calls")
+	detached := f.Bool("detach", false, "create task then run under a persistent background owner")
 	jsonMode := f.Bool("json", false, "structured result")
 	if err := f.Parse(args); err != nil {
 		return 4
@@ -110,6 +113,49 @@ func runTask(args []string, out, errout io.Writer) int {
 	}
 	if (*taskKind != "CODE" && *taskKind != "ANALYSIS") || *maxRepairs < 0 || *maxRepairs > 8 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "invalid task kind/repair limit"), *jsonMode)
+	}
+	configSource, configErr := filepath.Abs(*root)
+	if configErr != nil {
+		return report(out, errout, c.Fail(c.InvalidArgument, "source root unavailable"), *jsonMode)
+	}
+	resolvedConfig, configErr := loadRunConfig(configSource, *userConfigFile)
+	if configErr != nil {
+		return report(out, errout, configErr, *jsonMode)
+	}
+	if resolvedConfig != nil {
+		explicit := map[string]bool{}
+		f.Visit(func(v *flag.Flag) { explicit[v.Name] = true })
+		preferences := resolvedConfig.Preferences
+		if !explicit["provider"] && !*offline && preferences.Provider != "" {
+			*provider = preferences.Provider
+		}
+		if !explicit["model"] && !*offline && preferences.Model != "" {
+			*modelID = preferences.Model
+		}
+		if !explicit["autonomy"] && preferences.Autonomy != "" {
+			*autonomy = preferences.Autonomy
+		}
+		if !explicit["context-limit"] && preferences.ContextLimit != 0 {
+			*contextLimit = preferences.ContextLimit
+		}
+		if !explicit["output-limit"] && preferences.OutputLimit != 0 {
+			*outputLimit = preferences.OutputLimit
+		}
+		if *provider != "" {
+			if err := resolvedConfig.AdmitProvider(*provider, *provider != "ollama"); err != nil {
+				return report(out, errout, err, *jsonMode)
+			}
+		}
+	}
+	var resourcePolicy *c.ResourcePolicy
+	if *resourcePolicyFile != "" {
+		resourcePolicy = &c.ResourcePolicy{}
+		if err := readJSON(*resourcePolicyFile, resourcePolicy); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		if err := resourcePolicy.Validate(); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
 	}
 	var storeLimits *c.TokenLimits
 	f.Visit(func(value *flag.Flag) {
@@ -332,9 +378,19 @@ func runTask(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	_, err = session.Create(ctx, agent.StartOptions{TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
+	}
+	if *detached {
+		if err = session.Close(); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		id, err := resolveCommandID("")
+		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		return runDetachedTask(ctx, *task, *directory, id, out, errout, *jsonMode)
 	}
 	host, err := owner.Open(context.Background(), *directory, session)
 	if err != nil {

@@ -17,32 +17,46 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-const Version = "0.8.0-dev"
-const help = `Viber 0.8.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
+const Version = "0.9.0-dev"
+const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
-  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--json]
+  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
   viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--stream] [--model-timeout-ms N] [--json]
   viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
   viber run "TASK" --provider openai|anthropic --allow-remote --model ID --root PATH --store PATH [--context-limit N] [--output-limit N] [--stream] [--json]
-  viber auth login|status|profiles|select|models|logout [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
+  viber auth login|status|profiles|select|models|logout|migrate-storage [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber check-config --runtime FILE [--plan FILE] [--json]
   viber context-why|checks|report TASK --store PATH [--json]
   viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
-  viber attempt TASK --store PATH --new-task ID --parent-seq N [--fixture FILE] [--allow-unverified] [--json]
+  viber attempt TASK --store PATH --new-task ID --parent-seq N [--fixture FILE] [--allow-unverified] [--detach] [--json]
+  viber store-gc-preview --store PATH [--json]
+  viber store-gc --store PATH --command-file FILE [--json]
   viber store-backup --store PATH --output NEW_PATH [--json]
   viber store-restore --backup PATH --store NEW_PATH [--json]
   viber store-migrate --store PATH --backup-output PATH --command-id ID [--json]
   viber store-migration-status --store PATH [--json]
   viber budget TASK --store PATH [--json]
+  viber resources TASK --store PATH [--json]
+  viber continuity-info TASK --store PATH [--json]
+  viber context-edit TASK --store PATH --command-file FILE [--json]
+  viber model-switch TASK --store PATH --command-file FILE [--json]
+  viber reconcile-model-risk TASK --store PATH --command-file FILE [--json]
+  viber history-page TASK --store PATH --history-digest SHA256 --offset N --limit N [--json]
   viber requests TASK --store PATH [--json]
   viber respond TASK --store PATH --request ID --response-file FILE [--json]
   viber inspect TASK --store PATH [--at TASK_SEQ] [--json]
   viber replay TASK --store PATH [--until TASK_SEQ] [--json]
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
+  viber ui TASK --store PATH
+  viber queue TASK --store PATH [--command-file FILE] [--json]
+  viber support --store PATH [--output NEW_PATH] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
+  viber detach TASK --store PATH [--command-id ID] [--json]
+  viber attach TASK --store PATH [--after TASK_SEQ] [--limit N] [--follow] [--poll-ms N] [--json]
+  viber serve-background|owner-status|owner-stop --store PATH [--json]
   viber serve --store PATH [--json]
   viber steer TASK "RAW INSTRUCTION" --store PATH [--command-id ID] [--json]
   viber revise TASK --store PATH --revision-file FILE [--json]
@@ -63,6 +77,12 @@ The implementation/release plan is in docs/IMPLEMENTATION_PLAN.md.
 `
 
 type doctor struct {
+	Continuity         string `json:"continuity"`
+	ResourceAccounting string `json:"resource_accounting"`
+	ArchiveGC          string `json:"archive_gc"`
+	Supervisor         string `json:"supervisor"`
+	SupportReport      string `json:"support_report"`
+	CredentialStorage  string `json:"credential_storage"`
 	SchemaVersion      int    `json:"schema_version"`
 	Version            string `json:"version"`
 	Platform           string `json:"platform"`
@@ -107,13 +127,27 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "queue":
+		return runQueue(args[1:], out, errout)
+	case "ui":
+		return runUI(args[1:], out, errout)
+	case "support":
+		return runSupport(args[1:], out, errout)
+	case "serve-background", "owner-status", "owner-stop":
+		return runSupervisor(args[0], args[1:], out, errout)
+	case "detach", "attach":
+		return runAttachment(args[0], args[1:], out, errout)
+	case "store-gc-preview", "store-gc":
+		return runGC(args[0], args[1:], out, errout)
+	case "context-edit", "model-switch", "reconcile-model-risk":
+		return runContinuityEdit(args[0], args[1:], out, errout)
 	case "check-config":
 		return runCheckConfig(args[1:], out, errout)
 	case "auth":
 		return runAuth(args[1:], out, errout)
 	case "attempt":
 		return runAttempt(args[1:], out, errout)
-	case "context-why", "context-page", "checks", "check-output", "report":
+	case "context-why", "context-page", "checks", "check-output", "report", "history-page", "continuity-info", "resources":
 		return runObservation(args[0], args[1:], out, errout)
 	case "budget":
 		return runTokenLedger(args[1:], out, errout)
@@ -155,7 +189,7 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runTaskControl(args[0], args[1:], out, errout)
 	case "steer", "revise":
 		return runSteering(args[0], args[1:], out, errout)
-	case "apply", "restore", "attach", "delete":
+	case "apply", "restore", "delete":
 		jsonMode := false
 		for _, arg := range args {
 			if arg == "--json" {
@@ -187,7 +221,7 @@ func runDoctor(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unexpected arguments"), *jsonMode)
 	}
 	_, gitErr := exec.LookPath("git")
-	d := doctor{SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	d := doctor{Continuity: "SOURCE_BOUND_HISTORY_PIN_LOCKED_PROVIDER_SWITCH", ResourceAccounting: "CONSERVATIVE_GLOBAL_VECTOR; PHYSICAL_CONTROL_RESERVE", ArchiveGC: "TYPED_ROOTS_ORPHAN_GC; TASK_DELETION_PENDING", Supervisor: "DETACHED_OWNER_CURSOR_ATTACH; HOSTILE_FENCING_ACCEPTANCE_PENDING", SupportReport: "NUMERIC_ALLOWLIST_SUPPORT_V1", CredentialStorage: "WINDOWS_DPAPI_OR_UNIX_OS_VAULT; NATIVE_UNIX_ACCEPTANCE_PENDING", SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4

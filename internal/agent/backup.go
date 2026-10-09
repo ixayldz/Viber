@@ -31,6 +31,9 @@ type BackupManifest struct {
 }
 
 func backupFileLimit(name string) int64 {
+	if gcMaintenancePath(name) {
+		return 2 << 20
+	}
 	if name == "metadata/migrations/v1-v2-intent.json" || name == "metadata/migrations/v1-v2-complete.json" {
 		return 1 << 20
 	}
@@ -49,7 +52,7 @@ func validateBackupManifest(m BackupManifest) error {
 	database := false
 	migrationFiles := 0
 	for _, f := range m.Files {
-		valid := strings.HasPrefix(f.Path, "artifacts/") && artifact.ImmutablePath(strings.TrimPrefix(f.Path, "artifacts/"))
+		valid := strings.HasPrefix(f.Path, "artifacts/") && artifact.ImmutablePath(strings.TrimPrefix(f.Path, "artifacts/")) || gcMaintenancePath(f.Path)
 		if f.Path == "metadata/migrations/v1-v2-intent.json" || f.Path == "metadata/migrations/v1-v2-complete.json" {
 			valid = true
 			migrationFiles++
@@ -86,20 +89,14 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 	}
 	for _, state := range states {
 		for after := int64(0); ; {
-			page, err := s.Journal.History(ctx, state.TaskID, after, 256)
+			page, err := s.Journal.AccountHistory(ctx, state.TaskID, after, 64)
+
 			if err != nil {
 				return nil, err
 			}
 			for _, record := range page.Records {
-				if record.Payload.Tokens != nil {
-					if _, _, err := s.Inspect(ctx, state.TaskID, record.Event.TaskSeq); err != nil {
-						return nil, err
-					}
-				}
-				if record.Event.Type == "InputRecorded" && record.Payload.InputDigest != "" {
-					if _, err := s.pendingInput(ctx, state.TaskID, record.Event.ID); err != nil {
-						return nil, err
-					}
+				if _, _, err := s.loadDocument(record.State); err != nil {
+					return nil, err
 				}
 			}
 			if !page.HasMore {
@@ -140,6 +137,9 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		if err = s.validateContext(doc); err != nil {
+			return nil, err
+		}
+		if err = s.validateContinuity(doc); err != nil {
 			return nil, err
 		}
 		if err = s.validateRuntime(doc); err != nil {
@@ -291,6 +291,9 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 	if err = s.Archive.VisitImmutable(ctx, func(name string, raw []byte) error { return add("artifacts/"+name, raw, true) }); err != nil {
 		return m, err
 	}
+	if err = s.visitGCMaintenance(ctx, func(name string, raw []byte) error { return add(name, raw, true) }); err != nil {
+		return m, err
+	}
 	intent, receipt, err := s.Journal.MigrationStatus(ctx)
 	if err != nil {
 		return m, err
@@ -380,6 +383,11 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 		raw, err = readBackupFile(root, f)
 		if err != nil {
 			return m, err
+		}
+		if gcMaintenancePath(f.Path) {
+			if err = validateGCRecord(f.Path, raw); err != nil {
+				return m, err
+			}
 		}
 		if strings.Contains(f.Path, "/snapshots/") {
 			var snapshot artifact.Manifest

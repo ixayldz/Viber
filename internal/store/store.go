@@ -15,6 +15,7 @@ import (
 	"time"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/diskguard"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/kernel"
 	_ "modernc.org/sqlite"
@@ -23,6 +24,7 @@ import (
 const storeVersion = 2
 
 type Store struct {
+	disk           *diskguard.Reserve
 	mu             sync.Mutex
 	db             *sql.DB
 	lock           *os.File
@@ -63,7 +65,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 		return nil, err
 	}
 	defer privateRoot.Close()
-	for _, name := range []string{"owner.lock", "state.sqlite", "state.sqlite-wal", "state.sqlite-shm"} {
+	for _, name := range []string{"owner.lock"} {
 		if err = fileguard.RegularPath(privateRoot, name, true); err != nil {
 			return nil, err
 		}
@@ -77,6 +79,26 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 			lock.Close()
 		}
 	}()
+	// A live owner may checkpoint and unlink its WAL while closing. Acquire
+	// ownership before touching SQLite metadata, so another writer's cleanup
+	// cannot race the regular/single-link preflight.
+	for _, name := range []string{"state.sqlite", "state.sqlite-wal", "state.sqlite-shm"} {
+		if err = fileguard.RegularPath(privateRoot, name, true); err != nil {
+			return nil, err
+		}
+	}
+	disk, err := diskguard.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if resultErr != nil {
+			disk.Close()
+		}
+	}()
+	if err = disk.Admit(2<<20, true); err != nil {
+		return nil, err
+	}
 	dbpath := filepath.Join(root, "state.sqlite")
 	uriPath := filepath.ToSlash(dbpath)
 	if filepath.VolumeName(dbpath) != "" {
@@ -147,7 +169,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, lock: lock, directory: root, schema: version}
+	s := &Store{disk: disk, db: db, lock: lock, directory: root, schema: version}
 	if err = s.verifyProjectionsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -188,7 +210,7 @@ func (s *Store) Close() error {
 	err := s.db.Close()
 	lockErr := s.lock.Close()
 	s.db = nil
-	return errors.Join(err, lockErr)
+	return errors.Join(err, lockErr, s.disk.Close())
 }
 func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, error) {
 	s.mu.Lock()
@@ -196,6 +218,7 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 	if err := s.writableLocked(); err != nil {
 		return c.TaskState{}, err
 	}
+
 	if command.ID == "" || command.TaskID == "" || command.Actor == "" || command.ExpectedTaskSeq < 0 {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid command")
 	}
@@ -283,14 +306,21 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 	if err != nil {
 		return state, err
 	}
-	if command.Payload.Tokens != nil || command.Type == "TaskCreated" {
+	if command.Payload.Tokens != nil || command.Payload.Resources != nil || command.Type == "TaskCreated" {
 		all, loadErr := tokenStates(ctx, tx)
 		if loadErr != nil {
 			return state, loadErr
 		}
+		if err = c.ValidateResourceAdmission(all, state, command.Payload.Resources); err != nil {
+			return c.TaskState{}, err
+		}
 		if err = c.ValidateTokenAdmission(all, state, command.Payload.Tokens); err != nil {
 			return c.TaskState{}, err
 		}
+	}
+	control := command.Type != "TaskCreated" && !(command.Payload.Resources != nil && command.Payload.Resources.Action == "RESERVE") && !(command.Payload.Tokens != nil && command.Payload.Tokens.Action == "RESERVE")
+	if err := s.disk.Admit(2<<20, control); err != nil {
+		return c.TaskState{}, err
 	}
 	envelope, err := c.CanonicalV1(event)
 	if err != nil {
@@ -347,6 +377,9 @@ func (s *Store) replayLocked(ctx context.Context, taskID string) (map[string]c.T
 	return s.replayToLocked(ctx, taskID, 0)
 }
 func (s *Store) replayToLocked(ctx context.Context, taskID string, until int64) (map[string]c.TaskState, error) {
+	return s.replayObserveLocked(ctx, taskID, until, nil)
+}
+func (s *Store) replayObserveLocked(ctx context.Context, taskID string, until int64, observe func(c.Event, c.EventPayload, c.TaskState)) (map[string]c.TaskState, error) {
 	var historical *c.TaskState
 	rows, err := s.db.QueryContext(ctx, "SELECT e.store_seq,e.task_id,e.task_seq,e.event_id,e.envelope,e.payload_digest,e.previous_hash,e.event_hash,p.body FROM events e LEFT JOIN payloads p ON p.task_id=e.task_id AND p.digest=e.payload_digest ORDER BY e.store_seq")
 	if err != nil {
@@ -390,10 +423,16 @@ func (s *Store) replayToLocked(ctx context.Context, taskID string, until int64) 
 		if err != nil {
 			return nil, c.Fail(c.StoreIntegrityError, "journal reducer rejected event")
 		}
+		if err := c.ValidateResourceAdmission(states, next, payload.Resources); err != nil {
+			return nil, c.Fail(c.StoreIntegrityError, "journal global resource admission is invalid")
+		}
 		if err := c.ValidateTokenAdmission(states, next, payload.Tokens); err != nil {
 			return nil, c.Fail(c.StoreIntegrityError, "journal global token admission is invalid")
 		}
 		states[task] = next
+		if observe != nil {
+			observe(event, payload, next)
+		}
 		if task == taskID && next.TaskSeq == until {
 			saved := next
 			historical = &saved
@@ -537,3 +576,6 @@ func (s *Store) verifyProjectionsLocked(ctx context.Context) error {
 	}
 	return s.verifyCheckpointsLocked(ctx)
 }
+
+func (s *Store) DiskAdmission(bytes int64, control bool) error { return s.disk.Admit(bytes, control) }
+func (s *Store) DiskStatus() (diskguard.Status, error)         { return s.disk.Status() }

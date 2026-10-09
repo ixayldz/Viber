@@ -143,25 +143,32 @@ func (s TaskSpec) Validate() error {
 	return nil
 }
 
+type PromptRef struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
+	Bytes  int64  `json:"bytes"`
+}
 type TaskState struct {
-	Tokens                  *TokenAccount  `json:"token_account,omitempty"`
-	DocumentDigest          string         `json:"document_digest,omitempty"`
-	BaselineDigest          string         `json:"baseline_digest,omitempty"`
-	CandidateDigest         string         `json:"candidate_digest,omitempty"`
-	SchemaVersion           int            `json:"schema_version"`
-	TaskID                  string         `json:"task_id"`
-	SpecVersion             int64          `json:"spec_version"`
-	Execution               ExecutionState `json:"execution_state"`
-	Outcome                 Outcome        `json:"terminal_outcome"`
-	Quality                 Quality        `json:"quality_verdict"`
-	Fulfillment             Fulfillment    `json:"fulfillment_status"`
-	TaskSeq                 int64          `json:"task_seq"`
-	StoreSeq                int64          `json:"journal_seq"`
-	KernelGeneration        int64          `json:"kernel_generation"`
-	PolicyEpoch             int64          `json:"policy_epoch"`
-	InputBarrier            bool           `json:"input_barrier"`
-	PendingInputIDs         []string       `json:"pending_input_ids"`
-	OpenRequiredObligations int            `json:"open_required_obligations"`
+	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
+	Resources               *ResourceAccount `json:"resource_account,omitempty"`
+	Tokens                  *TokenAccount    `json:"token_account,omitempty"`
+	DocumentDigest          string           `json:"document_digest,omitempty"`
+	BaselineDigest          string           `json:"baseline_digest,omitempty"`
+	CandidateDigest         string           `json:"candidate_digest,omitempty"`
+	SchemaVersion           int              `json:"schema_version"`
+	TaskID                  string           `json:"task_id"`
+	SpecVersion             int64            `json:"spec_version"`
+	Execution               ExecutionState   `json:"execution_state"`
+	Outcome                 Outcome          `json:"terminal_outcome"`
+	Quality                 Quality          `json:"quality_verdict"`
+	Fulfillment             Fulfillment      `json:"fulfillment_status"`
+	TaskSeq                 int64            `json:"task_seq"`
+	StoreSeq                int64            `json:"journal_seq"`
+	KernelGeneration        int64            `json:"kernel_generation"`
+	PolicyEpoch             int64            `json:"policy_epoch"`
+	InputBarrier            bool             `json:"input_barrier"`
+	PendingInputIDs         []string         `json:"pending_input_ids"`
+	OpenRequiredObligations int              `json:"open_required_obligations"`
 }
 type Event struct {
 	SchemaVersion    int    `json:"schema_version"`
@@ -178,21 +185,23 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
-	Tokens              *TokenMutation `json:"token_mutation,omitempty"`
-	CommandError        *Error         `json:"command_error,omitempty"`
-	DocumentDigest      string         `json:"document_digest,omitempty"`
-	SnapshotDigest      string         `json:"snapshot_digest,omitempty"`
-	InputDigest         string         `json:"input_digest,omitempty"`
-	InputBytes          int64          `json:"input_bytes,omitempty"`
-	InputID             string         `json:"input_id,omitempty"`
-	SpecVersion         int64          `json:"spec_version,omitempty"`
-	State               ExecutionState `json:"state,omitempty"`
-	Outcome             Outcome        `json:"outcome,omitempty"`
-	Quality             Quality        `json:"quality,omitempty"`
-	Fulfillment         Fulfillment    `json:"fulfillment,omitempty"`
-	PolicyEpoch         int64          `json:"policy_epoch,omitempty"`
-	RequiredObligations int            `json:"required_obligations,omitempty"`
-	Reason              string         `json:"reason,omitempty"`
+	QueueID             string            `json:"queue_id,omitempty"`
+	Resources           *ResourceMutation `json:"resource_mutation,omitempty"`
+	Tokens              *TokenMutation    `json:"token_mutation,omitempty"`
+	CommandError        *Error            `json:"command_error,omitempty"`
+	DocumentDigest      string            `json:"document_digest,omitempty"`
+	SnapshotDigest      string            `json:"snapshot_digest,omitempty"`
+	InputDigest         string            `json:"input_digest,omitempty"`
+	InputBytes          int64             `json:"input_bytes,omitempty"`
+	InputID             string            `json:"input_id,omitempty"`
+	SpecVersion         int64             `json:"spec_version,omitempty"`
+	State               ExecutionState    `json:"state,omitempty"`
+	Outcome             Outcome           `json:"outcome,omitempty"`
+	Quality             Quality           `json:"quality,omitempty"`
+	Fulfillment         Fulfillment       `json:"fulfillment,omitempty"`
+	PolicyEpoch         int64             `json:"policy_epoch,omitempty"`
+	RequiredObligations int               `json:"required_obligations,omitempty"`
+	Reason              string            `json:"reason,omitempty"`
 }
 type Entry struct {
 	Path string `json:"path"`

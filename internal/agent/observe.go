@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/diskguard"
 	"github.com/ixayldz/Viber/internal/model"
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 type Observation struct {
-	Kind   string `json:"kind"`
-	Offset int64  `json:"offset,omitempty"`
-	Limit  int64  `json:"limit,omitempty"`
-	RunID  string `json:"run_id,omitempty"`
-	Stream string `json:"stream,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Query         string `json:"query,omitempty"`
+	Candidate     string `json:"candidate,omitempty"`
+	HistoryDigest string `json:"history_digest,omitempty"`
+	Kind          string `json:"kind"`
+	Offset        int64  `json:"offset,omitempty"`
+	Limit         int64  `json:"limit,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
+	Stream        string `json:"stream,omitempty"`
 }
 type ContextComponent struct {
 	Index   int    `json:"index"`
@@ -42,7 +48,46 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 	if err != nil {
 		return nil, err
 	}
+	if args.HistoryDigest != "" && args.Kind != "history-page" {
+		return nil, c.Fail(c.InvalidArgument, "history digest is only valid for history-page")
+	}
+	if args.Kind == "source-list" || args.Kind == "source-page" {
+		return s.sourceObservation(state, doc, args)
+	}
+	if args.Path != "" || args.Query != "" || args.Candidate != "" {
+		return nil, c.Fail(c.InvalidArgument, "source parameters require source observation")
+	}
 	switch args.Kind {
+	case "continuity-info":
+		return struct {
+			SchemaVersion int             `json:"schema_version"`
+			State         c.TaskState     `json:"state"`
+			Profile       string          `json:"profile_digest"`
+			Compactions   []CompactionRef `json:"compactions"`
+			Pins          []ContextPin    `json:"pins"`
+			Runtime       *Runtime        `json:"runtime,omitempty"`
+		}{1, state, tokenProfile(doc), doc.Compactions, doc.Pins, doc.Runtime}, nil
+	case "history-page":
+		if args.RunID != "" || args.Stream != "" {
+			return nil, c.Fail(c.InvalidArgument, "history page has unrelated check parameters")
+		}
+		return s.HistoryPage(doc, args.HistoryDigest, args.Offset, args.Limit)
+	case "resources":
+		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
+			return nil, c.Fail(c.InvalidArgument, "resources accepts no page arguments")
+		}
+		ledger, err := s.Journal.ResourceLedger(ctx)
+		if err != nil {
+			return nil, err
+		}
+		disk, err := s.Journal.DiskStatus()
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			Ledger store.ResourceLedgerView `json:"ledger"`
+			Disk   diskguard.Status         `json:"disk"`
+		}{ledger, disk}, nil
 	case "checks":
 		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" {
 			return nil, c.Fail(c.InvalidArgument, "checks accepts no page arguments")

@@ -124,6 +124,10 @@ func Open(directory string, create bool) (*Store, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, os.ErrNotExist
 		}
+		var typed *c.Error
+		if errors.As(err, &typed) && typed.Code == c.UnsupportedCapability {
+			return nil, c.Fail(c.UnsupportedCapability, "OS credential vault unavailable; unlock or install the supported vault; plaintext fallback is disabled")
+		}
 		return nil, c.Fail(c.StoreIntegrityError, "auth storage unavailable or invalid")
 	}
 	return store, nil

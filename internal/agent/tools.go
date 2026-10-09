@@ -20,6 +20,7 @@ func Tools() []model.Tool {
 	}
 	tools = append(tools, planTools()...)
 	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound TS/JS/Python lexical declaration hints. Names/spans are captured-byte references; semantic resolution remains UNKNOWN. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
+	tools = append(tools, historyTools()...)
 	return append(tools, checkTools()...)
 }
 func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Document, call model.Call) (model.Reply, *artifact.Ref, error) {
@@ -37,6 +38,15 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		return model.Reply{CallID: call.ID, Content: string(raw)}, nil, err
 	}
 	switch call.Name {
+	case "history_page":
+		if err := policy.Admit(layers, policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, InputBarrier: state.InputBarrier, Effect: "snapshot.read"}); err != nil {
+			return model.Reply{}, nil, err
+		}
+		page, err := s.historyTool(*doc, call)
+		if err != nil {
+			return model.Reply{}, nil, err
+		}
+		return encode(page)
 	case "check_run", "check_output":
 		value, checkErr := s.executeCheck(ctx, state, doc, call)
 		if checkErr != nil {

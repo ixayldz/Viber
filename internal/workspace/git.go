@@ -29,6 +29,11 @@ type gitCapture struct {
 // Supported: SHA-1/SHA-256, index v2/v3/v4, ordinary and linked worktree roots.
 // Sparse/split indexes, unmerged stages and submodules are explicitly denied.
 func CaptureRepository(root string, limits Limits) (Capture, error) {
+	for _, scope := range limits.SensitivePaths {
+		if strings.EqualFold(scope, ".git") || strings.HasPrefix(strings.ToLower(scope), ".git/") {
+			return Capture{}, c.Fail(c.UnsupportedCapability, "Git binding requires restricted metadata; use directory capture for this privacy scope")
+		}
+	}
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return Capture{}, err

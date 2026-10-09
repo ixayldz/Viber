@@ -19,9 +19,10 @@ import (
 )
 
 type Limits struct {
-	MaxFiles      int
-	MaxFileBytes  int64
-	MaxTotalBytes int64
+	SensitivePaths []string
+	MaxFiles       int
+	MaxFileBytes   int64
+	MaxTotalBytes  int64
 }
 
 func DefaultLimits() Limits {
@@ -44,7 +45,7 @@ func credentialArtifact(name string) bool {
 
 func excludedFile(name string) bool {
 	n := strings.ToLower(name)
-	return credentialArtifact(n) || n == ".env" || strings.HasPrefix(n, ".env.") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || strings.HasSuffix(n, ".p12") || strings.HasSuffix(n, ".sqlite") || strings.HasSuffix(n, ".sqlite-wal") || strings.HasSuffix(n, ".sqlite-shm")
+	return n == "viber.config.json" || credentialArtifact(n) || n == ".env" || strings.HasPrefix(n, ".env.") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || strings.HasSuffix(n, ".p12") || strings.HasSuffix(n, ".sqlite") || strings.HasSuffix(n, ".sqlite-wal") || strings.HasSuffix(n, ".sqlite-shm")
 }
 
 // CaptureDirectory performs two exact scans, then compares all manifest bytes.
@@ -103,6 +104,9 @@ func scanWithGit(root string, limits Limits, g *gitCapture) (Capture, error) {
 			return nil
 		}
 		name := parentIgnoreSource(dir)
+		if policy.DeniedPath(name, limits.SensitivePaths) {
+			return c.Fail(c.UnsupportedCapability, "Git ignore binding requires restricted metadata; use directory capture for this privacy scope")
+		}
 		raw, err := fileguard.ReadRegular(handle, filepath.FromSlash(name), 1<<20)
 		if err == nil {
 			sources[name] = raw
@@ -130,6 +134,14 @@ func scanWithGit(root string, limits Limits, g *gitCapture) (Capture, error) {
 		relative = filepath.ToSlash(relative)
 		if !policy.SafePath(relative) {
 			return c.Fail(c.PolicyDenied, "unsafe or nonportable path in capture")
+		}
+		if policy.DeniedPath(relative, limits.SensitivePaths) {
+			result.Snapshot.Exclusions = append(result.Snapshot.Exclusions, relative)
+			if d.IsDir() {
+				result.Snapshot.Exclusions[len(result.Snapshot.Exclusions)-1] += "/"
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		key := strings.ToLower(relative)
 		if seen[key] {

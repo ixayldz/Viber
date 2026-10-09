@@ -1,0 +1,797 @@
+{
+  "schema_version": 2,
+  "date": "2026-10-08",
+  "code_version": "0.8.0-dev",
+  "code_revision": "049c4e4bab5910c8807ebcde95c6866539b937aa",
+  "prd_version": "1.1",
+  "scope": "First stable A-D: FR-01..27 + FR-33 B slice + FR-38 D slice + NFR-01..12 applicable slices",
+  "method": "Eşit ağırlıklı, 0/25/50/75/100 nitel uygulama dilimi değerlendirmesi. Release readiness, kalan emek, doğruluk veya benchmark başarısı değildir.",
+  "rubric": {
+    "0": "No requested behavior",
+    "25": "Foundation or small slice",
+    "50": "Working restricted implementation with major gaps",
+    "75": "Broad implementation with material scope/conformance gaps",
+    "100": "Complete applicable scope and required acceptance evidence"
+  },
+  "stable_items": [
+    {
+      "id": "FR-01",
+      "title": "Ham input/revision ve source-bound kriterler",
+      "score": 50,
+      "implemented": "Ham talimat ve revision CAS'a kaydediliyor; gereksinimler source span'a bağlı, boş niyet/kriter reddediliyor.",
+      "remaining": "Semantik requirement/constraint çıkarımı, kullanıcı hedefinin eksiksiz kapsandığının bağımsız incelemesi ve kritik kriterlerin kaynak/insan kanıtı.",
+      "evidence": [
+        "internal/agent/steering.go",
+        "internal/contracts/types.go"
+      ],
+      "work_packages": "P01/P02/P10",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-02",
+      "title": "Tek writer kernel ve command/event API",
+      "score": 75,
+      "implemented": "Tek metadata owner, OS lock, transaction-atomic command/event, saf reducer, task/global sequence ve command dedup var.",
+      "remaining": "Canonical nesne/event kataloğunun tamamı, supervisor altında çok görev koordinasyonu ve repo/target mutex kabulü.",
+      "evidence": [
+        "internal/store/store.go",
+        "internal/kernel/reducer.go"
+      ],
+      "work_packages": "P01/P04/P14",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-03",
+      "title": "Dirty/staged/unstaged/untracked baseline",
+      "score": 75,
+      "implemented": "Dirty/staged/unstaged/untracked exact bytes; native Git index v2/v3/v4, SHA-256 ve worktree capture var.",
+      "remaining": "BEST_EFFORT capture'ın sınırları; LFS/submodule/sparse/generated/mode/CRLF/case ve desteklenen platformların tam matrisi.",
+      "evidence": [
+        "internal/workspace/git.go",
+        "internal/workspace/snapshot.go"
+      ],
+      "work_packages": "P06/P08",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-04",
+      "title": "İzole immutable candidate",
+      "score": 75,
+      "implemented": "Scope'a bağlı CAS, immutable candidate manifest ve canlı kaynak dışına materialization var.",
+      "remaining": "Tüm writer/pending mutation freeze'i, process-tree quiescence, backend lifecycle ve bütün publication crash sınırlarının kabulü.",
+      "evidence": [
+        "internal/artifact/archive.go",
+        "internal/agent/checks.go"
+      ],
+      "work_packages": "P03/P06",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-05",
+      "title": "Read/write-set ve stale patch",
+      "score": 75,
+      "implemented": "FILE/ABSENT/LISTING read precondition, bounded exact reads, stale proposal reddi ve korunan check kapsamı guard'ı var.",
+      "remaining": "Genel tool/generated-output write-set, transaction prepare/apply/freeze ve gerçek filesystem yarış/fencing matrisi.",
+      "evidence": [
+        "internal/workspace/proposal.go",
+        "internal/agent/protection.go"
+      ],
+      "work_packages": "P06/P08",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-06",
+      "title": "Durable intent/attempt/receipt ve recovery",
+      "score": 50,
+      "implemented": "Durable intent/reserve/receipt, UNKNOWN bloklama, inspection replay; terminal parent'tan yeni task attempt ve interrupted creation uzlaşması var.",
+      "remaining": "Task attempt'tan ayrı bütün operation attempt/retry sınıfları; gerçek backend/external effect reconciliation ve yetkili UNKNOWN çözümü.",
+      "evidence": [
+        "internal/agent/attempt.go",
+        "internal/agent/session.go",
+        "internal/agent/tokens.go"
+      ],
+      "work_packages": "P04/P05/P10",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-07",
+      "title": "Process/FS/network/credential/resource sandbox",
+      "score": 50,
+      "implemented": "Gerçek Docker engineering profili readonly/nonroot/network-none, pinned image, sınırlı kaynak/output/timeout ve cleanup uygular.",
+      "remaining": "Escape/child/namespace/credential/mount/rootless/resource matrisi, backend version floor, orphan drain ve process fencing kabulü.",
+      "evidence": [
+        "internal/runner/docker.go"
+      ],
+      "work_packages": "P03",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-08",
+      "title": "Capability gate, approval, epoch fencing",
+      "score": 50,
+      "implemented": "Capability/restriction intersection, bound scoped one-shot approval, policy epoch/generation ve steering barrier var.",
+      "remaining": "Backend dispatch/publish fencing, clock-domain/reboot leases ve bütün config/credential/extension authority yolları.",
+      "evidence": [
+        "internal/policy/policy.go",
+        "internal/agent/requests.go"
+      ],
+      "work_packages": "P03/P05/P16",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-09",
+      "title": "Global resource ledger",
+      "score": 50,
+      "implemented": "Store-wide atomik token reserve/settle/UNKNOWN ledger; dedup, overage, proof-bound KERNEL_NO_DISPATCH zero settlement var.",
+      "remaining": "Para/price-version, CPU/disk/time/child allocation; fiziksel control reserve ve yetkili UNKNOWN reconciliation/write-off.",
+      "evidence": [
+        "internal/contracts/tokens.go",
+        "internal/store/tokens.go",
+        "internal/agent/tokens.go"
+      ],
+      "work_packages": "P05",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-10",
+      "title": "Lexical/path/range ve bounded paging",
+      "score": 75,
+      "implemented": "Exact-byte file/range/list/search, snapshot/read-set bağlı cursor ve bounded native tool/artifact sayfaları var.",
+      "remaining": "Bütün artifact türleri için ortak hydrate/page yetki/availability sözleşmesi ve büyük repo/retention-gap kabulü.",
+      "evidence": [
+        "internal/agent/native_pages.go",
+        "internal/agent/observe.go"
+      ],
+      "work_packages": "P06/P11",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-11",
+      "title": "Check/receipt/quality ve ayrı fulfillment",
+      "score": 50,
+      "implemented": "Pure quality/fulfillment predicate, mutation öncesi operator check origin, readonly registered Docker check ve immutable receipt var.",
+      "remaining": "Trusted discovery/selection/result channel, bağımsız observer, V0-V5/goal coverage, baseline/flaky bütün attempts; runtime strict VERIFIED yolu.",
+      "evidence": [
+        "internal/verify/verify.go",
+        "internal/verify/origin.go",
+        "internal/agent/checks.go"
+      ],
+      "work_packages": "P02/P07",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-12",
+      "title": "Lifecycle CLI ve JSONL",
+      "score": 75,
+      "implemented": "run/status/diff/pause/resume/cancel/inspect/replay/events/requests/respond; fresh attempt ve analysis/report çalışıyor.",
+      "remaining": "PRD'nin tam sürümlü canlı JSONL event sözleşmesi, cursor reconnect/gap-resync ve uygun headless compatibility/exit matrisi.",
+      "evidence": [
+        "internal/cli/cli.go",
+        "internal/cli/history.go"
+      ],
+      "work_packages": "P10/P14",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-13",
+      "title": "Typed checkpoint ve deterministic replay",
+      "score": 75,
+      "implemented": "Typed checkpoint, journal integrity, deterministic current/historical replay, backup/fresh restore ve explicit migration var.",
+      "remaining": "Tam DevelopmentEpoch/work interval kayıtları; silinmiş payload availability ve bütün gerekli typed state nesnelerinin lifecycle'ı.",
+      "evidence": [
+        "internal/store/checkpoint.go",
+        "internal/store/migration.go"
+      ],
+      "work_packages": "P04/P11",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-14",
+      "title": "Context preflight/compiler/manifest/prefix",
+      "score": 50,
+      "implemented": "Tam canonical protocol/spec/policy preflight, konservatif byte üst sınırı, request/manifest digest ve inclusion explanation var.",
+      "remaining": "Provider tokenizer kalibrasyonu, sensitivity hard filter, ranking/optional packing, stable prefix/cache ölçümü ve optimize compiler.",
+      "evidence": [
+        "internal/agent/context.go",
+        "internal/context/compiler.go"
+      ],
+      "work_packages": "P11",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-15",
+      "title": "Snapshot/environment freshness",
+      "score": 25,
+      "implemented": "Source/candidate/index/ignore değişimlerine konservatif freshness ve stale resume/proposal/check reddi var.",
+      "remaining": "Typed environment/toolchain/config/lockfile/dependency fingerprint; selective invalidation, generated outputs ve watcher-loss direct-read fallback.",
+      "evidence": [
+        "internal/agent/runtime.go",
+        "internal/workspace/snapshot.go"
+      ],
+      "work_packages": "P06/P12",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-16",
+      "title": "Bounded compaction",
+      "score": 0,
+      "implemented": "Compactor veya summary verifier uygulanmış değil.",
+      "remaining": "Bounded compaction, authoritative typed state koruması, source-ref/constraint/pending-tool verifier ve paired continuation kabulü.",
+      "evidence": [
+        "internal/agent/context.go"
+      ],
+      "work_packages": "P12",
+      "status": "NOT_IMPLEMENTED",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-17",
+      "title": "Context/history pin/page ve explanation",
+      "score": 50,
+      "implemented": "context-why, retained canonical context-page, exact history/events/read paging ve digest/inclusion reason var.",
+      "remaining": "User pin/unpin, ortak hydration/availability, context omission/optional ranking UX ve retention sonrası historical/unavailable ayrımı.",
+      "evidence": [
+        "internal/agent/observe.go",
+        "internal/cli/observe.go"
+      ],
+      "work_packages": "P11/P13",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-18",
+      "title": "Safe model switch ve privacy/model lock",
+      "score": 25,
+      "implemented": "Opaque continuation provider/model profile'a bağlı; çapraz provider ve uygunsuz fallback reddediliyor.",
+      "remaining": "Aktif task'ta safe model switch, complete protocol boundary, privacy/model lock, context/budget yeniden compile ve receipt admissibility.",
+      "evidence": [
+        "internal/model/protocol.go",
+        "internal/agent/runtime.go"
+      ],
+      "work_packages": "P09/P13",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-19",
+      "title": "Durable steering/pause/revision ve queue",
+      "score": 50,
+      "implemented": "Durable steer/revise, raw input-before-barrier, aktif owner pause/cancel ve eski approval invalidation var.",
+      "remaining": "Semantik replan, prompt queue/TUI steering, backend race/fencing ve ikinci Ctrl+C supervisor force-stop kabulü.",
+      "evidence": [
+        "internal/agent/steering.go",
+        "internal/owner/steering.go"
+      ],
+      "work_packages": "P10/P15",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-20",
+      "title": "Autonomy ve bağımsız isolation",
+      "score": 50,
+      "implemented": "review/guided/auto aday mutation admission'a bağlı; analysis task readonly; sınırlı Docker isolation ayrı tanımlı.",
+      "remaining": "Genel effect surface ve tüm autonomy/isolation profil matrisi; yetkili shell quick mode ve kullanıcı delivery kontrolü.",
+      "evidence": [
+        "internal/agent/tools.go",
+        "internal/runner/docker.go"
+      ],
+      "work_packages": "P03/P10/P15",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-21",
+      "title": "Apply/restore ve delivery receipt",
+      "score": 25,
+      "implemented": "Candidate-only changeset/diff/export ve limited delivery artifact mevcut; canlı source yazılmıyor.",
+      "remaining": "Live apply/scoped restore, exclusive target mutex, preimage/three-way conflict, dosya bazlı durable receipt/crash recovery ve merge sonrası reverify.",
+      "evidence": [
+        "internal/delivery/changeset.go",
+        "internal/cli/cli.go"
+      ],
+      "work_packages": "P08/P15",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-22",
+      "title": "TUI, @file, slash, diff/status",
+      "score": 0,
+      "implemented": "CLI var; PRD'nin interaktif TUI'si yok.",
+      "remaining": "Composer, @file, slash commands, prompt queue, diff/status/why, model/restore UX, keyboard/resize ve bounded live log kabulü.",
+      "evidence": [
+        "internal/cli/cli.go"
+      ],
+      "work_packages": "P15",
+      "status": "NOT_IMPLEMENTED",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-23",
+      "title": "Doctor/onboarding/support matrix",
+      "score": 50,
+      "implemented": "doctor/help/README, auth login/status/profiles/select/models/logout ve backend/provider pending/unsupported gösterimi var.",
+      "remaining": "Tam onboarding ve config resolution; installed binary setup/update/uninstall, actual platform support matrix ve doctor'ın tüm ortam kontrolleri.",
+      "evidence": [
+        "internal/cli/auth.go",
+        "internal/cli/cli.go",
+        "README.md"
+      ],
+      "work_packages": "P16/P19",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-24",
+      "title": "İki remote + bir local conformance",
+      "score": 75,
+      "implemented": "OpenAI Responses, Anthropic Messages, Ollama adapter ve CLI; JSON/SSE/NDJSON offline/loopback conformance; resmi ChatGPT SIWC auth/runtime kodu var.",
+      "remaining": "İki ayrı remote protokol + gerçek kurulu local model kabulü; seçili provider/model profile, auth/rate/quota/usage/cancel/recovery gerçek testleri.",
+      "evidence": [
+        "internal/model/stream.go",
+        "internal/model/chatgpt.go",
+        "internal/cli/task.go",
+        "internal/auth/client.go"
+      ],
+      "work_packages": "P09/P19",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": "Provider/model ölçümü için hesap veya API anahtarı/local model; altyapı geliştirmesi anahtarsız."
+    },
+    {
+      "id": "FR-25",
+      "title": "Secure IPC, supervisor, detach/attach",
+      "score": 50,
+      "implemented": "SID/UID/PID peer-auth named pipe/Unix socket, OS owner lock ve secure local owner commands var.",
+      "remaining": "Background supervisor, detach/attach, persistent stream cursor/reconnect/gap-resync, slow-client backpressure ve orphan cleanup.",
+      "evidence": [
+        "internal/ipc/ipc.go",
+        "internal/owner/owner.go"
+      ],
+      "work_packages": "P14",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-26",
+      "title": "Retention/delete/export",
+      "score": 25,
+      "implemented": "Candidate export, CAS+SQLite snapshot backup, temiz store restore ve migration kanıtı var.",
+      "remaining": "Retention/delete/tombstone, metadata-payload ayrımı, shared-reference-aware GC, managed-copy purge ve deletion watermark ile restore no-revival.",
+      "evidence": [
+        "internal/store/backup.go",
+        "internal/artifact/export.go",
+        "internal/cli/cli.go"
+      ],
+      "work_packages": "P04/P16",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-27",
+      "title": "TS/JS/Python outline/symbols",
+      "score": 50,
+      "implemented": "TS/JS/Python lexical declarations; source digest, exact byte span/line ve snapshot'a bağlı symbol ID; sınırlı output var.",
+      "remaining": "Derin dil çözümlemesi/unsupported syntax coverage ve freshness kabulü; güvenli external parser/LSP ve sensitivity entegrasyonu. AST/resolved graph FR-28'dir.",
+      "evidence": [
+        "internal/outline/outline.go",
+        "internal/agent/native_pages.go"
+      ],
+      "work_packages": "P17",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-33",
+      "title": "Typed plan DAG/dependency/mutex — B dilimi",
+      "score": 50,
+      "implemented": "B dilimi: typed bounded tek-worker DAG, dependency/input-output/scope/criterion/check contract ve deterministik node progression var.",
+      "remaining": "B dilimindeki resource/target mutex enforcement ve pending writer freeze entegrasyonu; çok-worker/integration queue F kapsamı ayrı.",
+      "evidence": [
+        "internal/plan/plan.go",
+        "internal/agent/plan.go"
+      ],
+      "work_packages": "P06",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "FR-38",
+      "title": "Pinned extension/effect sınırı — D dilimi",
+      "score": 0,
+      "implemented": "Sınırlı D extension runtime/MCP contract uygulanmış değil.",
+      "remaining": "D: sürümü pinned, scoped effect/authority ve isolated tool extension boundary; G'deki geniş MCP/team kapsamından ayrı kabul.",
+      "evidence": [
+        "internal/cli/cli.go"
+      ],
+      "work_packages": "P16",
+      "status": "NOT_IMPLEMENTED",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-01",
+      "title": "Fault injection'da veri koruma",
+      "score": 50,
+      "implemented": "Candidate/CAS/journal/migration corruption ve subprocess crash fixture'ları kullanıcı source'unu koruyor.",
+      "remaining": "Full boundary kill/power-loss, live apply partial write, publish/fencing ve tüm filesystem/platform veri koruma matrisi.",
+      "evidence": [
+        "internal/store/migration_test.go",
+        "internal/agent/backup_test.go",
+        "internal/workspace/workspace_test.go"
+      ],
+      "work_packages": "P03/P04/P06/P08/P19",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-02",
+      "title": "Eski authority admission reddi",
+      "score": 50,
+      "implemented": "Stale policy/spec/generation, old approval, source/candidate bağları ve input barrier reddi var.",
+      "remaining": "Gerçek backend dispatch/publish fence; expired lease/clock-domain/suspend/reboot ve orphan process kabulü.",
+      "evidence": [
+        "internal/policy/policy_test.go",
+        "internal/runner/docker_test.go"
+      ],
+      "work_packages": "P03/P05/P14",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-03",
+      "title": "False VERIFIED engeli",
+      "score": 50,
+      "implemented": "Model PASS/exit0/partial response kaliteyi yükseltmiyor; pure predicate guard ve UNKNOWN final blokları var.",
+      "remaining": "Admissible trusted receipt üreten uçtan uca runtime, independent observer/goal review ve tüm F12/F13/F25-F28/F36 saldırı kapsamı.",
+      "evidence": [
+        "internal/verify/verify.go",
+        "internal/agent/checks.go",
+        "internal/agent/session.go"
+      ],
+      "work_packages": "P02/P07/P08/P18",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-04",
+      "title": "Recoverable provider/plugin/environment failure",
+      "score": 50,
+      "implemented": "Malformed/partial stream fail-closed; cancellation raw prefix'i ve UNKNOWN reserve'u korur; fresh restore/restart mümkün.",
+      "remaining": "Typed provider auth/rate/quota/retry/backoff sınıfları, gerçek charge/effect reconciliation ve supervisor/plugin recovery.",
+      "evidence": [
+        "internal/model/stream.go",
+        "internal/agent/stream_test.go",
+        "internal/agent/tokens.go"
+      ],
+      "work_packages": "P05/P09/P10/P14",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": "Provider/model ölçümü için hesap veya API anahtarı/local model; altyapı geliştirmesi anahtarsız."
+    },
+    {
+      "id": "NFR-05",
+      "title": "Her profile egress gate",
+      "score": 50,
+      "implemented": "Remote consent/provider gates, fixed origin, no proxy/redirect/fallback; Docker network-none; loopback local declaration var.",
+      "remaining": "Bütün execution/extension/index/export egress yolları, tam OS profile conformance ve local endpoint'in gerçek cloud-free kabulü.",
+      "evidence": [
+        "internal/model/http.go",
+        "internal/policy/policy.go",
+        "internal/runner/docker.go"
+      ],
+      "work_packages": "P03/P09/P16",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-06",
+      "title": "Bounded disk/log/context/UI",
+      "score": 50,
+      "implemented": "Context/output/wire/event/page/plan/step sınırları ve token reservation var.",
+      "remaining": "Store disk quota/GC/low-watermark/physical control reserve, CPU/child ledger, bounded UI ve slow-client buffers.",
+      "evidence": [
+        "internal/contracts/tokens.go",
+        "internal/agent/context.go",
+        "internal/model/stream.go"
+      ],
+      "work_packages": "P04/P05/P11/P14/P15",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-07",
+      "title": "Pinned schema/migration/restore backup",
+      "score": 75,
+      "implemented": "Format pin, v1->v2 explicit migration/backup/recovery, fresh restore ve historical checkpoint integrity var.",
+      "remaining": "Install/update/downgrade/power-loss matrisi, deletion-aware backup/restore ve reproducible release artifact kabulü.",
+      "evidence": [
+        "internal/store/migration.go",
+        "internal/store/backup.go"
+      ],
+      "work_packages": "P01/P04/P19",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-08",
+      "title": "Warm CLI/context p95",
+      "score": 0,
+      "implemented": "PRD reference-machine p95 performans ölçüm paketi yok.",
+      "remaining": "Warm CLI <1s/context <250ms hedeflerini tanımlı repo/token/cache/CPU/disk manifest'iyle ölç; sonuç ve hedefi ayrı raporla.",
+      "evidence": [
+        "docs/VALIDATION.md"
+      ],
+      "work_packages": "P18/P19",
+      "status": "NOT_IMPLEMENTED",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-09",
+      "title": "Source/index/memory erişim kontrolü",
+      "score": 25,
+      "implemented": "Task-scoped CAS/path access, private owner IPC/auth store; belirli credential dosya adları capture/proposal'a giremiyor.",
+      "remaining": "Genel sensitivity/secret politika filtresi, index/context/derived memory/export/backup privacy lineage; Unix OS keyring.",
+      "evidence": [
+        "internal/artifact/archive.go",
+        "internal/workspace/ignore.go",
+        "internal/auth/protect_unix.go"
+      ],
+      "work_packages": "P03/P11/P16/P17",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-10",
+      "title": "Versioned JSONL/cursor/exits",
+      "score": 50,
+      "implemented": "Schema-versioned structured JSON, task/store sequence ve durable event paging/exit ayrımları var.",
+      "remaining": "Tam JSONL envelope/compatibility, event ID dedup, persistent reconnect, retention gap+state snapshot ve backpressure.",
+      "evidence": [
+        "internal/cli/history.go",
+        "internal/ipc/ipc.go"
+      ],
+      "work_packages": "P01/P10/P14/P19",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-11",
+      "title": "Default OFF ve secret-safe export",
+      "score": 25,
+      "implemented": "Telemetry/training default OFF; API değerleri yerine env handle, private SIWC credentials ve provider error redaction var.",
+      "remaining": "Bağımsız privacy axes/config, support/export preview+general redaction, derived deletion; Unix token encryption/OS keyring.",
+      "evidence": [
+        "internal/cli/cli.go",
+        "internal/auth/store.go",
+        "internal/auth/protect_unix.go"
+      ],
+      "work_packages": "P04/P16",
+      "status": "PARTIAL",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": null
+    },
+    {
+      "id": "NFR-12",
+      "title": "Controlled ablation/all attempts cost",
+      "score": 0,
+      "implemented": "Bağımsız ürün benchmark/paired ablation/holdout ve tüm denemeler maliyet paketi uygulanmış değil.",
+      "remaining": "Preregistered solution/control cohort, bağımsız evaluator, all-attempt cost/compute/rework, uncertainty/adoption/rollback ölçümü.",
+      "evidence": [
+        "docs/IMPLEMENTATION_PLAN.md",
+        "prd.md"
+      ],
+      "work_packages": "P12/P13/P17/P18",
+      "status": "NOT_IMPLEMENTED",
+      "keyless_work_remaining": true,
+      "live_acceptance_dependency": "Provider/model ölçümü için hesap veya API anahtarı/local model; altyapı geliştirmesi anahtarsız."
+    }
+  ],
+  "deferred_items": [
+    {
+      "id": "FR-28",
+      "phase": "E",
+      "title": "AST/LSP resolved graph ve freshness",
+      "score": 0,
+      "credential_note": "Çoğu parser/graph işi anahtarsız."
+    },
+    {
+      "id": "FR-29",
+      "phase": "E",
+      "title": "Git history/co-change/issue memory ve cutoff",
+      "score": 0,
+      "credential_note": "Yerel Git anahtarsız; uzak issue connector ayrı token isteyebilir."
+    },
+    {
+      "id": "FR-30",
+      "phase": "E",
+      "title": "Semantic embedding/retrieval/reranker",
+      "score": 0,
+      "credential_note": "Local model anahtarsız; remote servis credential ister."
+    },
+    {
+      "id": "FR-31",
+      "phase": "E",
+      "title": "Runtime trace/coverage ve test selection",
+      "score": 0,
+      "credential_note": "Deterministik backend/eval anahtarsız."
+    },
+    {
+      "id": "FR-32",
+      "phase": "E",
+      "title": "Yeni repo blueprint generation/eval",
+      "score": 0,
+      "credential_note": "Fixture altyapısı anahtarsız; gerçek kalite model inference ister."
+    },
+    {
+      "id": "FR-34",
+      "phase": "F",
+      "title": "Bounded workers/isolated writers/integration",
+      "score": 0,
+      "credential_note": "Scheduler/backend anahtarsız; remote inference credential ister."
+    },
+    {
+      "id": "FR-35",
+      "phase": "F",
+      "title": "TTL/generation/clock-domain AgentLease",
+      "score": 0,
+      "credential_note": "Anahtarsız OS/scheduler işi."
+    },
+    {
+      "id": "FR-36",
+      "phase": "F",
+      "title": "Sticky/phase routing ve measured profile",
+      "score": 0,
+      "credential_note": "Routing kodu anahtarsız; remote karşılaştırma credential/bütçe ister."
+    },
+    {
+      "id": "FR-37",
+      "phase": "F",
+      "title": "ExternalAgentAdapter patch worker",
+      "score": 0,
+      "credential_note": "Adapter anahtarsız; harici ürün kendi hesabını isteyebilir."
+    },
+    {
+      "id": "FR-39",
+      "phase": "G",
+      "title": "Scoped/versioned/evaluated procedural skills",
+      "score": 0,
+      "credential_note": "Lifecycle anahtarsız; bazı eval işlemleri model ister."
+    },
+    {
+      "id": "FR-40",
+      "phase": "G",
+      "title": "Learned policy/shadow/canary/rollback",
+      "score": 0,
+      "credential_note": "Yerel eğitim mümkün; ayrıca veri/compute/eval gerekir."
+    },
+    {
+      "id": "FR-41",
+      "phase": "G",
+      "title": "Ayrı opt-in training/preference/context exports",
+      "score": 0,
+      "credential_note": "Export/policy anahtarsız; uzak training seçilirse credential."
+    },
+    {
+      "id": "FR-42",
+      "phase": "G",
+      "title": "Team policy/remote execution",
+      "score": 0,
+      "credential_note": "Model key'den ayrı auth/tenant/host/deploy işleri."
+    }
+  ],
+  "assessment": {
+    "assessed_on": "2026-10-08",
+    "review_type": "PRD/code/documentation/stored-evidence review plus current Windows doctor smoke; full suites not rerun",
+    "items": 41,
+    "sum": 1875,
+    "max": 4100,
+    "percentage": 45.73,
+    "complete_items": 0,
+    "not_implemented_items": 5,
+    "partial_items": 36,
+    "release_gates": {
+      "A": "CLOSED",
+      "B_preview": "CLOSED",
+      "stable_A_D": "CLOSED"
+    },
+    "historical_0_6_percentage": 40.24
+  },
+  "deferred_slices": [
+    {
+      "id": "FR-33",
+      "phase": "F",
+      "remaining": "Bounded multi-worker scheduler, enforced leases/mutex/integration queue, merge reverify; B plan dilimi score tablosunda ayrı."
+    },
+    {
+      "id": "FR-38",
+      "phase": "G",
+      "remaining": "Geniş MCP/team/remote extension scope; D asgari extension boundary score tablosunda ayrı."
+    }
+  ],
+  "acceptance_evidence": {
+    "windows_full": {
+      "pass": 443,
+      "skip": 2,
+      "fail": 0
+    },
+    "windows_final_affected": {
+      "pass": 200,
+      "skip": 1,
+      "fail": 0
+    },
+    "windows_union": {
+      "distinct_observed_pass": 449,
+      "skip_without_any_pass": 2,
+      "fail": 0,
+      "note": "Actual Docker agent check full turda PASS; son affected turda opt-in değişkeni yokken SKIP. Birleşim yeni full final suite değildir."
+    },
+    "linux": "Stored full race/vet/build plus final affected race/vet/build PASS",
+    "darwin": "COMPILE_ONLY; no native macOS runtime acceptance",
+    "real_api_inference": "NOT_RUN",
+    "real_chatgpt_login_inference": "NOT_RUN",
+    "real_installed_local_model": "NOT_RUN",
+    "independent_pilot_eval": "NOT_RUN",
+    "current_doctor": "release_ready=false; live_apply=UNSUPPORTED; capture_consistency=BEST_EFFORT"
+  },
+  "sources": {
+    "prd": "prd.md",
+    "plan": "docs/IMPLEMENTATION_PLAN.md",
+    "gates": "docs/RELEASE_GATES.md",
+    "validation": "docs/VALIDATION.md",
+    "historical_report": "docs/PRD_STATUS_ANALYSIS.md",
+    "historical_score": "docs/PRD_STATUS_SCORE.json"
+  }
+}

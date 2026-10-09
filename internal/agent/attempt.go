@@ -126,7 +126,7 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 	if err != nil {
 		return parent, err
 	}
-	return s.Create(ctx, StartOptions{Root: base.Snapshot.Root, Git: base.Snapshot.Git != nil, Prompt: raw, TaskID: options.NewTask, Budget: budget, Autonomy: doc.Autonomy, AllowUnverified: options.AllowUnverified, Runtime: doc.Runtime, Fixture: options.Fixture, CheckPlan: checkPlan, CheckRuntime: doc.CheckRuntime, TaskKind: taskKind(doc), MaxRepairs: doc.MaxRepairs, inheritedSpec: &inherited, AttemptOrigin: origin})
+	return s.Create(ctx, StartOptions{Config: doc.Config, Root: base.Snapshot.Root, Git: base.Snapshot.Git != nil, Prompt: raw, TaskID: options.NewTask, Budget: budget, Autonomy: doc.Autonomy, AllowUnverified: options.AllowUnverified, Runtime: doc.Runtime, Fixture: options.Fixture, CheckPlan: checkPlan, CheckRuntime: doc.CheckRuntime, TaskKind: taskKind(doc), MaxRepairs: doc.MaxRepairs, inheritedSpec: &inherited, AttemptOrigin: origin})
 }
 func (s *Session) validateAttempt(doc Document) error {
 	if doc.AttemptOrigin == nil {

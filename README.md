@@ -2,9 +2,9 @@
 
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.
 
-**Mevcut sürüm: 0.8.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü ve güçlü doğrulama tamamlanmamıştır.
+**Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü ve güçlü doğrulama tamamlanmamıştır.
 
-[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [0.8 anahtarsız ilerleme](docs/KEYLESS_PROGRESS.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
@@ -20,7 +20,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Mevcut profil `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, compaction, retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+Canlı workspace'e `apply`/`restore`, güçlü test doğrulaması, TUI, detach/attach, retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -294,7 +294,7 @@ Yeni store'un ilk görevi, değişmez ortak input/output token limitlerini kayde
 
 `charged` gözlenen kullanım, `reserved` henüz sonuçlanmamış üst sınırdır. Her model intent'i ve rezervasyonu aynı SQLite transaction'ında commit edilir. Kapasite yetmezse model dispatch edilmeden `WAITING_RESOURCE / GLOBAL_TOKEN_BUDGET_EXHAUSTED` oluşur. Aynı receipt ikinci kez charge edilmez. Bildirilen gerçek overage kayda alınır ve sonraki çalışma durur; unknown risk cancel/restart/restore ile silinmez.
 
-`status`/`inspect` ayrıca görevdeki reservation/request/profile/raw-response bağlarını `state.token_account` içinde gösterir. Fixture kullanımının kaynağı `FIXTURE_REPORTED`, gerçek adapter'ınki `PROVIDER_REPORTED`'dır; bunlar bağımsız kalite veya parasal fatura kanıtı değildir. İptal ve kurtarma komutları token çalışma limitine tabi değildir. Fiziksel disk/control reserve, para/price, CPU/disk/child allocation ledger'ı bu teslimde tamamlanmaz.
+`status`/`inspect` ayrıca görevdeki reservation/request/profile/raw-response bağlarını `state.token_account` içinde gösterir. Fixture kullanımının kaynağı `FIXTURE_REPORTED`, gerçek adapter'ınki `PROVIDER_REPORTED`'dır; bunlar bağımsız kalite veya parasal fatura kanıtı değildir. İptal ve kurtarma komutları token çalışma limitine tabi değildir. 0.9 resource ledger ve fiziksel disk reserve akışı aşağıda anlatılır.
 
 0.6 ve daha eski görevleri içeren store `LEGACY_UNTRACKED` olarak görünür. Eski görevler kendi mevcut sözleşmeleriyle okunur/resume edilir; tarihsel kullanım bilinmeden yeni global hesabın dışında bırakılmaz. 0.7'de yeni görevler için yeni bir store kullanın. Yeni task/account alanları eski strict decoder tarafından yorumlanamaz; downlevel resume desteklenmez. Mevcut SQLite şema 2 korunur, örtük migration yapılmaz.
 
@@ -479,3 +479,149 @@ Credential/policy inference transport’u çağrılmadan reddedilirse kernel `KE
 Gerçek API kabulü bu çalışma kapsamında anahtar kullanılmadan test edilmedi; offline protocol/admission/privacy kanıtı vardır.
 
 Stream, UI’ya canlı delta yayını değildir: 8 MiB’ye kadar private wire cevap saklanır, ancak tam terminal protokol sınırı doğrulandıktan sonra native tools’a geçilir. Anthropic JSON argüman parçaları/signed thinking ve cumulative/cache usage; OpenAI terminal response; Ollama complete structured tool chunks korunur. Kesik/bozuk/sırasız/different-model/server-tool cevap authority vermez. JSON/stream mode, opaque continuation ve UNKNOWN usage için silent fallback/retry yoktur. Per-response tool batch en fazla 32 çağrıdır. [OpenAI Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses), [Anthropic Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [Ollama streaming](https://docs.ollama.com/capabilities/streaming).
+
+## Context devamlılığı ve model geçişi (0.9)
+
+`continuity-info` current task sequence, profile digest, pin ve compaction referanslarını verir. `context-edit` yalnız settled, nonterminal ve input barrier olmayan sınırda çalışır. Aynı command ID ile aynı JSON'u tekrar göndermek aynı receipt'i verir; içeriği değiştirmek reddedilir.
+
+~~~powershell
+.\bin\viber.exe continuity-info TASK --store STORE --json
+.\bin\viber.exe context-edit TASK --store STORE --command-file compact.json --json
+~~~
+
+`compact.json`, çıktıda görülen sequence ile hazırlanır:
+
+~~~json
+{"command_id":"compact-001","task_id":"TASK","expected_task_seq":42,"action":"compact","keep_recent":8}
+~~~
+
+Sıkıştırma eski tam assistant/tool bloklarını immutable bir history archive'a taşır. Goal, raw intent, spec, policy, plan, budget, candidate ve check kayıtları değişmez. Bounded preview tarihsel ve güvenilmeyen gözlemdir. Zorunlu context sığmıyorsa çağrı yapılmaz; yeterli settled history varsa aynı mekanizma dispatch öncesi otomatik denenir.
+
+`history-page TASK --store STORE --history-digest DIGEST --offset 0 --limit 4096 --json` exact retained canonical source baytlarını base64 döndürür. Modelin `history_page` aracı opaque provider continuation alanlarını çıkaran ayrı canonical projection kullanır; source ve projection digest'leri açıkça ayrıdır. Sadece o görevin kayıtlı archive referansları okunabilir.
+
+Pin komutu, mevcut candidate'ın exact source digest ve byte aralığına bağlanır. `pin` nesnesi `id/path/candidate/source_digest/start/end` içerir; baytları kernel doldurur. En çok 16 pin, tek pin 16 KiB, toplam 64 KiB. `{"action":"unpin","pin_id":"ID",...}` açık kaldırma ister. Pin tarihsel candidate'a bağlı kalabilir; current evidence veya yetki sayılmaz.
+
+`model-switch TASK --store STORE --command-file switch.json --json` komutunun alanları `command_id/task_id/expected_task_seq/expected_profile/runtime`'dır. `runtime` mevcut runtime nesnesinin, istenen model/capacity/output/timeout değerleri değiştirilmiş kopyasıdır. İlk profilin provider, endpoint, account, credential handle ve privacy izinleri korunur. Eski opaque continuation atılır; canonical text/tool pairing kalır. Eski token/resource charges kendi immutable profilinde tutulur. Yeni request context, kalan task/global token ve kaynak bütçesine sığmadan değişiklik commit edilmez. Pending/UNKNOWN işlemde geçiş reddedilir.
+
+## Kaynak bütçesi ve fiziksel disk rezervi (0.9)
+
+Yeni store'un ilk görevi immutable `--resource-policy policy.json` ile para, CPU allocation, disk work, active operation time ve eşzamanlı child limitlerini seçebilir. Sonraki görevler aynı policy'yi devralır. Varsayılan para limiti sıfırdır; local/fixture ve ChatGPT plan kullanımının API çağrısı maliyeti bu ledger'da sıfırdır. Abonelik, elektrik, local GPU veya gerçek cloud faturası ölçülmez.
+
+~~~powershell
+.\bin\viber.exe resources TASK --store STORE --json
+~~~
+
+Çıktı `ledger` ve `disk` nesnelerini verir. Money birimi currency'nin milyonda biridir. CPU/disk charge ölçülen fiziksel tüketim olarak sunulmaz: admit edilen konservatif allocation üst sınırı charge edilir; operation time ayrı tutulur. Model token/resource intent ve settlement aynı metadata transaction'ındadır. Docker child reservation, profilin PID üst sınırını kapsar; UNKNOWN native süreçte rezerv silinmez.
+
+Ücretli OpenAI/Anthropic modelleri explicit versioned operator price catalog ister. Fiyatlar otomatik çekilmez; aşağıdaki miktarlar yalnız sentetik örnektir:
+
+~~~json
+{
+  "schema_version":1,
+  "currency":"USD",
+  "limits":{"money_micros":10000000,"cpu_millis":68719476736,"disk_bytes":8589934592,"wall_millis":4294967296,"children":512},
+  "operator_prices":[{"version":"operator-example-v1","provider":"openai","model":"SELECTED_MODEL","input_micros_per_million_tokens":1000000,"output_micros_per_million_tokens":1000000}]
+}
+~~~
+
+Böyle bir task'a `--resource-policy policy.json` ekleyin. Rate alanları bir milyon token için micro currency miktarıdır; sonuç yukarı yuvarlanır. Catalog'da bulunmayan paid model başlatılmaz; model switch de catalog ve kalan bütçeyi kontrol eder.
+
+Store, 32 MiB private `control.reserve` alanını random bytes + sync ile gerçekten ayırır ve OS allocation bilgisini doğrular. 64 MiB free-space low watermark altında yeni work yazısı engellenir. Sınırlı control/receipt/checkpoint yazıları rezervi tüketebilir; kapasite tükenirse son durable checkpoint korunarak yazı reddedilir. Work tekrar başlamadan rezerv doldurulur. Bu mekanizma network filesystem veya bütün güç kesintisi senaryoları için conformance iddiası değildir.
+
+0.8 ve önceki resource-untracked store'lara yeni accounted task karıştırılmaz. Yeni 0.9 görevleri için fresh store kullanın; mevcut tarihsel accounting'e sıfır kullanım eklenmez. SQLite format 2 korunur; yeni optional task alanlarını eski strict clients okuyamaz, downlevel resume desteklenmez.
+
+## UNKNOWN model riskini hesapta kapatma (0.9)
+
+UNKNOWN model response/usage kendiliğinden retry edilmez. Kullanıcı `status/resources` içindeki exact reservation/request/profile ve current task sequence'i inceleyip `reconcile-model-risk TASK --store STORE --command-file risk.json --json` verebilir:
+
+~~~json
+{"command_id":"risk-001","task_id":"TASK","expected_task_seq":42,"reservation_id":"RESERVATION_ID","request_digest":"REQUEST_SHA256","profile_digest":"PROFILE_SHA256","decision":"ACCOUNT_FULL_UPPER_BOUND_WITHOUT_OUTPUT"}
+~~~
+
+Bu karar **bütün üst sınırı harcama olarak kaydeder**. Usage source `OPERATOR_ASSUMED_UPPER_BOUND`'dır; provider-reported usage değildir. Kayıp response kullanılmaz, candidate/goal değişmez, quality yükselmez. Sonraki inference ayrı yeni çağrıdır; kullanılan bütçe geri verilmez. Cancel edilmiş task hesaplanabilir fakat resume edilemez. Native process belirsizliği bu komutla çözülemez; gerçek process quiescence gerekir.
+
+## 0.9: background kullanım, bakım ve güvenli destek
+
+Yeni task'ı arka planda başlatmak için normal run komutuna `--detach` ekleyin. Aynı binary ayrı bir owner süreci başlatır; JSON yanıttaki `invocation_id` tekrar çağrı ve uzlaşma için saklanır. Task store'u kaynak dizinin dışında kalmalıdır.
+
+```powershell
+.\bin\viber.exe run "Kaynağı incele" --offline --fixture examples/offline/analysis.json --root examples/offline/source --store C:\ViberData\review --task review --task-kind ANALYSIS --allow-unverified --detach --json
+.\bin\viber.exe attach review --store C:\ViberData\review --after 0 --follow --json
+.\bin\viber.exe owner-status --store C:\ViberData\review --json
+.\bin\viber.exe pause review --store C:\ViberData\review --json
+.\bin\viber.exe owner-stop --store C:\ViberData\review --json
+```
+
+`attach` çıktısı sürümlü JSONL sayfalarıdır; durable event'ler task sequence/event ID ile dedup edilir. Son başarılı sayfanın `cursor` değerini sonraki `--after` olarak kullanın. Yavaş/kapalı attach istemcisi detached task'ı durdurmaz. Geçici model text delta'ları retained journal değildir ve replay edilmez. Owner-stop aktif task'ı reddeder; başarıdan önce endpoint'in kapanmasını ve OS writer kilidinin bırakılmasını denetler. Owner süreci kaybolmuşsa eski admitted invocation otomatik tekrar çalıştırılmaz; task/reservation durumunu inceleyin. Bu dilim tam hostile-principal/orphan-child/backend fencing kabulünü kapatmaz.
+
+Mevcut task için `detach TASK --store PATH --command-id ID --json` kullanabilirsiniz. `serve-background` owner'ı task dispatch etmeden başlatır. Aynı ID ile aynı aktif veya tamamlanmış invocation yeniden dispatch edilmez.
+
+GC önce review edilebilir plan üretir:
+
+```powershell
+$plan = .\bin\viber.exe store-gc-preview --store C:\ViberData\review --json | ConvertFrom-Json
+$gcCommand = @{ command_id = "gc-20261009-1"; plan = $plan } | ConvertTo-Json -Depth 100
+[IO.File]::WriteAllText((Join-Path (Get-Location) "gc-command.json"), $gcCommand, [Text.UTF8Encoding]::new($false))
+.\bin\viber.exe store-gc --store C:\ViberData\review --command-file gc-command.json --json
+```
+
+GC, tam journal/historical-document/source/receipt grafiğinde erişilemeyen immutable CAS nesnelerini kaldırır. Standalone snapshot-save scope'ları korunur; pending/UNKNOWN effect veya aktif görev varsa işlem reddedilir. Plan journal/reference head'e bağlıdır; değişmiş head yeni preview gerektirir. Intent ve per-file receipts backup/fresh restore'da korunur. Bu komut task silme, sensitive deletion, managed backup purge veya fiziksel disk silme değildir; retained task verisini süreye göre otomatik silmez.
+
+Paylaşılabilir destek bilgisi için:
+
+```powershell
+.\bin\viber.exe support --store C:\ViberData\review --output C:\ViberSupport\review-1 --json
+```
+
+`support.json` yalnız enum durumları, sayısal bütçe/sayaç ve provider sınıfı içerir. Prompt, kod, dosya adı/hash'i, task ID, model adı/endpoint, kullanıcı email/credential bilgisi ve ham log dahil edilmez; otomatik gönderim yapılmaz. Normal `export` ise kullanıcı tarafından istenen kod/patch çıktısıdır ve paylaşmadan önce içeriği incelenmelidir.
+
+Unix auth storage artık OS vault bağlı AES-256-GCM kullanır: Linux'ta `/usr/bin/secret-tool` ve erişilebilir Secret Service, macOS'ta Keychain/`/usr/bin/security` gerekir. Vault kapalı/eksikse plaintext'e geri dönülmez. 0.8 Unix plaintext kayıtları için açık yerel geçiş:
+
+```sh
+viber auth migrate-storage --auth-dir /private/path/to/viber/auth --json
+```
+
+Bu işlem hesap/profile kimliğini korur; inference, registration veya refresh yapmaz ve plaintext backup üretmez. Windows kullanıcı DPAPI korunur. Credential vault'u task store/source/backup'tan ayrıdır; yalnız credentials.bin kopyalamak Unix vault anahtarını taşımaz. Offline encryption/helper-protocol fixture'ları gerçek desktop vault/unlock kabulü değildir; native macOS ve gerçek Secret Service kabulü ayrıca kaydedilir.
+
+
+## Terminal arayüzü, prompt kuyruğu ve config (0.9)
+
+Bir görevi `run --detach` ile başlatıp terminal arayüzünü açabilirsiniz:
+
+```powershell
+.\bin\viber.exe ui TASK_ID --store C:\ViberData\review
+# Erişilebilir veya pipe üzerinden kullanım:
+.\bin\viber.exe ui TASK_ID --store C:\ViberData\review --line
+```
+
+`/help` mevcut komutları gösterir. `/status /diff /plan /pause /resume /cancel /model /queue /context /why /evidence /budget /trace /requests` görev API'lerine bağlıdır. `/read a.txt` canlı diskteki son sürümü değil, hash ile bağlı candidate'ın ilk 16 KiB sayfasını okur; kapsam ve devam offset'i görünür. Source/log metni terminal kontrol dizisi çalıştıramaz. `/quit` arayüzü ayırır; detached görev sürer.
+
+Normal metin ham steering girdisi olarak kaydedilir ve görev pause edilir. Yeni scope açıkça `/revise` ile kabul edilir; offline görevde `/revise C:\fixtures\fresh.json` yeni fixture ister. Ardından `/resume` ayrı bir detached invocation başlatır. `/respond REQUEST_ID approve` veya `reject` yalnız o güncel karar isteğine cevap verir; resume otomatik değildir. İlk Ctrl+C pause, sonraki tamamlanmış kontrolün ardından Ctrl+C cancel ister. Cancel source restore yapmaz.
+
+`/queue add Daha sonra @a.txt dosyasını incele` çalışan scope'u değiştirmeden kalıcı bir mesaj ekler. `/queue` kayıtları gösterir; `/queue activate QUEUE_ID` mesajı mevcut görevin steering bariyerine atomik aktarır; `/queue remove QUEUE_ID` sıradan çıkarır. Sıralı yeni task'ların otomatik başlatılması bu dilimde yoktur; terminal task için yeni attempt gerekir. Queue remove tarihsel payload privacy deletion değildir.
+
+@file fuzzy referansı izinli candidate dosyaları üzerinde çözülür. Birden fazla eşleşme varsa exact captured path seçmeniz gerekir; boşluklu isim `@"folder/a file.txt"` şeklinde yazılabilir. Tab sınırlı eşleşme listesini gösterir. Reference candidate ve blob hash'ini taşır; yeni yetki veya kalite kanıtı üretmez.
+
+Secretsiz global config varsayılan olarak OS user config dizinindeki `viber/config.json` dosyasıdır; `run --user-config FILE` başka bir dış dosya seçer. Proje config'i root'taki `viber.config.json` dosyasıdır. Kullanıcı → proje tercihleri → açık CLI değerleri uygulanır; güvenlik kısıtları kesişir. Örnek:
+
+```json
+{
+  "schema_version": 1,
+  "preferences": {"provider": "ollama", "model": "local-model", "autonomy": "guided"},
+  "restrictions": {
+    "remote_inference": false,
+    "allowed_providers": ["ollama"],
+    "embedding_egress": false,
+    "reranker_egress": false,
+    "tool_mcp_browser_egress": false,
+    "telemetry_export": false,
+    "training_export": false,
+    "cross_project_memory": false,
+    "sensitive_paths": ["private/**", "customer-notes.txt"]
+  }
+}
+```
+
+`allowed_providers: []` bütün provider'ları yasaklar; alanın bulunmaması veya null olması ek restriction koymaz. Proje remote=true deseydi bile user remote=false kararını açamazdı. Config dosyasında API anahtarı bulunmaz; bilinmeyen alan ve parse hataları içeriği echo etmeden reddedilir. Hassas source dosyaları CAS'a girmeden filtrelenir; project config'in ham içeriği de capture edilmez. Gerekli Git/ignore metadata'sı privacy scope tarafından yasaklanırsa `--git` fail-closed olur; directory capture kullanılabilir. Mevcut görevin config'i task'ta saklanır; bir config dosyasını sonradan değiştirmek aktif görevin yetkisini gizlice değiştirmez.
+
+Bu arayüz 0.9 engineering dilimidir. Generic extension/MCP, trusted verifier, exclusive live apply/restore, tam lifecycle deletion ve beta/platform kabulü ayrı geliştirme gerektirir. [Yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) gerçek kapsamı, [ADR 0012](docs/adr/0012-queue-terminal-and-config.md) sınırları kaydeder.

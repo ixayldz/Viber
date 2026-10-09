@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.1; tek Go module. Ürün sürümü 0.7.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
+Go 1.27.1; tek Go module. Ürün sürümü 0.9.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
 
 ## Derleme
 
@@ -221,3 +221,13 @@ NoDispatchReceipt usage source KERNEL_NO_DISPATCH sadece inference HTTP transpor
 Yeni opsiyonel document fields ve usage source nedeniyle 0.8 task’ı older binary ile downlevel resume desteklenmez; SQLite schema 2 korunur. Trusted discovery/observer ve güçlü verification kapalıdır. Aynı gerçeklik doctor/release docs’ta gösterilmelidir.
 
 API/local `--stream` canonical request/runtime flag’ıdır; chatgpt implicit SSE’dir. Bounded raw SSE/NDJSON receipt terminal boundary’den önce tools vermez. Anthropic content/argument/thinking signature/cumulative usage, OpenAI terminal output ve Ollama chunks shared validator’a girer. Partial/duplicate/model mismatch/hosted tool/fallback fail-closed; native loop, token reserve, cancellation, backup/fresh restore tests bu sınırı kapsar. Unknown/new stream block/delta types destek profili genişletilmeden reddedilir. UI live delta/reconnect acceptance ayrı ve açıktır. Git CI’nin opt-in Docker turu artık agent check integration testini de çalıştırır.
+
+## Exact revision engineering bundle
+
+Root LICENSE kod sahibi tarafından seçilip commit edilince, PowerShell 7 ile:
+
+```powershell
+./scripts/package.ps1 -Revision HEAD -Output (Join-Path (Get-Location) '.cache/release-bundle')
+```
+
+Komut fresh workspace içi output ister; Git archive yalnız committed kaynakları alır. Go toolchain ve dependency cache önceden kurulu olmalıdır; implicit download yoktur. Windows/amd64, Linux/amd64 ve Darwin/arm64 binary iki kez derlenir ve hash eşitliği kontrol edilir. bundle.json son yayın işaretidir; source revision, SBOM, dependency license material ve per-file hash taşır. Bu unsigned engineering bundle'dır; native acceptance, signed installer/update/rollback veya release_ready iddiası üretmez. Partial directory tamamlanmış paket değildir.

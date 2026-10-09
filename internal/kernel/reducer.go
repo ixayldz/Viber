@@ -14,6 +14,26 @@ func active(s c.ExecutionState) bool {
 	}
 	return false
 }
+func continuityAllowed(s c.TaskState) bool {
+	if s.InputBarrier || (s.Execution != c.Ready && s.Execution != c.Paused && s.Execution != c.Recovering && s.Execution != c.WaitingUser && s.Execution != c.WaitingResource && s.Execution != c.Blocked) {
+		return false
+	}
+	if s.Resources != nil {
+		for _, r := range s.Resources.Reservations {
+			if r.Status != "SETTLED" {
+				return false
+			}
+		}
+	}
+	if s.Tokens != nil {
+		for _, r := range s.Tokens.Reservations {
+			if r.Status != "SETTLED" {
+				return false
+			}
+		}
+	}
+	return true
+}
 func nonterminal(s c.ExecutionState) bool {
 	switch s {
 	case c.Created, c.Scoping, c.Ready, c.Running, c.Verifying, c.Delivering, c.WaitingUser, c.WaitingResource, c.Blocked, c.Pausing, c.Paused, c.Recovering:
@@ -85,16 +105,23 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		}
 	} else {
 		next = *state
+		if state.Resources != nil {
+			account := *state.Resources
+			account.Reservations = append([]c.ResourceReservation{}, state.Resources.Reservations...)
+			account.Policy.Prices = append([]c.ModelPrice{}, state.Resources.Policy.Prices...)
+			next.Resources = &account
+		}
 		if state.Tokens != nil {
 			account := *state.Tokens
 			account.Reservations = append([]c.TokenReservation{}, state.Tokens.Reservations...)
 			next.Tokens = &account
 		}
 		next.PendingInputIDs = append([]string{}, state.PendingInputIDs...)
+		next.PromptQueue = append([]c.PromptRef{}, state.PromptQueue...)
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		switch event.Type {
@@ -105,6 +132,17 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		case "UserResponseRecorded":
 			if event.Actor != "user" || !nonterminal(next.Execution) || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.InputID == "" {
 				return next, c.Fail(c.PolicyDenied, "bound user response required")
+			}
+			next.DocumentDigest = p.DocumentDigest
+		case "ModelRiskReconciled":
+			if event.Actor != "user" || !modelRiskAllowed(next, p) {
+				return next, c.Fail(c.PolicyDenied, "model risk reconciliation requires a paired UNKNOWN exposure and full user accounting")
+			}
+			next.DocumentDigest = p.DocumentDigest
+			next.Quality = c.Unverified
+		case "ContinuityRevised":
+			if event.Actor != "user" || !continuityAllowed(next) || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.SnapshotDigest != "" || p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.Tokens != nil || p.Resources != nil {
+				return next, c.Fail(c.PolicyDenied, "continuity revision requires quiescent unchanged authority")
 			}
 			next.DocumentDigest = p.DocumentDigest
 		case "SessionRecorded":
@@ -165,7 +203,50 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			next.Fulfillment = c.FulfillmentPending
 			next.OpenRequiredObligations = p.RequiredObligations
 			next.Execution = c.Paused
+		case "PromptQueued", "PromptQueueRemoved":
+			if event.Actor != "user" || !nonterminal(next.Execution) || p.DocumentDigest != "" || p.SnapshotDigest != "" || p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.Tokens != nil || p.Resources != nil || p.QueueID != "" || !c.ValidDigest(p.Reason) {
+				return next, c.Fail(c.PolicyDenied, "queue cannot change task authority")
+			}
+			if event.Type == "PromptQueued" {
+				if p.InputID != event.ID || !c.ValidDigest(p.InputDigest) || p.InputBytes < 1 || p.InputBytes > 64<<10 || len(next.PromptQueue) >= 64 {
+					return next, c.Fail(c.InvalidArgument, "invalid bounded queued prompt")
+				}
+				for _, old := range next.PromptQueue {
+					if old.ID == p.InputID {
+						return next, c.Fail(c.CommandIDConflict, "queued ID exists")
+					}
+				}
+				next.PromptQueue = append(next.PromptQueue, c.PromptRef{ID: p.InputID, Digest: p.InputDigest, Bytes: p.InputBytes})
+			} else {
+				removed := false
+				for i, ref := range next.PromptQueue {
+					if ref.ID == p.InputID {
+						next.PromptQueue = append(next.PromptQueue[:i:i], next.PromptQueue[i+1:]...)
+						removed = true
+						break
+					}
+				}
+				if !removed || p.InputDigest != "" || p.InputBytes != 0 {
+					return next, c.Fail(c.StaleRequest, "queued prompt unavailable")
+				}
+			}
 		case "InputRecorded":
+			if p.QueueID != "" {
+				found := false
+				for i, ref := range next.PromptQueue {
+					if ref.ID == p.QueueID {
+						if ref.Digest != p.InputDigest || ref.Bytes != p.InputBytes {
+							return next, c.Fail(c.StaleRequest, "activated queue bytes changed")
+						}
+						next.PromptQueue = append(next.PromptQueue[:i:i], next.PromptQueue[i+1:]...)
+						found = true
+						break
+					}
+				}
+				if !found {
+					return next, c.Fail(c.StaleRequest, "queued prompt already removed or activated")
+				}
+			}
 			if p.InputDigest != "" && (event.Actor != "user" || !c.ValidDigest(p.InputDigest) || p.InputBytes <= 0 || p.InputBytes > 64<<10 || p.InputID != event.ID) {
 				return next, c.Fail(c.InvalidArgument, "invalid raw steering binding")
 			}
@@ -205,10 +286,16 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		default:
 			return next, c.Fail(c.StoreIntegrityError, "unknown required event type")
 		}
+		if len(next.PromptQueue) == 0 {
+			next.PromptQueue = nil
+		}
 		next.KernelGeneration = event.KernelGeneration
 	}
+	if (p.Tokens != nil && p.Tokens.Reservation.UsageSource == "OPERATOR_ASSUMED_UPPER_BOUND" || p.Resources != nil && p.Resources.Reservation.Meter == "OPERATOR_ASSUMED_UPPER_BOUND") && (event.Type != "ModelRiskReconciled" || event.Actor != "user") {
+		return next, c.Fail(c.PolicyDenied, "operator risk accounting cannot be manufactured by a kernel/model event")
+	}
 	if p.Tokens != nil {
-		if event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Tokens.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" || p.Tokens.Action == "INIT")) {
+		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Tokens.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" || p.Tokens.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) {
 			return next, c.Fail(c.PolicyDenied, "token mutation requires an atomic kernel document event")
 		}
 		var err error
@@ -216,6 +303,19 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		if err != nil {
 			return next, err
 		}
+	}
+	if p.Resources != nil {
+		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Resources.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" && event.Type != "CandidateRecorded" || p.Resources.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) {
+			return next, c.Fail(c.PolicyDenied, "resource mutation requires an atomic kernel document event")
+		}
+		var err error
+		next.Resources, err = c.ApplyResources(next.Resources, *p.Resources, next)
+		if err != nil {
+			return next, err
+		}
+	}
+	if err := c.ValidateResourceTokenPair(next.Resources, p.Resources, p.Tokens); err != nil {
+		return next, err
 	}
 	next.InputBarrier = len(next.PendingInputIDs) > 0
 	next.TaskSeq = event.TaskSeq
@@ -259,4 +359,32 @@ func resolveInput(pending []string, id string) ([]string, error) {
 		}
 	}
 	return nil, c.Fail(c.StaleBase, "input resolution ID is not pending")
+}
+
+func modelRiskAllowed(s c.TaskState, p c.EventPayload) bool {
+	if s.InputBarrier || (s.Execution != c.Blocked && s.Execution != c.WaitingResource && s.Execution != c.Paused && s.Execution != c.Recovering && s.Execution != c.Terminated) || s.Resources == nil || s.Tokens == nil || p.Tokens == nil || p.Resources == nil || p.Tokens.Action != "SETTLE" || p.Resources.Action != "SETTLE" || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.SnapshotDigest != "" || p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.State != "" || p.Quality != "" || p.Fulfillment != "" || p.Outcome != "" {
+		return false
+	}
+	tr, rr := p.Tokens.Reservation, p.Resources.Reservation
+	if tr.Status != "SETTLED" || tr.UsageSource != "OPERATOR_ASSUMED_UPPER_BOUND" || tr.Used != tr.Upper || rr.Status != "SETTLED" || rr.Kind != "MODEL" || rr.Meter != "OPERATOR_ASSUMED_UPPER_BOUND" || rr.ID != tr.ID {
+		return false
+	}
+	tc, rc := 0, 0
+	for _, r := range s.Tokens.Reservations {
+		if r.Status != "SETTLED" {
+			tc++
+			if r.Status != "UNKNOWN" || r.ID != tr.ID {
+				return false
+			}
+		}
+	}
+	for _, r := range s.Resources.Reservations {
+		if r.Status != "SETTLED" {
+			rc++
+			if r.Status != "UNKNOWN" || r.ID != rr.ID || r.Kind != "MODEL" {
+				return false
+			}
+		}
+	}
+	return tc == 1 && rc == 1
 }

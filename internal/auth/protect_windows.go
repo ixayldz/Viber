@@ -44,3 +44,5 @@ func replaceCredential(root *os.Root, from, to string) error {
 	}
 	return windows.MoveFileEx(old, target, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
+
+func primeMigrationVault(data state) error { return nil }

@@ -76,7 +76,10 @@ func TestRemoteAPIRuntimePersistsHandleWithoutCredentialAndRestrictsProvider(t *
 			}
 			t.Setenv(handle, "test-never-persisted-secret")
 			runtime := &LocalRuntime{SchemaVersion: 1, Provider: provider, Endpoint: endpoint, Model: "operator-model", AllowRemote: true, SecretHandle: handle, ContextLimit: 32768, OutputLimit: 512, TimeoutMillis: 1000}
-			state, err := s.Create(context.Background(), StartOptions{Root: source, TaskID: "remote-api", Prompt: []byte("Inspect source"), Budget: DefaultBudget(), Autonomy: "guided", Runtime: runtime})
+			pricePolicy := c.DefaultResourcePolicy()
+			pricePolicy.Limits.MoneyMicros = 1 << 30
+			pricePolicy.Prices = []c.ModelPrice{{Version: "offline-test-price-v1", Provider: provider, Model: runtime.Model, InputMicrosPerMillion: 1000000, OutputMicrosPerMillion: 1000000}}
+			state, err := s.Create(context.Background(), StartOptions{ResourcePolicy: &pricePolicy, Root: source, TaskID: "remote-api", Prompt: []byte("Inspect source"), Budget: DefaultBudget(), Autonomy: "guided", Runtime: runtime})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -137,7 +140,12 @@ func TestCredentialPreflightSettlesZeroWithoutClaimingProviderUsage(t *testing.T
 			if runtime.SecretHandle != "" {
 				t.Setenv(runtime.SecretHandle, "")
 			}
-			options := StartOptions{Root: source, TaskID: "no-credential", Prompt: []byte("Inspect"), Budget: budget, Autonomy: "guided", Runtime: runtime}
+			policy := c.DefaultResourcePolicy()
+			policy.Limits.MoneyMicros = 1 << 30
+			if provider != "chatgpt" {
+				policy.Prices = []c.ModelPrice{{Version: "offline-test-price-v1", Provider: provider, Model: runtime.Model, InputMicrosPerMillion: 1000000, OutputMicrosPerMillion: 1000000}}
+			}
+			options := StartOptions{ResourcePolicy: &policy, Root: source, TaskID: "no-credential", Prompt: []byte("Inspect"), Budget: budget, Autonomy: "guided", Runtime: runtime}
 			if _, err = s.Create(context.Background(), options); err != nil {
 				t.Fatal(err)
 			}

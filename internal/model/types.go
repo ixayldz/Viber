@@ -29,10 +29,11 @@ type Reply struct {
 	IsError bool   `json:"is_error"`
 }
 type Message struct {
-	Role    string  `json:"role"`
-	Text    string  `json:"text"`
-	Calls   []Call  `json:"calls"`
-	Replies []Reply `json:"replies"`
+	HistoryDigest string  `json:"historical_archive_ref,omitempty"`
+	Role          string  `json:"role"`
+	Text          string  `json:"text"`
+	Calls         []Call  `json:"calls"`
+	Replies       []Reply `json:"replies"`
 	// Continuation is opaque, scoped to this exact provider/model profile.
 	Continuation []json.RawMessage `json:"continuation"`
 	Provider     string            `json:"provider"`
@@ -113,6 +114,9 @@ func validateRequest(r Request, provider string) error {
 	pending := map[string]string{}
 	allIDs := map[string]bool{}
 	for _, message := range r.Messages {
+		if message.HistoryDigest != "" && (message.Role != "user" || !c.ValidDigest(message.HistoryDigest)) {
+			return c.Fail(c.InvalidArgument, "invalid historical archive reference")
+		}
 		if len(pending) > 0 && message.Role != "tool" {
 			return c.Fail(c.InvalidArgument, "unresolved tool protocol boundary")
 		}
@@ -186,6 +190,9 @@ func validateResult(r Request, result *Result) error {
 	}
 	ids := map[string]bool{}
 	for _, message := range r.Messages {
+		if message.HistoryDigest != "" && (message.Role != "user" || !c.ValidDigest(message.HistoryDigest)) {
+			return c.Fail(c.InvalidArgument, "invalid historical archive reference")
+		}
 		for _, call := range message.Calls {
 			ids[call.ID] = true
 		}

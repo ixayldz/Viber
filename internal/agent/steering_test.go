@@ -95,7 +95,7 @@ func TestSteeringBarrierRevisionInvalidatesApprovalAndPreservesBudgetOrigin(t *t
 func TestPendingInputsSurviveBackupRestoreAndResolveInOrder(t *testing.T) {
 	s, options, _ := startFixture(t, []Turn{{UsageKnown: true, Text: "done"}}, true)
 	defer s.Close()
-	for _, input := range []SteeringInput{{"first", options.TaskID, "first raw instruction"}, {"second", options.TaskID, "second raw instruction"}} {
+	for _, input := range []SteeringInput{{CommandID: "first", TaskID: options.TaskID, Text: "first raw instruction"}, {CommandID: "second", TaskID: options.TaskID, Text: "second raw instruction"}} {
 		if _, err := s.RecordSteering(context.Background(), input); err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +135,7 @@ func TestPendingInputsSurviveBackupRestoreAndResolveInOrder(t *testing.T) {
 func TestMissingRawInputPreventsLoadBackupAndRevision(t *testing.T) {
 	s, options, _ := startFixture(t, []Turn{{UsageKnown: true, Text: "done"}}, true)
 	defer s.Close()
-	input := SteeringInput{"missing-raw", options.TaskID, "retain these exact bytes"}
+	input := SteeringInput{CommandID: "missing-raw", TaskID: options.TaskID, Text: "retain these exact bytes"}
 	if _, err := s.RecordSteering(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestRevisionCannotReconcileUnknownUsageOrResetIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, before, _ := s.Load(context.Background(), options.TaskID)
-	if _, err := s.RecordSteering(context.Background(), SteeringInput{"steer", options.TaskID, "keep reserved costs"}); err != nil {
+	if _, err := s.RecordSteering(context.Background(), SteeringInput{CommandID: "steer", TaskID: options.TaskID, Text: "keep reserved costs"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Revise(context.Background(), revisionFor(t, s, options.TaskID, "steer", "revision")); err == nil {

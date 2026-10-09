@@ -11,6 +11,7 @@ import (
 )
 
 type SteeringInput struct {
+	QueueID   string `json:"queue_id,omitempty"`
 	CommandID string `json:"command_id"`
 	TaskID    string `json:"task_id"`
 	Text      string `json:"text"`
@@ -68,12 +69,12 @@ func (s *Session) RecordSteering(ctx context.Context, input SteeringInput) (c.Ta
 				return state, err
 			}
 		}
-		result, err := s.Journal.Execute(ctx, store.Command{ID: input.CommandID, TaskID: input.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "InputRecorded", Payload: c.EventPayload{InputID: input.CommandID, InputDigest: digest, InputBytes: int64(len(input.Text)), Reason: steeringDigest(input)}})
+		result, err := s.Journal.Execute(ctx, store.Command{ID: input.CommandID, TaskID: input.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "InputRecorded", Payload: c.EventPayload{QueueID: input.QueueID, InputID: input.CommandID, InputDigest: digest, InputBytes: int64(len(input.Text)), Reason: steeringDigest(input)}})
 		if err == nil {
 			return result, nil
 		}
 		var typed *c.Error
-		if !errors.As(err, &typed) || typed.Code != c.Conflict {
+		if !errors.As(err, &typed) || typed.Code != c.Conflict && typed.Code != c.StaleBase {
 			return result, err
 		}
 		if recorded, found, lookupErr := s.SteeringReceipt(ctx, input); found || lookupErr != nil {

@@ -10,6 +10,7 @@ import (
 )
 
 type Policy struct {
+	DeniedPaths     []string `json:"denied_paths,omitempty"`
 	SchemaVersion   int      `json:"schema_version"`
 	Epoch           int64    `json:"epoch"`
 	Generation      int64    `json:"generation"`
@@ -106,7 +107,7 @@ func Admit(layers []Policy, a Action) error {
 		if !contains(p.Effects, a.Effect) {
 			return c.Fail(c.PolicyDenied, "effect denied by a policy layer")
 		}
-		if a.Path != "" && !PathAllowed(a.Path, p.Paths) {
+		if a.Path != "" && (DeniedPath(a.Path, p.DeniedPaths) || !PathAllowed(a.Path, p.Paths)) {
 			return c.Fail(c.PolicyDenied, "path outside permitted scope")
 		}
 		if a.Remote && (!p.RemoteInference || a.Provider == "" || !contains(p.Providers, a.Provider)) {

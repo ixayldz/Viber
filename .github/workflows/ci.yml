@@ -28,7 +28,7 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: Race detector
         if: runner.os == 'Linux'
-        run: go test -race -count=1 ./...
+        run: go test -race -p 1 -count=1 -timeout 15m ./...
       - name: Encoding fuzz
         if: runner.os == 'Linux'
         run: go test ./internal/contracts -run '^$' -fuzz FuzzStrictDecode -fuzztime 10s

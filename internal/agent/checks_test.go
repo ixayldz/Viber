@@ -133,6 +133,10 @@ func TestCheckLostOperationRemainsBlockedWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state, err = s.transition(context.Background(), state, c.Running, "", "test admitted check interval")
+	if err != nil {
+		t.Fatal(err)
+	}
 	doc.Pending = &Pending{ID: "lost-check", Kind: "NATIVE_TOOL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes([]byte("{}")), Status: "ADMITTED"}
 	if _, err = s.record(context.Background(), state, doc, "SessionRecorded", c.EventPayload{}); err != nil {
 		t.Fatal(err)

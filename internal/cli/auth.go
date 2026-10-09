@@ -43,7 +43,7 @@ func openAuthBrowser(ctx context.Context, url string) error {
 }
 func runAuth(args []string, out, errout io.Writer) int {
 	if len(args) == 0 {
-		return report(out, errout, c.Fail(c.InvalidArgument, "auth login|status|profiles|select|models|logout required"), false)
+		return report(out, errout, c.Fail(c.InvalidArgument, "auth login|status|profiles|select|models|logout|migrate-storage required"), false)
 	}
 	action := args[0]
 	f := flags("auth "+action, errout)
@@ -59,7 +59,7 @@ func runAuth(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "supported provider is chatgpt; invalid auth flags"), *jsonMode)
 	}
 	switch action {
-	case "login", "status", "profiles", "select", "models", "logout":
+	case "login", "status", "profiles", "select", "models", "logout", "migrate-storage":
 	default:
 		return report(out, errout, c.Fail(c.InvalidArgument, "unknown auth action"), *jsonMode)
 	}
@@ -76,6 +76,13 @@ func runAuth(args []string, out, errout io.Writer) int {
 	}
 	if !fileguard.Disjoint(cwd, *directory) {
 		return report(out, errout, c.Fail(c.PolicyDenied, "credential directory must be outside current source workspace"), *jsonMode)
+	}
+	if action == "migrate-storage" {
+		view, err := auth.MigrateLegacy(*directory)
+		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		return statusAuth(out, view)
 	}
 	store, err := auth.Open(*directory, action == "login")
 	if errors.Is(err, os.ErrNotExist) && (action == "status" || action == "profiles") {

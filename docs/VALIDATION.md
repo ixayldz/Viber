@@ -1,5 +1,22 @@
 # Doğrulama kaydı
 
+## 0.9 güncel dilim — 9 Ekim 2026
+
+Windows sabit .cache/validation-0.9-ui kaynak kopyası full suite: **539 test/alt test PASS, 4 SKIP, 0 FAIL**. Paket-level sonuçlar bu sayıya dahil değildir. SKIP: iki opt-in Docker fixture ve iki host symlink-privilege fixture. Önceki turda opt-in Docker agent/runner gerçekten çalıştırılıp PASS oldu; sonraki değişiklikler için aynı kabulü otomatik genişletmiyoruz.
+
+Yeni dilimler: source-bound compaction/history/pins/locked-provider switch; global conservative multi-resource + token accounting/physical control reserve/full-upper-bound risk closure; one-replay account history; typed-root orphan GC/backup restore receipts; real background child/detach/attach/stop; safe numeric support; Unix vault encryption/migration; durable prompt queue/atomic steering activation; TUI line integration/paste/OSC guard; config precedence vs deny intersection/sensitive pre-CAS filter/restore.
+
+Kanıt .cache/windows-0.9-ui-full.jsonl. Önceki GC kopyasının Windows 522 PASS/4 SKIP ve Linux full race 525 PASS/2 SKIP/0 FAIL sonuçları ayrı tarihsel kanıttır. GC kopyasında Linux native build/doctor PASS ve tüm Darwin paket/binary COMPILE_ONLY vardı. Güncel UI/config/vault kopyasının Linux full race turu: **545 test/alt test PASS, 2 SKIP, 0 FAIL** (.cache/linux-0.9-ui-full.jsonl). Module verify/vet/Linux build/doctor PASS; tüm Darwin paketleri ve CLI binary COMPILE_ONLY. Native Secret Service/Keychain ve macOS runtime kabulü yapılmadı.
+
+Unix auth ayrıca Linux race'de fake vault ile PASS. Windows background child shutdown WAL race'i bulundu; store ownership lock SQLite metadata preflight önüne taşındı ve owner-stop gerçek lock release'i bekliyor. Regression 3 tekrar PASS; güncel full suite de PASS. Bunun gerçek filesystem power-loss veya hostile-principal lifetime acceptance olduğu iddia edilmez.
+
+A/B/stable release gates CLOSED. CPU/disk kaynakları allocation hesaplarıdır; exact OS metering değildir. Orphan GC privacy deletion değildir. TUI control/paging durable task state'ine bağlıdır; ephemeral model delta retention garantisi yoktur. API-key remote provider kabulü ve anahtarsız gerçek hesap/platform/insan kabulü ayrı kalır. [Yürütme planı](KEYLESS_EXECUTION_PLAN.md), [ADR 0010](adr/0010-continuity-and-resource-accounting.md), [ADR 0011](adr/0011-maintenance-supervisor-and-vault.md), [ADR 0012](adr/0012-queue-terminal-and-config.md).
+
+Paketleme komutu scripts/package.ps1 exact Git revision arşivinden iki byte-identical build, dependency/Go license material, CycloneDX SBOM ve hash manifest üretir; manifest en son yayınlanır. Geçici bağımsız Git fixture reposunda Windows bundle smoke PASS. Projenin root LICENSE seçilmediği için gerçek dağıtım paketi beklemededir. Bundle unsigned engineering çıktıdır; signing/install/update/pilot kabulü değildir.
+
+Aşağıdaki 0.8 ve önceki sonuçlar tarihsel kayıttır.
+
+
 Tarih: 8 Ekim 2026. Güncel ürün: 0.8.0-dev. Önceki tablolar kendi 0.7/0.6 ve önceki sürüm kanıtlarını korur; son 0.8 kayıt aşağıdadır. Bu sonuçlar fixture/local engineering profiline aittir; PRD A–D üretim kabulü değildir.
 
 | Kontrol | Sonuç / kapsam |

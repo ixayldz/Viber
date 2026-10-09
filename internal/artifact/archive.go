@@ -40,10 +40,14 @@ type Manifest struct {
 	IgnoreBlobs   map[string]string `json:"ignore_blobs"`
 }
 type Archive struct {
-	mu     sync.Mutex
-	root   *os.Root
-	lock   *os.File
-	closed bool
+	admission    func(int64, bool) error
+	workQuota    int64
+	workUsed     int64
+	controlWrite bool
+	mu           sync.Mutex
+	root         *os.Root
+	lock         *os.File
+	closed       bool
 }
 
 func Open(directory string) (*Archive, error) {
@@ -110,6 +114,10 @@ func (a *Archive) publish(name string, raw []byte) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := a.admit(int64(len(raw)), a.controlWrite); err != nil {
+		return err
+	}
+	a.workUsed += int64(len(raw))
 	return fileguard.Publish(a.root, name, raw)
 }
 func (a *Archive) putBlob(task string, raw []byte) (string, error) {
@@ -308,6 +316,10 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 		// original modes remain in the immutable capture manifest. The enclosing
 		// private archive ACL prevents host-wide source disclosure.
 		mode = (mode & 0111) | 0444
+		if err := a.admit(entry.Size, false); err != nil {
+			return result, err
+		}
+		a.workUsed += entry.Size
 		f, err := a.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return result, err
@@ -331,6 +343,10 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 	if err != nil {
 		return result, err
 	}
+	if err = a.admit(int64(len(raw)), false); err != nil {
+		return result, err
+	}
+	a.workUsed += int64(len(raw))
 	if err = fileguard.Publish(a.root, filepath.Join(stage, "manifest.json"), raw); err != nil {
 		return result, err
 	}

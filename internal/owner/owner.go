@@ -19,6 +19,8 @@ import (
 )
 
 type View struct {
+	Detached     bool                  `json:"detached,omitempty"`
+	InvocationID string                `json:"invocation_id,omitempty"`
 	Checks       []agent.CheckSummary  `json:"checks,omitempty"`
 	Runtime      *agent.LocalRuntime   `json:"runtime,omitempty"`
 	Plan         *plan.State           `json:"plan,omitempty"`
@@ -46,12 +48,14 @@ type DiffChange struct {
 	Deleted bool   `json:"deleted"`
 }
 type activeRun struct {
-	task   string
-	pause  atomic.Bool
-	cancel context.CancelFunc
-	done   chan struct{}
-	state  c.TaskState
-	err    error
+	id        string
+	admission View
+	task      string
+	pause     atomic.Bool
+	cancel    context.CancelFunc
+	done      chan struct{}
+	state     c.TaskState
+	err       error
 }
 type Owner struct {
 	Session   *agent.Session
@@ -122,7 +126,7 @@ func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, er
 	}
 	return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
-func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
+func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, error) {
 	o.control.Lock()
 	admitted := false
 	defer func() {
@@ -134,6 +138,14 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 	if o.closed {
 		o.mu.Unlock()
 		return View{}, c.Fail(c.StoreOwned, "owner is shutting down")
+	}
+	if o.active != nil && o.active.task == task && o.active.id == id {
+		active := o.active
+		o.mu.Unlock()
+		if detached {
+			return active.admission, nil
+		}
+		return View{}, c.Fail(c.Conflict, "invocation is already active; use attach for its retained events")
 	}
 	if recorded, found, err := o.Session.ControlReceipt(ctx, task, id, "resume"); found || err != nil {
 		o.mu.Unlock()
@@ -160,14 +172,22 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 		}
 		return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 	}
+	admission, err := o.view(ctx, task, state.TaskSeq)
+	if err != nil {
+		o.mu.Unlock()
+		return View{}, err
+	}
+	admission.Detached, admission.InvocationID = detached, id
 	runCtx, cancel := context.WithCancel(o.ctx)
-	active := &activeRun{task: task, cancel: cancel, done: make(chan struct{})}
+	active := &activeRun{task: task, id: id, admission: admission, cancel: cancel, done: make(chan struct{})}
 	o.active = active
 	o.mu.Unlock()
 	o.control.Unlock()
 	admitted = true
-	stop := context.AfterFunc(ctx, func() { active.pause.Store(true); cancel() })
-	defer stop()
+	if !detached {
+		stop := context.AfterFunc(ctx, func() { active.pause.Store(true); cancel() })
+		defer stop()
+	}
 	go func() {
 		active.state, active.err = o.Session.RunControlled(runCtx, task, &active.pause)
 		receiptCtx, receiptCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -185,6 +205,9 @@ func (o *Owner) Run(ctx context.Context, task, id string) (View, error) {
 		close(active.done)
 		o.mu.Unlock()
 	}()
+	if detached {
+		return admission, nil
+	}
 	<-active.done
 	if active.err != nil {
 		return View{}, active.err
@@ -234,11 +257,76 @@ func nullPayload(raw json.RawMessage) error {
 	return nil
 }
 func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
-	if request.TaskID == "" {
+	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
-	case "context-why", "context-page", "checks", "check-output", "report":
+	case "support", "support-export":
+		if request.TaskID != "" {
+			return nil, c.Fail(c.InvalidArgument, "support command is store scoped")
+		}
+		if request.Command == "support" {
+			if err := nullPayload(request.Payload); err != nil {
+				return nil, err
+			}
+			return o.Session.Support(ctx)
+		}
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "support export requires quiescent owner")
+		}
+		var query struct {
+			Output string `json:"output"`
+		}
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		if query.Output == "" {
+			return nil, c.Fail(c.InvalidArgument, "fresh output required")
+		}
+		return o.Session.ExportSupport(ctx, query.Output)
+	case "owner-status", "owner-stop":
+		if request.TaskID != "" {
+			return nil, c.Fail(c.InvalidArgument, "supervisor command has store scope")
+		}
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		if request.Command == "owner-stop" {
+			return o.StopSupervisor(ctx)
+		}
+		return o.SupervisorStatus(), nil
+	case "attach-page":
+		var query Page
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		return o.AttachPage(ctx, request.TaskID, query)
+	case "store-gc", "store-gc-preview":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "GC requires a quiescent owner")
+		}
+		if request.TaskID != "" {
+			return nil, c.Fail(c.InvalidArgument, "GC is scoped to the owned store")
+		}
+		if request.Command == "store-gc-preview" {
+			if err := nullPayload(request.Payload); err != nil {
+				return nil, err
+			}
+			return o.Session.GCPreview(ctx)
+		}
+		var command agent.GCCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.CommandID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "GC envelope ID mismatch")
+		}
+		return o.Session.CollectGarbage(ctx, command)
+	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "report", "history-page", "continuity-info", "resources":
 		var args agent.Observation
 		if err := c.DecodeStrict(request.Payload, &args); err != nil {
 			return nil, err
@@ -260,6 +348,11 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.view(ctx, request.TaskID, 0)
+	case "detach":
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		return o.StartDetached(ctx, request.TaskID, request.ID)
 	case "resume":
 		if err := nullPayload(request.Payload); err != nil {
 			return nil, err
@@ -307,6 +400,26 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			result = append(result, DiffChange{Path: change.Path, Before: change.BeforeDigest, After: change.AfterDigest, Deleted: change.Kind == "DELETED"})
 		}
 		return result, nil
+	case "queue-list":
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		return o.Session.PromptQueue(ctx, request.TaskID)
+	case "queue-control":
+		var command agent.QueueCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.TaskID != request.TaskID || command.CommandID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "queue envelope mismatch")
+		}
+		if command.Action == "activate" {
+			if command.QueueID == "" {
+				return nil, c.Fail(c.InvalidArgument, "activation needs queued ID")
+			}
+			return o.steer(ctx, agent.SteeringInput{CommandID: command.CommandID, TaskID: command.TaskID, QueueID: command.QueueID, Text: command.Text})
+		}
+		return o.Session.QueueControl(ctx, command)
 	case "steer":
 		var input agent.SteeringInput
 		if err := c.DecodeStrict(request.Payload, &input); err != nil {
@@ -330,6 +443,40 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "attempt envelope mismatch")
 		}
 		return o.Session.NewAttempt(ctx, options)
+	case "context-edit", "model-switch", "reconcile-model-risk":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "continuity revision requires quiescent owner")
+		}
+		if request.Command == "reconcile-model-risk" {
+			var command agent.ModelRiskCommand
+			if err := c.DecodeStrict(request.Payload, &command); err != nil {
+				return nil, err
+			}
+			if command.TaskID != request.TaskID || command.CommandID != request.ID {
+				return nil, c.Fail(c.InvalidArgument, "risk command envelope mismatch")
+			}
+			return o.Session.ReconcileModelRisk(ctx, command)
+		}
+		if request.Command == "model-switch" {
+			var command agent.ModelSwitch
+			if err := c.DecodeStrict(request.Payload, &command); err != nil {
+				return nil, err
+			}
+			if command.TaskID != request.TaskID || command.CommandID != request.ID {
+				return nil, c.Fail(c.InvalidArgument, "model switch envelope mismatch")
+			}
+			return o.Session.SwitchModel(ctx, command)
+		}
+		var command agent.ContinuityCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.TaskID != request.TaskID || command.CommandID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "context edit envelope mismatch")
+		}
+		return o.Session.Continuity(ctx, command)
 	case "requests", "respond", "revise":
 		o.mu.Lock()
 		defer o.mu.Unlock()

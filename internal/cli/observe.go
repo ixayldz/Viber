@@ -16,6 +16,7 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 	directory := f.String("store", "", "private existing session store")
 	offset := f.Int64("offset", 0, "byte offset")
 	limit := f.Int64("limit", 16384, "exact-byte page size")
+	historyDigest := f.String("history-digest", "", "retained task-bound history archive digest")
 	runID := f.String("run-id", "", "retained check run ID")
 	stream := f.String("stream", "stdout", "stdout or stderr")
 	jsonMode := f.Bool("json", false, "structured result")
@@ -29,7 +30,10 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 	}
 	invalid := false
 	f.Visit(func(v *flag.Flag) {
-		if (v.Name == "offset" || v.Name == "limit") && command != "context-page" && command != "check-output" || (v.Name == "run-id" || v.Name == "stream") && command != "check-output" {
+		if v.Name == "history-digest" && command != "history-page" {
+			invalid = true
+		}
+		if (v.Name == "offset" || v.Name == "limit") && command != "context-page" && command != "check-output" && command != "history-page" || (v.Name == "run-id" || v.Name == "stream") && command != "check-output" {
 			invalid = true
 		}
 	})
@@ -37,9 +41,12 @@ func runObservation(command string, args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "task/store and command-specific page flags required"), *jsonMode)
 	}
 	query := agent.Observation{Kind: command}
-	if command == "context-page" || command == "check-output" {
+	if command == "context-page" || command == "check-output" || command == "history-page" {
 		query.Offset = *offset
 		query.Limit = *limit
+	}
+	if command == "history-page" {
+		query.HistoryDigest = *historyDigest
 	}
 	if command == "check-output" {
 		query.RunID = *runID

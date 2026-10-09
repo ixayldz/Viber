@@ -97,8 +97,11 @@ func ApplyTokens(account *TokenAccount, change TokenMutation, task TaskState) (*
 			if r.UsageSource == "KERNEL_NO_DISPATCH" && r.Used != (TokenLimits{}) {
 				return nil, Fail(StoreIntegrityError, "preflight zero charge cannot contain usage")
 			}
-			if r.Status != "SETTLED" || !ValidDigest(r.ResponseDigest) || (r.UsageSource != "PROVIDER_REPORTED" && r.UsageSource != "FIXTURE_REPORTED" && r.UsageSource != "KERNEL_NO_DISPATCH") || r.Used.Input < 0 || r.Used.Output < 0 || r.Used.Input > 1<<40 || r.Used.Output > 1<<40 {
+			if r.Status != "SETTLED" || !ValidDigest(r.ResponseDigest) || (r.UsageSource != "PROVIDER_REPORTED" && r.UsageSource != "FIXTURE_REPORTED" && r.UsageSource != "KERNEL_NO_DISPATCH" && r.UsageSource != "OPERATOR_ASSUMED_UPPER_BOUND") || r.Used.Input < 0 || r.Used.Output < 0 || r.Used.Input > 1<<40 || r.Used.Output > 1<<40 {
 				return nil, Fail(InvalidArgument, "settlement requires bounded observed usage and raw receipt")
+			}
+			if r.UsageSource == "OPERATOR_ASSUMED_UPPER_BOUND" && (old.Status != "UNKNOWN" || r.Used != old.Upper) {
+				return nil, Fail(PolicyDenied, "operator risk accounting must charge the entire unknown upper bound")
 			}
 			next.Reserved.Input -= old.Upper.Input
 			next.Reserved.Output -= old.Upper.Output
