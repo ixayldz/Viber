@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     env:
-      VIBER_DOCKER_TEST_IMAGE: golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+      VIBER_DOCKER_TEST_IMAGE: public.ecr.aws/docker/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
