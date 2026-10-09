@@ -27,23 +27,25 @@ type Hit struct {
 	Signals    []Signal `json:"signals"`
 }
 type Result struct {
-	SchemaVersion int      `json:"schema_version"`
-	Trust         string   `json:"trust"`
-	Manifest      Manifest `json:"index"`
-	Query         string   `json:"query"`
-	Intent        string   `json:"intent"`
-	Hits          []Hit    `json:"hits"`
-	Total         int      `json:"ranked_pool_total"`
-	PoolTruncated bool     `json:"ranked_pool_truncated"`
-	QueryMicros   int64    `json:"query_micros"`
-	Fallback      bool     `json:"fallback_used"`
+	SpanPolicy    string         `json:"span_policy"`
+	Cache         *CacheEvidence `json:"cache,omitempty"`
+	SchemaVersion int            `json:"schema_version"`
+	Trust         string         `json:"trust"`
+	Manifest      Manifest       `json:"index"`
+	Query         string         `json:"query"`
+	Intent        string         `json:"intent"`
+	Hits          []Hit          `json:"hits"`
+	Total         int            `json:"ranked_pool_total"`
+	PoolTruncated bool           `json:"ranked_pool_truncated"`
+	QueryMicros   int64          `json:"query_micros"`
+	Fallback      bool           `json:"fallback_used"`
 }
 
 func ValidIntent(intent string) bool {
 	return intent == "IDENTIFIER" || intent == "ERROR" || intent == "FEATURE" || intent == "REFACTOR"
 }
 func (index *Index) Search(ctx context.Context, binding Binding, query, intent string, offset, limit int) (Result, error) {
-	result := Result{SchemaVersion: 1, Trust: "UNTRUSTED_SOURCE_BOUND_RANKING_HINT", Manifest: index.manifest, Query: query, Intent: intent, Hits: []Hit{}}
+	result := Result{SchemaVersion: 1, Trust: "UNTRUSTED_SOURCE_BOUND_RANKING_HINT", Manifest: index.manifest, Query: query, Intent: intent, Hits: []Hit{}, SpanPolicy: "MAX_3_NONOVERLAPPING_CHUNKS_PER_FILE; BODY_LITERAL_BEFORE_PATH"}
 	if binding != index.manifest.Binding {
 		return result, c.Fail(c.StaleBase, "index snapshot or policy changed")
 	}
@@ -68,10 +70,11 @@ func (index *Index) Search(ctx context.Context, binding Binding, query, intent s
 	}
 	result.PoolTruncated = len(lexical) == 512 || len(trigram) == 512
 	type candidate struct {
-		id      int
-		score   int64
-		exact   bool
-		signals []Signal
+		id        int
+		score     int64
+		exact     bool
+		bodyExact bool
+		signals   []Signal
 	}
 	pool := map[int]*candidate{}
 	add := func(id int, kind string, rank int, exact bool) {
@@ -81,21 +84,30 @@ func (index *Index) Search(ctx context.Context, binding Binding, query, intent s
 			pool[id] = current
 		}
 		current.exact = current.exact || exact
-		if kind != "LITERAL" {
+		if kind == "BODY_LITERAL" {
+			current.bodyExact = true
+		}
+		if kind != "BODY_LITERAL" && kind != "PATH_LITERAL" {
 			current.score += 1000000 / int64(60+rank)
 		}
 		current.signals = append(current.signals, Signal{kind, rank})
 	}
-	// Exact byte matching is always primary; FTS tokenization never replaces it.
+	// Body literals precede path-only hints. A path contributes once, so its
+	// length or chunk count cannot flood the ranked pool.
 	rank := 0
+	pathSeen := map[string]bool{}
 	for id, chunk := range index.chunks {
 		if err = ctx.Err(); err != nil {
 			return result, err
 		}
-		if strings.Contains(chunk.path, query) || strings.Contains(chunk.text, query) {
+		if strings.Contains(chunk.text, query) {
 			rank++
-			add(id, "LITERAL", rank, true)
+			add(id, "BODY_LITERAL", rank, true)
+		} else if !pathSeen[chunk.path] && strings.Contains(chunk.path, query) {
+			rank++
+			add(id, "PATH_LITERAL", rank, true)
 		}
+		pathSeen[chunk.path] = true
 	}
 	for rank, id := range lexical {
 		add(id, "BM25", rank+1, false)
@@ -109,6 +121,9 @@ func (index *Index) Search(ctx context.Context, binding Binding, query, intent s
 	}
 	sort.Slice(ordered, func(i, j int) bool {
 		a, b := ordered[i], ordered[j]
+		if a.bodyExact != b.bodyExact {
+			return a.bodyExact
+		}
 		if a.exact != b.exact {
 			return a.exact
 		}
@@ -122,13 +137,26 @@ func (index *Index) Search(ctx context.Context, binding Binding, query, intent s
 		return ca.start < cb.start
 	})
 	unique := []*candidate{}
-	seen := map[string]bool{}
+	seen := map[string][]chunk{}
 	for _, item := range ordered {
-		path := index.chunks[item.id].path
-		if !seen[path] {
-			seen[path] = true
-			unique = append(unique, item)
+		current := index.chunks[item.id]
+		prior := seen[current.path]
+		if len(prior) >= 3 {
+			result.PoolTruncated = true
+			continue
 		}
+		overlap := false
+		for _, other := range prior {
+			if current.start < other.end && other.start < current.end {
+				overlap = true
+				break
+			}
+		}
+		if overlap {
+			continue
+		}
+		seen[current.path] = append(prior, current)
+		unique = append(unique, item)
 	}
 	if len(unique) > 1024 {
 		unique = unique[:1024]

@@ -19,10 +19,10 @@ try {
     if ($LASTEXITCODE -ne 0 -or $taskVersion -notmatch 'go1\.27\.2 ') { throw 'Go 1.27.2 required' }
     $taskVersion | Set-Content -LiteralPath (Join-Path $taskEvidence 'environment.txt') -Encoding utf8
     & $Go env GOOS GOARCH | Add-Content -LiteralPath (Join-Path $taskEvidence 'environment.txt') -Encoding utf8
-    & $Go test -json -count=1 ./internal/retrieval ./internal/context -run 'ContextEffectiveness|IntentLog' |
+    & $Go test -json -count=1 ./internal/retrieval ./internal/context ./internal/agent -run 'ContextEffectiveness|IntentLog|RealRepositoryOwner|OwnerSearch|Cache|BodyEvidence|PerFileSpan' |
         Tee-Object -FilePath (Join-Path $taskEvidence 'effectiveness.jsonl')
     if ($LASTEXITCODE -ne 0) { throw 'Effectiveness acceptance failed' }
-    & $Go test -json -count=1 ./internal/retrieval ./internal/context -run '^$' -bench 'BenchmarkSourceRetrieval|BenchmarkContextLogPacking' -benchmem "-benchtime=$BenchTime" |
+    & $Go test -json -count=1 ./internal/retrieval ./internal/context ./internal/agent -run '^$' -bench 'BenchmarkSourceRetrieval|BenchmarkContextLogPacking|BenchmarkOwnerRankedSearch' -benchmem "-benchtime=$BenchTime" |
         Tee-Object -FilePath (Join-Path $taskEvidence 'benchmarks.jsonl')
     if ($LASTEXITCODE -ne 0) { throw 'Context benchmark failed' }
     Write-Output "Evidence: $taskEvidence"

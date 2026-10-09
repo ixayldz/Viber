@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -89,7 +90,7 @@ func execVaultHelper(executable string, args []string, input []byte) vaultRespon
 	command.Stdout = stdout
 	command.Stderr = stderr
 	// Locale stabilizes the tool protocol. No secret is placed in argv or env.
-	command.Env = append(os.Environ(), "LC_ALL=C")
+	command.Env = vaultEnvironment(os.Environ())
 	err = command.Run()
 	response.Output = append([]byte{}, stdout.Bytes()...)
 	response.Stderr = stderr.Len() > 0 || stderr.overflow
@@ -108,6 +109,25 @@ func execVaultHelper(executable string, args []string, input []byte) vaultRespon
 	}
 	response.Err = c.Fail(c.UnsupportedCapability, "OS vault helper could not start")
 	return response
+}
+
+// Desktop IPC identity is operator input. Loader, proxy, language, shell and
+// executable selection variables never reach a credential helper.
+func vaultEnvironment(source []string) []string {
+	env := []string{"PATH=/usr/bin:/bin", "LC_ALL=C"}
+	for _, key := range []string{"HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
+		for i := len(source) - 1; i >= 0; i-- {
+			prefix := key + "="
+			if strings.HasPrefix(source[i], prefix) {
+				value := strings.TrimPrefix(source[i], prefix)
+				if value != "" && len(value) <= 4096 && !strings.ContainsAny(value, "\x00\r\n") {
+					env = append(env, prefix+value)
+				}
+				break
+			}
+		}
+	}
+	return env
 }
 func (v commandVault) Get(handle string) ([]byte, error) {
 	if !c.ValidDigest(handle) {

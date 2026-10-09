@@ -24,6 +24,7 @@ import (
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/plan"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/retrieval"
 	"github.com/ixayldz/Viber/internal/runner"
 	"github.com/ixayldz/Viber/internal/store"
 	"github.com/ixayldz/Viber/internal/verify"
@@ -110,14 +111,15 @@ type Document struct {
 	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
-	instance      RuntimeInstance
-	clockOrigin   time.Time
-	clockDomain   string
-	creationFault func(c.ExecutionState) error
-	mu            sync.Mutex
-	directory     string
-	Journal       *store.Store
-	Archive       *artifact.Archive
+	retrievalCache *retrieval.Cache
+	instance       RuntimeInstance
+	clockOrigin    time.Time
+	clockDomain    string
+	creationFault  func(c.ExecutionState) error
+	mu             sync.Mutex
+	directory      string
+	Journal        *store.Store
+	Archive        *artifact.Archive
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {
@@ -155,12 +157,18 @@ func Open(ctx context.Context, directory string) (*Session, error) {
 		journal.Close()
 		return nil, err
 	}
+	session.retrievalCache, err = retrieval.NewCache(128<<20, 4, 2*time.Minute)
+	if err != nil {
+		archive.Close()
+		journal.Close()
+		return nil, err
+	}
 	return session, nil
 }
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.Archive.Close(), s.Journal.Close())
+	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close())
 }
 func newID(prefix string) string {
 	var nonce [16]byte
@@ -315,7 +323,11 @@ func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, k
 	}
 
 	extra.DocumentDigest = digest
-	return s.executeAroundQueue(ctx, state, store.Command{ID: newID("event-"), TaskID: doc.TaskID, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: kind, Payload: extra})
+	next, err := s.executeAroundQueue(ctx, state, store.Command{ID: newID("event-"), TaskID: doc.TaskID, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: kind, Payload: extra})
+	if err == nil && s.retrievalCache != nil && (kind == "CandidateRecorded" || kind == "VerifiedResultFinalized" || kind == "LimitedResultFinalized") {
+		s.retrievalCache.InvalidateScope(c.HashBytes([]byte(doc.TaskID)))
+	}
+	return next, err
 }
 func (s *Session) transition(ctx context.Context, state c.TaskState, to c.ExecutionState, outcome c.Outcome, reason string) (c.TaskState, error) {
 	return s.executeAroundQueue(ctx, state, store.Command{ID: newID("event-"), TaskID: state.TaskID, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: "StateTransitioned", Payload: c.EventPayload{State: to, Outcome: outcome, Reason: reason}})

@@ -207,5 +207,9 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 			required++
 		}
 	}
-	return s.Journal.Execute(ctx, store.Command{ID: revision.CommandID, TaskID: revision.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "SpecRevised", Payload: c.EventPayload{InputID: revision.InputID, DocumentDigest: documentDigest, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch + 1, RequiredObligations: required, Reason: digest}})
+	next, err := s.Journal.Execute(ctx, store.Command{ID: revision.CommandID, TaskID: revision.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "SpecRevised", Payload: c.EventPayload{InputID: revision.InputID, DocumentDigest: documentDigest, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch + 1, RequiredObligations: required, Reason: digest}})
+	if err == nil && s.retrievalCache != nil {
+		s.retrievalCache.InvalidateScope(c.HashBytes([]byte(revision.TaskID)))
+	}
+	return next, err
 }

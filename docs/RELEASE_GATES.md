@@ -1,6 +1,6 @@
 # Release kanıt kaydı
 
-PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Bu kayıt 0.8.0-dev fixture/local/provider engineering profili içindir; tarihsel kanıtlar kendi sürümleriyle korunur.
+PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Üst tablo güncel 0.9-dev kapsamını gösterir; aşağıdaki sürüm kayıtları tarihsel kanıttır.
 
 | Family | Guard | Uygulanan kanıt / eksik taraf | Tam release |
 |---|---|---|---|
@@ -9,7 +9,7 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 3–5 | Candidate/env/stale edit | Candidate/index/ignore/read-set binding; source edit resume'ı durdurur; live merge yok | PARTIAL |
 | 6 | Steering | Raw blob-before-barrier, aktif owner pause, bound spec/epoch revision, eski approval invalidation; semantic provider/fencing matrisi eksik | PARTIAL |
 | 7–11 | Lease/budget/process/FS isolation | Offline Docker readonly/non-root/no-network/timeout cleanup, exact mount source/image/argv/namespace/scratch binding; resource/fencing/escape matrisi eksik | PARTIAL |
-| 12–13 | Forged PASS/check weakening | Model/stdout PASS kalite yükseltemez; mutation öncesi operator origin/explicit closure guard ve frozen binding var; full closure review/authorized check revision/trusted observer eksik | PARTIAL |
+| 12–13 | Forged PASS/check weakening | Model/stdout PASS kalite yükseltemez; operator origin/closure guard/frozen binding ve gerçek Docker STDIO observer var; generic framework/authorized check revision/full closure acceptance açık | PARTIAL |
 | 14–15 | Index/partial model stream | Native Git index v2/v3/v4/SHA-256/worktree; incomplete response reddi; SIWC terminal SSE/namespace/partial/error fixtures; API/local SSE/NDJSON terminal fixtures ve loopback cancellation/UNKNOWN restore var; actual provider/profile/live UI transport kabulü eksik | PARTIAL |
 | 16 | Context overflow | Mandatory full protocol/spec/policy preflight, durable manifest/request closure, exact-byte source/list/search paging; provider tokenizer/compaction eksik | PARTIAL |
 | 17 | Compaction policy | Source-bound deterministic archive/history/pins; semantic continuation quality acceptance eksik | PARTIAL |
@@ -18,11 +18,11 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 20–21 | Corruption/two owners | Journal/projection/historical checkpoint/dedup receipt hash/replay + explicit restore-tested v1→v2 migration + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
 | 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; workspace restore/stream reconnect/delete yok | PARTIAL |
 | 25–28 | Guards/origin/integrity/delivery | Pure predicate + frozen artifact + scoped limited delivery; durable typed origin, tree/absence check weakening guard, revision/recovery/backup closure; full interval protected verifier eksik | PARTIAL |
-| 29 | Clock/lease | Request expiry kontrolü var; backend lease/fencing conformance yok | NOT_IMPLEMENTED |
+| 29 | Clock/lease | Monotonic clock domain, deadline, physical store/engine binding ve actual stale-name/container fencing var; rootless/gerçek restart ölçümü kullanıcı kararıyla bekliyor | PARTIAL |
 | 30–32 | Owner/children/pause/dedup | Lock/generation, Docker cleanup, native pause/cancel; bound one-shot approval ve active command dedup; Ctrl+C pause; tam supervisor/children fencing eksik | PARTIAL |
-| 33–34 | Reserve/delete/backup | Offline model reserve/settle, unknown tutulması, CAS+SQLite backup, explicit migration/read-only recovery/lineage restore; control reserve/GC/tombstone ve tam upgrade/power-loss matrisi eksik | PARTIAL |
+| 33–34 | Reserve/delete/backup | Global model/native reserve/settle, UNKNOWN tutulması, physical control reserve, orphan GC, CAS+SQLite backup, migration/read-only recovery/lineage restore var; privacy tombstone/managed purge ve tam upgrade/power-loss matrisi açık | PARTIAL |
 | 35–36 | Sequence/replay/intent | Current/historical replay, task/global cursor ayrımı, raw input closure, event paging | PARTIAL |
-| 37 | Independent evaluator | Bağımsız benchmark/pilot yok | NOT_IMPLEMENTED |
+| 37 | Independent evaluator | Ayrı owner hidden oracle candidate eval, bütün attempt paydası/UNKNOWN maliyeti ve paired report var; gerçek dataset/preregistration/pilot ve hardware p95 kabulü açık | PARTIAL |
 | 38 | Host Git/OSC/secret output | Capture Git executable çalıştırmaz; OSC escaped; provider error secret redaction | PARTIAL |
 
 **A gate CLOSED. B preview CLOSED. Stable A–D CLOSED.** Engineering özelliklerinin çalışması kapıları açmaz. Gerçek iki remote+bir local endpoint kabulü kullanıcı tercihiyle ertelendi; fixture sonucu bu kabulün yerine geçmez. Tam sandbox, protected verification, store lifecycle/retention/privacy, tam IPC/process supervisor conformance, platform packaging ve bağımsız evaluator kanıtları zorunludur.

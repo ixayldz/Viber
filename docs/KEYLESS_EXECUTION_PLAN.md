@@ -58,9 +58,9 @@ C09: numeric allowlist support/export canary testleri; Unix OS vault AES-GCM + e
 
 Güncel sabit kaynak kopyası Windows full suite: **539 PASS / 4 SKIP / 0 FAIL** (.cache/windows-0.9-ui-full.jsonl). Önceki GC kopyası Linux full race: **525 PASS / 2 SKIP / 0 FAIL**; tüm Darwin paketleri COMPILE_ONLY ve native Linux build/doctor PASS. Güncel UI/config/vault kopyasının Linux full race turu **545 PASS / 2 SKIP / 0 FAIL**; Linux build/doctor PASS, tüm Darwin paket/binary COMPILE_ONLY. Native macOS/vault runtime kabulü yoktur.
 
-Root LICENSE kararı kod sahibinden beklenmektedir. Paketleme/signature/independent pilot ve gerçek hesap/native platform kabulü anahtarsız dış karar/kabul işleridir. Bunlar API anahtarı bekleyen provider testleri diye yeniden sınıflandırılmaz.
+Root LICENSE kararı kullanıcı tarafından MIT olarak verildi ve root LICENSE eklendi. Paketleme/signature/independent pilot ve gerçek hesap/native platform kabulü anahtarsız dış karar/kabul işleridir. Bunlar API anahtarı bekleyen provider testleri diye yeniden sınıflandırılmaz.
 
-C11: exact committed revision source archive, pinned offline dependency verification, dependency/Go license material, CycloneDX inventory, twice-built byte-identical binaries ve manifest-last hashes komutu uygulandı. Temporary Git fixture smoke PASS. Root LICENSE kararı, signing/install/update/rollback/pilot gate bu komutla kapanmaz.
+C11: exact committed revision source archive, pinned offline dependency verification, dependency/Go license material, CycloneDX inventory, twice-built byte-identical binaries ve manifest-last hashes komutu uygulandı. Temporary Git fixture smoke PASS. Root LICENSE MIT olarak kararlaştırıldı; signing/install/update/rollback/pilot gate bu komutla kapanmaz.
 
 ## C04 korunan V4 gözlemci dilimi
 

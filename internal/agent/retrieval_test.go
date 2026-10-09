@@ -9,7 +9,55 @@ import (
 	"github.com/ixayldz/Viber/internal/retrieval"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestOwnerSearchReusesIndexButRechecksPolicyAndBytes(t *testing.T) {
+	capture, layers, state := capturedPages(t, map[string][]byte{"src/a.go": []byte("Needle"), "secret.go": []byte("Needle private")})
+	state.TaskID = "cache-task"
+	cache, err := retrieval.NewCache(8<<20, 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	search := func() (retrieval.Result, error) {
+		args, _ := json.Marshal(map[string]any{"query": "Needle", "mode": "ranked", "intent": "IDENTIFIER", "limit": 8})
+		value, err := nativeReadPageWithCache(context.Background(), capture, layers, state, model.Call{Name: "fs_search", Arguments: args}, cache)
+		if err != nil {
+			return retrieval.Result{}, err
+		}
+		encoded, _ := json.Marshal(value)
+		var page struct {
+			Retrieval retrieval.Result `json:"retrieval"`
+		}
+		err = json.Unmarshal(encoded, &page)
+		return page.Retrieval, err
+	}
+	first, err := search()
+	if err != nil || first.Cache == nil || first.Cache.Hit {
+		t.Fatal("first owner build", err)
+	}
+	second, err := search()
+	if err != nil || second.Cache == nil || !second.Cache.Hit {
+		t.Fatal("owner rebuilt warm index", err)
+	}
+	layers[0].Paths = []string{"src/**"}
+	restricted, err := search()
+	if err != nil || restricted.Cache.Hit || restricted.Manifest.Documents != 1 {
+		t.Fatal("policy cache leak", err)
+	}
+	for _, hit := range restricted.Hits {
+		if hit.Path == "secret.go" {
+			t.Fatal("revoked source returned")
+		}
+	}
+	capture.Contents["src/a.go"] = []byte("mutated")
+	_, err = search()
+	var failure *c.Error
+	if !errors.As(err, &failure) || failure.Code != c.StoreIntegrityError {
+		t.Fatal("cache bypassed source integrity", err)
+	}
+}
 
 func TestRankedSearchFiltersPolicyBeforeIndexAndBindsCursor(t *testing.T) {
 	capture, layers, state := capturedPages(t, map[string][]byte{

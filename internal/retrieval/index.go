@@ -18,7 +18,7 @@ import (
 	"modernc.org/sqlite"
 )
 
-const Version = "SOURCE_FTS5_BM25_TRIGRAM_RRF_V1"
+const Version = "SOURCE_FTS5_BM25_TRIGRAM_RRF_V2"
 const MaxBytes = 32 << 20
 const MaxChunks = 32768
 
@@ -207,7 +207,7 @@ func (index *Index) rows(ctx context.Context, table, query string) ([]int, error
 	if query == "" {
 		return nil, nil
 	}
-	rows, err := index.db.QueryContext(ctx, fmt.Sprintf("SELECT rowid FROM %s WHERE %s MATCH ? ORDER BY bm25(%s, 2.0, 1.0), rowid LIMIT 512", table, table, table), query)
+	rows, err := index.db.QueryContext(ctx, fmt.Sprintf("SELECT rowid FROM %s WHERE %s MATCH ? ORDER BY bm25(%s, 0.0, 1.0), rowid LIMIT 512", table, table, table), "body : ("+query+")")
 	if err != nil {
 		return nil, boundedBuildError(ctx, err)
 	}

@@ -64,7 +64,7 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		if node := doc.Plan.Active(); node != nil {
 			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
 		}
-		value, err := nativeReadPage(ctx, candidate, readLayers, state, call)
+		value, err := nativeReadPageWithCache(ctx, candidate, readLayers, state, call, s.retrievalCache)
 		if err != nil {
 			return model.Reply{}, nil, err
 		}

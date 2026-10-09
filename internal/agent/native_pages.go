@@ -189,6 +189,9 @@ func coverage(cursor pageCursor, end, total int64) (pageCoverage, error) {
 	return pageCoverage{Start: cursor.Position, End: end, Total: total, Next: next, HasMore: next != ""}, err
 }
 func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, state c.TaskState, call model.Call) (any, error) {
+	return nativeReadPageWithCache(ctx, candidate, layers, state, call, nil)
+}
+func nativeReadPageWithCache(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, state c.TaskState, call model.Call, cache *retrieval.Cache) (any, error) {
 	args, cursor, err := parsePage(call, candidate, layers)
 	if err != nil {
 		return nil, err
@@ -339,7 +342,7 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 		}{1, "UNTRUSTED_SOURCE", candidate.Snapshot.Digest, "CAPTURED_POLICY_SCOPE_WITH_EXPLICIT_EXCLUSIONS", items[cursor.Position:end], extent, c.ReadCondition{Path: args.Directory, Kind: "LISTING", Digest: digest}}, nil
 	case "fs_search":
 		if args.Mode == "ranked" {
-			return rankedReadPage(ctx, candidate, layers, action, args, cursor)
+			return rankedReadPage(ctx, candidate, layers, action, args, cursor, cache, c.HashBytes([]byte(state.TaskID)))
 		}
 		if args.Query == "" || len(args.Query) > 256 || !utf8.ValidString(args.Query) {
 			return nil, c.Fail(c.InvalidArgument, "bounded UTF-8 literal query required")

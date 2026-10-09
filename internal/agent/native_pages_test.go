@@ -16,7 +16,7 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-func capturedPages(t *testing.T, files map[string][]byte) (workspace.Capture, []policy.Policy, c.TaskState) {
+func capturedPages(t testing.TB, files map[string][]byte) (workspace.Capture, []policy.Policy, c.TaskState) {
 	t.Helper()
 	root := t.TempDir()
 	for name, raw := range files {

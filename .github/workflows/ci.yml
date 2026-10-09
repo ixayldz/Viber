@@ -90,13 +90,45 @@ jobs:
           name: docker-${{ github.sha }}
           path: evidence/
           if-no-files-found: error
+  vault:
+    needs: test
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+      - name: Disposable Linux desktop vault dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes dbus-x11 gnome-keyring libsecret-tools
+      - name: Real native vault acceptance
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            dbus-run-session -- bash scripts/vault-acceptance.sh evidence
+          else
+            bash scripts/vault-acceptance.sh evidence
+          fi
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vault-${{ matrix.os }}-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
   foundation:
     if: always()
-    needs: [test, docker]
+    needs: [test, docker, vault]
     runs-on: ubuntu-latest
     steps:
       - name: Require every foundation job
         env:
           TEST_RESULT: ${{ needs.test.result }}
           DOCKER_RESULT: ${{ needs.docker.result }}
-        run: test "$TEST_RESULT" = success && test "$DOCKER_RESULT" = success
+          VAULT_RESULT: ${{ needs.vault.result }}
+        run: test "$TEST_RESULT" = success && test "$DOCKER_RESULT" = success && test "$VAULT_RESULT" = success

@@ -15,7 +15,7 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
-func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, action policy.Action, args pageArgs, cursor pageCursor) (any, error) {
+func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, action policy.Action, args pageArgs, cursor pageCursor, cache *retrieval.Cache, scope string) (any, error) {
 	if args.Query == "" || len(args.Query) > 256 || !utf8.ValidString(args.Query) || strings.ContainsRune(args.Query, 0) {
 		return nil, c.Fail(c.InvalidArgument, "bounded UTF-8 retrieval query required")
 	}
@@ -40,7 +40,19 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 	}
 	binding := retrieval.Binding{Candidate: candidate.Snapshot.Digest, Policy: policyHash}
 	buildCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	index, err := retrieval.New(buildCtx, binding, documents)
+	var index *retrieval.Index
+	var evidence *retrieval.CacheEvidence
+	var release func()
+	if cache != nil {
+		var measured retrieval.CacheEvidence
+		index, measured, release, err = cache.Acquire(buildCtx, scope, binding, documents)
+		evidence = &measured
+	} else {
+		index, err = retrieval.New(buildCtx, binding, documents)
+		if err == nil {
+			release = func() { index.Close() }
+		}
+	}
 	buildFailure := buildCtx.Err()
 	cancel()
 	if err != nil {
@@ -70,13 +82,14 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 			Literal  any    `json:"literal"`
 		}{true, "INDEX_UNAVAILABLE_WITHIN_BOUNDED_PROFILE", literal}, nil
 	}
-	defer index.Close()
+	defer release()
 	queryCtx, queryCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer queryCancel()
 	result, err := index.Search(queryCtx, binding, args.Query, args.Intent, int(cursor.Position), int(args.Limit))
 	if err != nil {
 		return nil, err
 	}
+	result.Cache = evidence
 	extent, err := coverage(cursor, cursor.Position+int64(len(result.Hits)), int64(result.Total))
 	if err != nil {
 		return nil, err
