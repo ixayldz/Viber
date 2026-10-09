@@ -9,10 +9,10 @@ Her paket gerçek CLI/owner akışına bağlı uygulama, saldırgan ve recovery 
 | Paket | Bağımlılık | Çalışan sonuç ve kabul | Durum |
 |---|---|---|---|
 | K01 CI/güvenlik | Yok | Go 1.27.2; üç OS full test/vet/vulnerability; Linux race/üç fuzz; migration; actual rootful Docker; aggregate foundation | Başlangıç revision GREEN; yeni revision tekrar ölçülür |
-| K02 lisans/vault/docs | K01 | Kullanıcının seçtiği MIT; Unix helper environment allowlist; actual Secret Service/Keychain unique-item roundtrip; çelişkili plaintext/fencing/eval belgeleri düzeltilir | Kodlandı; native CI kabulü bekleniyor |
+| K02 lisans/vault/docs | K01 | Kullanıcının seçtiği MIT; Unix helper environment allowlist; actual Secret Service/Keychain unique-item roundtrip; çelişkili plaintext/fencing/eval belgeleri düzeltilir | MIT/hardening/native roundtrip PASS; geniş vault failure matrix ayrı |
 | K03 owner retrieval cache | K01 | Task/candidate/policy/source/version binding; fresh hash validation; single build; aktif retired lease quota; TTL/LRU/invalidation; gerçek owner warm benchmark | Kodlandı; Windows kabulü geçti |
 | K04 relevance/spans/ölçek | K03 | Body/path ayrımı; dosya başına üç örtüşmeyen span; truncation; real repo recall@5/correct span/stale tests; OS peak resident ölçümü; büyük repo partition/coverage | İlk bölüm kodlandı; partition açık |
-| K05 delivery | K01/K02 | B/C/U üç yönlü merge preview; overlap conflict; merged candidate reverify; source-bound plan; güçlü backend admission; file intent/receipt/recovery/dedup; yalnız owned diff restore | Açık |
+| K05 delivery | K01/K02 | B/C/U üç yönlü merge preview; overlap conflict; merged candidate reverify; source-bound plan; güçlü backend admission; file intent/receipt/recovery/dedup; yalnız owned diff restore | Preview/portable merged export kodlandı; live backend ve reverify akışı açık |
 | K06 privacy/retention | K01 | Task-content tombstone; minimal audit ve ledger korunumu; parent/derived task lineage; content purge; managed backup watermark/purge; eski restore reddi; crash recovery | Açık |
 | K07 resources/fencing | K01/K06 | Managed copy/metadata fiziksel quota; atomic fence admission; lifetime/restart/rootless/backend acceptance; UNKNOWN doğru korunumu | Kısmen uygulandı; kullanıcı ertelemesi var |
 | K08 verification | K01/K05 | Check revision/discovery/protected dependency closure; V0–V5/language boundaries; protected external oracle; negative forged report fixtures | STDIO observer var; genişleme açık |

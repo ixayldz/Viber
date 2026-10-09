@@ -61,6 +61,7 @@ Usage:
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
+  viber delivery-preview TASK --store PATH --output NEW_PATH [--json]
   viber detach TASK --store PATH [--command-id ID] [--json]
   viber attach TASK --store PATH [--after TASK_SEQ] [--limit N] [--follow] [--poll-ms N] [--json]
   viber serve-background|owner-status|owner-stop --store PATH [--json]
@@ -197,6 +198,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runRequests(args[0], args[1:], out, errout)
 	case "export":
 		return runExport(args[1:], out, errout)
+	case "delivery-preview":
+		return runDeliveryPreview(args[1:], out, errout)
 	case "run":
 		return runTask(args[1:], out, errout)
 	case "inspect", "replay", "events":

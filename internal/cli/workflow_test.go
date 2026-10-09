@@ -74,12 +74,12 @@ func TestCLIRequestBackupRestoreResponseAndHistoricalReplay(t *testing.T) {
 }
 
 func TestControlCommandsDoNotInitializeMissingStore(t *testing.T) {
-	for _, command := range []string{"status", "inspect", "replay", "events", "requests", "export", "store-backup"} {
+	for _, command := range []string{"status", "inspect", "replay", "events", "requests", "export", "delivery-preview", "store-backup"} {
 		t.Run(command, func(t *testing.T) {
 			empty := t.TempDir()
 			var out, stderr bytes.Buffer
 			args := []string{command, "absent", "--store", empty, "--json"}
-			if command == "export" {
+			if command == "export" || command == "delivery-preview" {
 				args = append(args, "--output", filepath.Join(t.TempDir(), "export"))
 			}
 			if command == "store-backup" {

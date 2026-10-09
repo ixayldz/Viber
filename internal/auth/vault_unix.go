@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"io"
@@ -67,6 +68,10 @@ func execVaultHelper(executable string, args []string, input []byte) vaultRespon
 		response.Err = c.Fail(c.UnsupportedCapability, "supported OS vault helper unavailable")
 		return response
 	}
+	if address := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); runtime.GOOS == "linux" && address != "" && !localVaultAddress(address) {
+		response.Err = c.Fail(c.PolicyDenied, "OS credential vault requires local Unix IPC")
+		return response
+	}
 	resolved, err := filepath.EvalSymlinks(executable)
 	if err != nil {
 		response.Err = err
@@ -120,7 +125,7 @@ func vaultEnvironment(source []string) []string {
 			prefix := key + "="
 			if strings.HasPrefix(source[i], prefix) {
 				value := strings.TrimPrefix(source[i], prefix)
-				if value != "" && len(value) <= 4096 && !strings.ContainsAny(value, "\x00\r\n") {
+				if value != "" && len(value) <= 4096 && !strings.ContainsAny(value, "\x00\r\n") && (key != "DBUS_SESSION_BUS_ADDRESS" || localVaultAddress(value)) {
 					env = append(env, prefix+value)
 				}
 				break
@@ -128,6 +133,55 @@ func vaultEnvironment(source []string) []string {
 		}
 	}
 	return env
+}
+
+// D-Bus permits remote transports; an OS credential vault is local-only.
+// Invalid explicit addresses are denied, rather than replaced by another bus.
+func localVaultAddress(address string) bool {
+	if address == "" || len(address) > 4096 || strings.ContainsAny(address, "\x00\r\n") {
+		return false
+	}
+	endpoints := strings.Split(address, ";")
+	if len(endpoints) > 4 {
+		return false
+	}
+	for _, endpoint := range endpoints {
+		transport, properties, ok := strings.Cut(endpoint, ":")
+		if !ok || transport != "unix" {
+			return false
+		}
+		keys := map[string]bool{}
+		socket := false
+		for _, property := range strings.Split(properties, ",") {
+			key, value, ok := strings.Cut(property, "=")
+			if !ok || value == "" || keys[key] {
+				return false
+			}
+			keys[key] = true
+			switch key {
+			case "path":
+				if !strings.HasPrefix(value, "/") {
+					return false
+				}
+				socket = true
+			case "abstract":
+				socket = true
+			case "guid":
+				if len(value) != 32 {
+					return false
+				}
+				if _, err := hex.DecodeString(value); err != nil {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		if !socket || keys["path"] && keys["abstract"] {
+			return false
+		}
+	}
+	return true
 }
 func (v commandVault) Get(handle string) ([]byte, error) {
 	if !c.ValidDigest(handle) {

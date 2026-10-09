@@ -133,6 +133,14 @@ Get-Content -LiteralPath (Join-Path $delivery 'manifest.json') -Raw
 
 Paket exact before/after byte artifact'ları, `changes.patch`, `report.json` ve en son yayımlanan `manifest.json` içerir. Çıktı dizini yeni olmalı, üst dizin önceden var olmalıdır. Binary değişiklikte `patch_complete: false` olabilir; text patch bütün değişikliği temsil etmeyebilir.
 
+Task bittikten sonra kaynakta bağımsız kullanıcı editleri varsa B/C/U üç yönlü preview alın:
+
+~~~powershell
+.\bin\viber.exe delivery-preview greeting --store $store --output (Join-Path $demoBase 'merged-preview') --json
+~~~
+
+READY çıktısında `merged/` tam birleşmiş candidate'ı, `changes.patch` güncel kaynak → merged farkını taşır. Çakışmada path kararları çıkar, kısmi merged dosyası yayımlanmaz. Canlı kaynak ve Git index değişmez; merged sonuç `UNVERIFIED` olarak yeniden doğrulama ister. [Kullanım, binding, conflict ve sınırlar](docs/DELIVERY_PREVIEW.md).
+
 Export kullanıcı tarafından istenen yerel bir teslim işlemidir; görevi `VERIFIED` yapmaz ve canlı workspace'e uygulamaz. Bu paket tam store yedeği veya training dataset'i değildir. İçerik kaynak kodu/duyarlı veri taşıyabilir; paylaşmadan önce inceleyin. Genel secret-safe redaction ve privacy deletion henüz tamamlanmamıştır.
 
 ## Review modu: değişiklik öncesi onay
@@ -584,7 +592,7 @@ Unix auth storage artık OS vault bağlı AES-256-GCM kullanır: Linux'ta `/usr/
 viber auth migrate-storage --auth-dir /private/path/to/viber/auth --json
 ```
 
-Bu işlem hesap/profile kimliğini korur; inference, registration veya refresh yapmaz ve plaintext backup üretmez. Windows kullanıcı DPAPI korunur. Credential vault'u task store/source/backup'tan ayrıdır; yalnız credentials.bin kopyalamak Unix vault anahtarını taşımaz. Offline encryption/helper-protocol fixture'ları gerçek desktop vault/unlock kabulü değildir; native macOS ve gerçek Secret Service kabulü ayrıca kaydedilir.
+Bu işlem hesap/profile kimliğini korur; inference, registration veya refresh yapmaz ve plaintext backup üretmez. Windows kullanıcı DPAPI korunur. Credential vault'u task store/source/backup'tan ayrıdır; yalnız credentials.bin kopyalamak Unix vault anahtarını taşımaz. Offline encryption/helper-protocol fixture'ları gerçek desktop vault/unlock kabulü değildir; CI'da native macOS Keychain ve Linux Secret Service unique-item roundtrip/cleanup ayrıca geçti. Helper yalnız local Unix D-Bus IPC kullanır; remote/mixed/autolaunch address açıkça reddedilir. Bu bütün locked/multi-user/vault failure matrix'i değildir; exact revision kanıtı [VALIDATION](docs/VALIDATION.md) içindedir.
 
 
 ## Terminal arayüzü, prompt kuyruğu ve config (0.9)
