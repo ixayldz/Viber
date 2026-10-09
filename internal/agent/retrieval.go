@@ -39,6 +39,23 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 		documents = append(documents, retrieval.Document{Path: entry.Path, Digest: entry.Hash, Bytes: raw})
 	}
 	binding := retrieval.Binding{Candidate: candidate.Snapshot.Digest, Policy: policyHash}
+	var partition *retrieval.PartitionEvidence
+	sourceBytes := int64(0)
+	for _, doc := range documents {
+		sourceBytes += int64(len(doc.Bytes))
+	}
+	if len(documents) > retrieval.PartitionMaxDocuments || sourceBytes > retrieval.PartitionMaxBytes || args.Partition != 0 {
+		plan, planErr := retrieval.PlanPartitions(ctx, binding, documents)
+		if planErr != nil {
+			return nil, planErr
+		}
+		var measured retrieval.PartitionEvidence
+		documents, measured, err = plan.Select(args.Partition)
+		if err != nil {
+			return nil, err
+		}
+		partition = &measured
+	}
 	buildCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	var index *retrieval.Index
 	var evidence *retrieval.CacheEvidence
@@ -77,10 +94,12 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 			return nil, err
 		}
 		return struct {
-			Fallback bool   `json:"fallback_used"`
-			Reason   string `json:"reason"`
-			Literal  any    `json:"literal"`
-		}{true, "INDEX_UNAVAILABLE_WITHIN_BOUNDED_PROFILE", literal}, nil
+			Fallback           bool                         `json:"fallback_used"`
+			Reason             string                       `json:"reason"`
+			Literal            any                          `json:"literal"`
+			RequestedPartition *retrieval.PartitionEvidence `json:"requested_partition,omitempty"`
+			FallbackScope      string                       `json:"fallback_scope"`
+		}{true, "INDEX_UNAVAILABLE_WITHIN_BOUNDED_PROFILE", literal, partition, "FULL_CAPTURED_POLICY_SCOPE_LITERAL_PAGE; NOT_PARTITION_RANKING"}, nil
 	}
 	defer release()
 	queryCtx, queryCancel := context.WithTimeout(ctx, 3*time.Second)
@@ -90,6 +109,7 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 		return nil, err
 	}
 	result.Cache = evidence
+	result.Partition = partition
 	extent, err := coverage(cursor, cursor.Position+int64(len(result.Hits)), int64(result.Total))
 	if err != nil {
 		return nil, err

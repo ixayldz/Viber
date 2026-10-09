@@ -18,6 +18,7 @@ import (
 )
 
 type pageArgs struct {
+	Partition int    `json:"partition,omitempty"`
 	Path      string `json:"path,omitempty"`
 	Directory string `json:"directory,omitempty"`
 	Query     string `json:"query,omitempty"`
@@ -58,6 +59,7 @@ func readToolParameters(name string) json.RawMessage {
 	if name == "fs_search" {
 		properties["mode"] = map[string]any{"type": "string", "enum": []string{"literal", "ranked"}}
 		properties["intent"] = map[string]any{"type": "string", "enum": []string{"IDENTIFIER", "ERROR", "FEATURE", "REFACTOR"}}
+		properties["partition"] = map[string]any{"type": "integer", "minimum": 0, "maximum": retrieval.PartitionMaxCount - 1}
 	}
 	for key, value := range offsetSchema {
 		properties[key] = value
@@ -84,7 +86,7 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 		primary = "query"
 	}
 	for key := range keys {
-		if key != primary && key != "limit" && key != "cursor" && key != "candidate_digest" && !(key == "offset" && call.Name == "fs_read") && !((key == "mode" || key == "intent") && call.Name == "fs_search") {
+		if key != primary && key != "limit" && key != "cursor" && key != "candidate_digest" && !(key == "offset" && call.Name == "fs_read") && !((key == "mode" || key == "intent" || key == "partition") && call.Name == "fs_search") {
 			return args, pageCursor{}, c.Fail(c.InvalidArgument, "argument belongs to a different read tool")
 		}
 	}
@@ -131,6 +133,9 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 		if args.Mode != "literal" && args.Mode != "ranked" || args.Mode == "literal" && args.Intent != "" {
 			return args, pageCursor{}, c.Fail(c.InvalidArgument, "valid retrieval mode and matching intent required")
 		}
+		if raw, provided := keys["partition"]; provided && (args.Mode != "ranked" || strings.TrimSpace(string(raw)) == "null") || args.Partition < 0 || args.Partition >= retrieval.PartitionMaxCount {
+			return args, pageCursor{}, c.Fail(c.InvalidArgument, "bounded partition ordinal requires ranked search")
+		}
 		if args.Mode == "ranked" {
 			if args.Intent == "" {
 				args.Intent = "IDENTIFIER"
@@ -138,7 +143,10 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 			if !retrieval.ValidIntent(args.Intent) {
 				return args, pageCursor{}, c.Fail(c.InvalidArgument, "invalid retrieval intent")
 			}
-			scope, err = c.Digest(struct{ Base, Mode, Intent, Version string }{scope, args.Mode, args.Intent, retrieval.Version})
+			scope, err = c.Digest(struct {
+				Base, Mode, Intent, Version string
+				Partition                   int
+			}{scope, args.Mode, args.Intent, retrieval.Version, args.Partition})
 			if err != nil {
 				return args, pageCursor{}, err
 			}

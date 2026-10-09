@@ -27,18 +27,19 @@ type Hit struct {
 	Signals    []Signal `json:"signals"`
 }
 type Result struct {
-	SpanPolicy    string         `json:"span_policy"`
-	Cache         *CacheEvidence `json:"cache,omitempty"`
-	SchemaVersion int            `json:"schema_version"`
-	Trust         string         `json:"trust"`
-	Manifest      Manifest       `json:"index"`
-	Query         string         `json:"query"`
-	Intent        string         `json:"intent"`
-	Hits          []Hit          `json:"hits"`
-	Total         int            `json:"ranked_pool_total"`
-	PoolTruncated bool           `json:"ranked_pool_truncated"`
-	QueryMicros   int64          `json:"query_micros"`
-	Fallback      bool           `json:"fallback_used"`
+	Partition     *PartitionEvidence `json:"partition,omitempty"`
+	SpanPolicy    string             `json:"span_policy"`
+	Cache         *CacheEvidence     `json:"cache,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	Trust         string             `json:"trust"`
+	Manifest      Manifest           `json:"index"`
+	Query         string             `json:"query"`
+	Intent        string             `json:"intent"`
+	Hits          []Hit              `json:"hits"`
+	Total         int                `json:"ranked_pool_total"`
+	PoolTruncated bool               `json:"ranked_pool_truncated"`
+	QueryMicros   int64              `json:"query_micros"`
+	Fallback      bool               `json:"fallback_used"`
 }
 
 func ValidIntent(intent string) bool {

@@ -18,7 +18,7 @@ import (
 	"modernc.org/sqlite"
 )
 
-const Version = "SOURCE_FTS5_BM25_TRIGRAM_RRF_V2"
+const Version = "SOURCE_FTS5_BM25_TRIGRAM_RRF_PARTITION_V3"
 const MaxBytes = 32 << 20
 const MaxChunks = 32768
 
