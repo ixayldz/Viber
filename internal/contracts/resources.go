@@ -204,7 +204,7 @@ func ApplyResources(account *ResourceAccount, change ResourceMutation, task Task
 				return nil, Fail(InvalidArgument, "unknown resource risk cannot be released")
 			}
 		} else {
-			if r.Status != "SETTLED" || !ValidDigest(r.ReceiptDigest) || !r.Used.Valid(1<<52) || r.Used.Children != 0 || (r.Meter != "CONSERVATIVE_KERNEL_RECEIPT_V1" && r.Meter != "KERNEL_NO_DISPATCH" && r.Meter != "OPERATOR_ASSUMED_UPPER_BOUND") {
+			if r.Status != "SETTLED" || !ValidDigest(r.ReceiptDigest) || !r.Used.Valid(1<<52) || r.Used.Children != 0 || (r.Meter != "CONSERVATIVE_KERNEL_RECEIPT_V1" && r.Meter != "KERNEL_NO_DISPATCH" && r.Meter != "OPERATOR_ASSUMED_UPPER_BOUND" && r.Meter != "KERNEL_FENCED_NATIVE_UPPER_BOUND") {
 				return nil, Fail(InvalidArgument, "resource settlement requires receipt and quiescent children")
 			}
 			if r.Meter == "KERNEL_NO_DISPATCH" && r.Used != (ResourceVector{}) {
@@ -212,6 +212,13 @@ func ApplyResources(account *ResourceAccount, change ResourceMutation, task Task
 			}
 			if err := validateResourcePrice(account.Policy, r, true); err != nil {
 				return nil, err
+			}
+			if r.Meter == "KERNEL_FENCED_NATIVE_UPPER_BOUND" {
+				expected := old.Upper
+				expected.Children = 0
+				if old.Status != "UNKNOWN" || r.Kind != "NATIVE_TOOL" || r.Used != expected || r.TokenUsed != (TokenLimits{}) {
+					return nil, Fail(PolicyDenied, "fenced native risk must keep its complete allocation")
+				}
 			}
 			if r.Meter == "OPERATOR_ASSUMED_UPPER_BOUND" {
 				expected := old.Upper

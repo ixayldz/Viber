@@ -26,6 +26,7 @@ type CheckRunRef struct {
 	Digest string `json:"digest"`
 }
 type CheckRun struct {
+	NativeLease   *runner.Lease     `json:"native_lease,omitempty"`
 	Observer      *ObservedEvidence `json:"observer,omitempty"`
 	SchemaVersion int               `json:"schema_version"`
 	TaskID        string            `json:"task_id"`
@@ -111,6 +112,9 @@ func (s *Session) readCheckRun(doc Document, ref CheckRunRef) (CheckRun, error) 
 	}
 	if doc.CheckRuntime == nil || doc.Protection == nil || record.SchemaVersion != 1 || record.TaskID != doc.TaskID || record.CallID != ref.ID || record.CallID == "" || record.SpecVersion < 1 || record.SpecVersion > doc.Spec.Version || record.PolicyEpoch < 1 || record.Generation < 1 || record.OriginDigest != doc.Spec.ProtectedOrigin || record.Discovery != "UNTRUSTED_UNRESOLVED" || record.Outcome != checkOutcome(record.Result) || record.Result.SchemaVersion != 1 || record.Result.DurationMillis < 0 || !c.ValidDigest(record.Result.ContainerID) {
 		return record, c.Fail(c.StoreIntegrityError, "check receipt authority binding mismatch")
+	}
+	if err = validateOwnedResult(record.Result, doc, record, "CHECK", 1); err != nil {
+		return record, err
 	}
 	profileDigest, _ := c.Digest(doc.CheckRuntime.Profile)
 	var argv []string
@@ -245,7 +249,11 @@ func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Docu
 	if suite, check, ok := observerSuite(*doc, args.CheckID); ok {
 		return s.executeObservedCheck(ctx, fresh, doc, call, broker, materialized.SourceDirectory, check, suite)
 	}
-	result, runErr := broker.Run(ctx, materialized.SourceDirectory, doc.CheckRuntime.Profile, runner.Invocation{CandidateDigest: doc.Candidate.SnapshotDigest, Argv: argv})
+	subject, leaseErr := s.leasedRunner(*doc, broker, "CHECK")
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	result, runErr := subject.Run(ctx, materialized.SourceDirectory, doc.CheckRuntime.Profile, runner.Invocation{CandidateDigest: doc.Candidate.SnapshotDigest, Argv: argv})
 	if runErr != nil {
 		// The broker may have created a process before losing its reply.
 		// Never turn missing cleanup proof into a retryable model tool error.
@@ -261,7 +269,7 @@ func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Docu
 		doc.Pending.Status = "UNKNOWN"
 		return nil, err
 	}
-	record := CheckRun{SchemaVersion: 1, TaskID: doc.TaskID, CallID: call.ID, CheckID: args.CheckID, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch, Generation: state.KernelGeneration, OriginDigest: doc.Spec.ProtectedOrigin, Outcome: checkOutcome(result), Discovery: "UNTRUSTED_UNRESOLVED", Result: result}
+	record := CheckRun{NativeLease: doc.Pending.NativeLease, SchemaVersion: 1, TaskID: doc.TaskID, CallID: call.ID, CheckID: args.CheckID, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch, Generation: state.KernelGeneration, OriginDigest: doc.Spec.ProtectedOrigin, Outcome: checkOutcome(result), Discovery: "UNTRUSTED_UNRESOLVED", Result: result}
 	raw, err := c.CanonicalV1(record)
 	if err != nil {
 		doc.UnknownEffect = true

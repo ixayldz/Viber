@@ -45,6 +45,8 @@ Usage:
   viber context-edit TASK --store PATH --command-file FILE [--json]
   viber model-switch TASK --store PATH --command-file FILE [--json]
   viber reconcile-model-risk TASK --store PATH --command-file FILE [--json]
+  viber runtime-info TASK --store PATH [--json]
+  viber reconcile-native-risk TASK --store PATH --command-file FILE [--json]
   viber history-page TASK --store PATH --history-digest SHA256 --offset N --limit N [--json]
   viber requests TASK --store PATH [--json]
   viber respond TASK --store PATH --request ID --response-file FILE [--json]
@@ -141,7 +143,7 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runAttachment(args[0], args[1:], out, errout)
 	case "store-gc-preview", "store-gc":
 		return runGC(args[0], args[1:], out, errout)
-	case "context-edit", "model-switch", "reconcile-model-risk":
+	case "context-edit", "model-switch", "reconcile-model-risk", "reconcile-native-risk":
 		return runContinuityEdit(args[0], args[1:], out, errout)
 	case "check-config":
 		return runCheckConfig(args[1:], out, errout)
@@ -151,7 +153,7 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runAuth(args[1:], out, errout)
 	case "attempt":
 		return runAttempt(args[1:], out, errout)
-	case "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources":
+	case "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources", "runtime-info":
 		return runObservation(args[0], args[1:], out, errout)
 	case "budget":
 		return runTokenLedger(args[1:], out, errout)

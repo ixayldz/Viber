@@ -247,6 +247,19 @@ func (s *Session) validateResourceDocument(state c.TaskState, doc Document) erro
 			if r.Kind != "MODEL" || r.Used != expected {
 				return c.Fail(c.StoreIntegrityError, "operator risk resource exposure was reduced")
 			}
+		} else if r.Meter == nativeRiskMeter {
+			expected := r.Upper
+			expected.Children = 0
+			if r.Kind != "NATIVE_TOOL" || r.Used != expected || proof.ToolReply == nil || !proof.ToolReply.IsError || !c.ValidDigest(proof.SourceReceipt) {
+				return c.Fail(c.StoreIntegrityError, "native fence charge or reply invalid")
+			}
+			risk, err := s.readNativeRisk(doc, proof.SourceReceipt)
+			if err != nil {
+				return err
+			}
+			if !risk.Complete || risk.AssumedResources != r.Used || risk.ReservationID != r.ID || risk.RequestDigest != r.RequestDigest || risk.ProfileDigest != r.ProfileDigest {
+				return c.Fail(c.StoreIntegrityError, "native fence risk differs from ledger")
+			}
 		} else if r.Meter == "KERNEL_NO_DISPATCH" {
 			if r.Used != (c.ResourceVector{}) || r.Kind != "MODEL" {
 				return c.Fail(c.StoreIntegrityError, "invalid no-dispatch resource proof")
@@ -278,7 +291,7 @@ func (s *Session) validateResourceDocument(state c.TaskState, doc Document) erro
 			if !found || proof.ToolReply != nil {
 				return c.Fail(c.StoreIntegrityError, "model resource receipt missing paired token charge")
 			}
-		} else if proof.ToolReply == nil || c.HashBytes([]byte(proof.ToolReply.CallID)) != r.CallDigest || proof.SourceReceipt != "" {
+		} else if proof.ToolReply == nil || c.HashBytes([]byte(proof.ToolReply.CallID)) != r.CallDigest || proof.SourceReceipt != "" && r.Meter != nativeRiskMeter {
 			return c.Fail(c.StoreIntegrityError, "native resource reply binding invalid")
 		}
 	}

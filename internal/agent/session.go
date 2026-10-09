@@ -24,6 +24,7 @@ import (
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/plan"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/runner"
 	"github.com/ixayldz/Viber/internal/store"
 	"github.com/ixayldz/Viber/internal/verify"
 	"github.com/ixayldz/Viber/internal/workspace"
@@ -55,57 +56,63 @@ func (b Budget) Validate() error {
 }
 
 type Pending struct {
-	ID              string `json:"id"`
-	Kind            string `json:"kind"`
-	Candidate       string `json:"candidate"`
-	Generation      int64  `json:"generation"`
-	Epoch           int64  `json:"epoch"`
-	ArgumentsDigest string `json:"arguments_digest"`
-	Status          string `json:"status"`
+	NativeLease     *runner.Lease    `json:"native_lease,omitempty"`
+	NativeSubjects  []runner.Capsule `json:"native_subjects,omitempty"`
+	ID              string           `json:"id"`
+	Kind            string           `json:"kind"`
+	Candidate       string           `json:"candidate"`
+	Generation      int64            `json:"generation"`
+	Epoch           int64            `json:"epoch"`
+	ArgumentsDigest string           `json:"arguments_digest"`
+	Status          string           `json:"status"`
 }
 type Document struct {
-	GoalCoverage        *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
-	VerificationReport  string                   `json:"verification_report,omitempty"`
-	Config              *config.Resolved         `json:"retained_config,omitempty"`
-	ResourcePolicy      *c.ResourcePolicy        `json:"store_resource_policy,omitempty"`
-	Compactions         []CompactionRef          `json:"compactions,omitempty"`
-	Pins                []ContextPin             `json:"context_pins,omitempty"`
-	ProfileHistory      []RuntimeProfileRef      `json:"profile_history,omitempty"`
-	AttemptOrigin       *AttemptOrigin           `json:"attempt_origin,omitempty"`
-	TaskKind            string                   `json:"task_kind,omitempty"`
-	MaxRepairs          int                      `json:"max_repairs,omitempty"`
-	RepairAttempts      int                      `json:"repair_attempts,omitempty"`
-	FinalArtifactDigest string                   `json:"final_artifact_digest,omitempty"`
-	CheckRuntime        *CheckRuntime            `json:"check_runtime,omitempty"`
-	CheckRuns           []CheckRunRef            `json:"check_runs,omitempty"`
-	StoreTokens         *c.TokenLimits           `json:"store_token_limits,omitempty"`
-	Runtime             *LocalRuntime            `json:"runtime,omitempty"`
-	Plan                *plan.State              `json:"plan,omitempty"`
-	Protection          *verify.CheckOrigin      `json:"protected_check_origin,omitempty"`
-	Context             *ContextAudit            `json:"context,omitempty"`
-	Requests            []UserRequest            `json:"requests,omitempty"`
-	SchemaVersion       int                      `json:"schema_version"`
-	TaskID              string                   `json:"task_id"`
-	Spec                c.TaskSpec               `json:"spec"`
-	Baseline            artifact.Ref             `json:"baseline"`
-	Candidate           artifact.Ref             `json:"candidate"`
-	Messages            []model.Message          `json:"messages"`
-	ToolCursor          int64                    `json:"tool_cursor"`
-	PendingReplies      []model.Reply            `json:"pending_replies"`
-	Budget              Budget                   `json:"budget"`
-	AllowUnverified     bool                     `json:"allow_unverified"`
-	Autonomy            string                   `json:"autonomy"`
-	FixtureDigest       string                   `json:"fixture_digest"`
-	FixtureCursor       int64                    `json:"fixture_cursor"`
-	Pending             *Pending                 `json:"pending"`
-	UnknownEffect       bool                     `json:"unknown_effect"`
-	Blocker             string                   `json:"blocker"`
-	FinalSummary        string                   `json:"final_summary"`
-	FinalReady          bool                     `json:"final_ready"`
-	LastNoDispatch      bool                     `json:"last_no_dispatch,omitempty"`
-	LastResponseBlob    string                   `json:"last_response_blob"`
+	NativeCleanupAttempts []string                 `json:"native_cleanup_receipts,omitempty"`
+	GoalCoverage          *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
+	VerificationReport    string                   `json:"verification_report,omitempty"`
+	Config                *config.Resolved         `json:"retained_config,omitempty"`
+	ResourcePolicy        *c.ResourcePolicy        `json:"store_resource_policy,omitempty"`
+	Compactions           []CompactionRef          `json:"compactions,omitempty"`
+	Pins                  []ContextPin             `json:"context_pins,omitempty"`
+	ProfileHistory        []RuntimeProfileRef      `json:"profile_history,omitempty"`
+	AttemptOrigin         *AttemptOrigin           `json:"attempt_origin,omitempty"`
+	TaskKind              string                   `json:"task_kind,omitempty"`
+	MaxRepairs            int                      `json:"max_repairs,omitempty"`
+	RepairAttempts        int                      `json:"repair_attempts,omitempty"`
+	FinalArtifactDigest   string                   `json:"final_artifact_digest,omitempty"`
+	CheckRuntime          *CheckRuntime            `json:"check_runtime,omitempty"`
+	CheckRuns             []CheckRunRef            `json:"check_runs,omitempty"`
+	StoreTokens           *c.TokenLimits           `json:"store_token_limits,omitempty"`
+	Runtime               *LocalRuntime            `json:"runtime,omitempty"`
+	Plan                  *plan.State              `json:"plan,omitempty"`
+	Protection            *verify.CheckOrigin      `json:"protected_check_origin,omitempty"`
+	Context               *ContextAudit            `json:"context,omitempty"`
+	Requests              []UserRequest            `json:"requests,omitempty"`
+	SchemaVersion         int                      `json:"schema_version"`
+	TaskID                string                   `json:"task_id"`
+	Spec                  c.TaskSpec               `json:"spec"`
+	Baseline              artifact.Ref             `json:"baseline"`
+	Candidate             artifact.Ref             `json:"candidate"`
+	Messages              []model.Message          `json:"messages"`
+	ToolCursor            int64                    `json:"tool_cursor"`
+	PendingReplies        []model.Reply            `json:"pending_replies"`
+	Budget                Budget                   `json:"budget"`
+	AllowUnverified       bool                     `json:"allow_unverified"`
+	Autonomy              string                   `json:"autonomy"`
+	FixtureDigest         string                   `json:"fixture_digest"`
+	FixtureCursor         int64                    `json:"fixture_cursor"`
+	Pending               *Pending                 `json:"pending"`
+	UnknownEffect         bool                     `json:"unknown_effect"`
+	Blocker               string                   `json:"blocker"`
+	FinalSummary          string                   `json:"final_summary"`
+	FinalReady            bool                     `json:"final_ready"`
+	LastNoDispatch        bool                     `json:"last_no_dispatch,omitempty"`
+	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
+	instance      RuntimeInstance
+	clockOrigin   time.Time
+	clockDomain   string
 	creationFault func(c.ExecutionState) error
 	mu            sync.Mutex
 	directory     string
@@ -114,6 +121,9 @@ type Session struct {
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {
+	if err := preflightRuntimeInstance(directory); err != nil {
+		return nil, err
+	}
 	journal, err := store.Open(ctx, directory)
 	if err != nil {
 		return nil, err
@@ -138,7 +148,14 @@ func Open(ctx context.Context, directory string) (*Session, error) {
 		journal.Close()
 		return nil, err
 	}
-	return &Session{directory: directory, Journal: journal, Archive: archive}, nil
+	session := &Session{directory: directory, Journal: journal, Archive: archive, clockOrigin: time.Now(), clockDomain: newID("")}
+	session.instance, err = openRuntimeInstance(ctx, session)
+	if err != nil {
+		archive.Close()
+		journal.Close()
+		return nil, err
+	}
+	return session, nil
 }
 func (s *Session) Close() error {
 	s.mu.Lock()
@@ -185,6 +202,12 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	}
 	if doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion || doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task {
 		return state, doc, c.Fail(c.StoreIntegrityError, "durable task document binding mismatch")
+	}
+	if err = s.validateNativeCleanup(doc); err != nil {
+		return state, doc, err
+	}
+	if err = validateNativeLease(doc); err != nil {
+		return state, doc, err
 	}
 	if err = validateTaskConfig(doc); err != nil {
 		return state, doc, err
@@ -855,6 +878,9 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		}
 		doc.Budget.ToolCalls++
 		doc.Pending = &Pending{ID: call.ID, Kind: "NATIVE_TOOL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes(call.Arguments), Status: "ADMITTED"}
+		if preflightErr == nil && call.Name == "check_run" {
+			preflightErr = s.prepareNativeLease(state, &doc, call)
+		}
 		var err error
 		state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
 		if err != nil {

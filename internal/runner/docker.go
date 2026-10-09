@@ -52,28 +52,30 @@ type Invocation struct {
 	Argv            []string `json:"argv"`
 }
 type Result struct {
-	SchemaVersion          int    `json:"schema_version"`
-	CandidateDigest        string `json:"candidate_digest"`
-	ProfileDigest          string `json:"profile_digest"`
-	InvocationDigest       string `json:"invocation_digest"`
-	ContainerID            string `json:"container_id"`
-	ExitCode               int    `json:"exit_code"`
-	TimedOut               bool   `json:"timed_out"`
-	Cancelled              bool   `json:"cancelled"`
-	OOMKilled              bool   `json:"oom_killed"`
-	OutputTruncated        bool   `json:"output_truncated"`
-	Stdout                 []byte `json:"stdout"`
-	Stderr                 []byte `json:"stderr"`
-	SourceReadOnly         bool   `json:"source_read_only"`
-	ProtectedResultChannel bool   `json:"protected_result_channel"`
-	ProcessTreeQuiescent   bool   `json:"process_tree_quiescent"`
-	DurationMillis         int64  `json:"duration_millis"`
+	Ownership              *Capsule `json:"ownership,omitempty"`
+	SchemaVersion          int      `json:"schema_version"`
+	CandidateDigest        string   `json:"candidate_digest"`
+	ProfileDigest          string   `json:"profile_digest"`
+	InvocationDigest       string   `json:"invocation_digest"`
+	ContainerID            string   `json:"container_id"`
+	ExitCode               int      `json:"exit_code"`
+	TimedOut               bool     `json:"timed_out"`
+	Cancelled              bool     `json:"cancelled"`
+	OOMKilled              bool     `json:"oom_killed"`
+	OutputTruncated        bool     `json:"output_truncated"`
+	Stdout                 []byte   `json:"stdout"`
+	Stderr                 []byte   `json:"stderr"`
+	SourceReadOnly         bool     `json:"source_read_only"`
+	ProtectedResultChannel bool     `json:"protected_result_channel"`
+	ProcessTreeQuiescent   bool     `json:"process_tree_quiescent"`
+	DurationMillis         int64    `json:"duration_millis"`
 }
 type Docker struct {
-	binary string
-	config string
-	mu     sync.Mutex
-	closed bool
+	binary      string
+	config      string
+	mu          sync.Mutex
+	closed      bool
+	controlHook func(context.Context, ...string) ([]byte, error)
 }
 
 func OpenDocker() (result *Docker, err error) {
@@ -108,6 +110,9 @@ func (d *Docker) command(ctx context.Context, args ...string) *exec.Cmd {
 	return command
 }
 func (d *Docker) control(ctx context.Context, args ...string) ([]byte, error) {
+	if d.controlHook != nil {
+		return d.controlHook(ctx, args...)
+	}
 	var out boundedOutput
 	out.limit = 1 << 20
 	command := d.command(ctx, args...)
@@ -166,13 +171,16 @@ type inspectedMount struct {
 }
 type inspected struct {
 	ID    string `json:"Id"`
+	Name  string
 	State struct {
+		Status    string
 		Running   bool
 		ExitCode  int
 		OOMKilled bool
 		Error     string
 	}
 	Config struct {
+		Labels     map[string]string
 		OpenStdin  bool
 		User       string
 		Image      string
@@ -269,6 +277,10 @@ func scratchOptions(p Profile) string {
 }
 func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocation) (result Result, resultErr error) {
 	dispatched := false
+	owner, ownerErr := activeOwnership(ctx)
+	if ownerErr != nil {
+		return result, &DispatchFailure{Cause: ownerErr, EffectPossible: false}
+	}
 	defer func() {
 		if resultErr != nil {
 			resultErr = &DispatchFailure{Cause: resultErr, EffectPossible: dispatched}
@@ -323,11 +335,26 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 		return result, err
 	}
 	name := "viber-" + hex.EncodeToString(nonce[:])
-	args := []string{"create", "--pull=never", "--name", name, "--label", "io.viber.runtime=offline-v1", "--user", "65532:65532", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin", "--pids-limit", fmt.Sprint(p.Pids), "--memory", fmt.Sprint(p.MemoryBytes), "--memory-swap", fmt.Sprint(p.MemoryBytes), "--cpus", fmt.Sprint(p.CPUs), "--ipc", "private", "--init", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go-mod", "--env", "GOTOOLCHAIN=local", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--mount", "type=bind,src=" + absolute + ",dst=/workspace,readonly,bind-propagation=rprivate", "--tmpfs", "/tmp:" + scratchOptions(p), "--entrypoint", inv.Argv[0], p.Image}
-	if inv.Stdin != nil {
-		args = append([]string{"create", "--interactive"}, args[1:]...)
+	var capsule *Capsule
+	if owner != nil {
+		prepared, prepareErr := makeCapsule(*owner, absolute, p, inv)
+		if prepareErr != nil {
+			return result, prepareErr
+		}
+		capsule = &prepared
+		name = capsule.name()
 	}
-	args = append(args, inv.Argv[1:]...)
+	labels := map[string]string{"io.viber.runtime": "offline-v1"}
+	if capsule != nil {
+		labels, err = capsule.labels()
+		if err != nil {
+			return result, err
+		}
+	}
+	args := createArguments(name, absolute, p, inv, labels)
+	if _, err = activeOwnership(ctx); err != nil {
+		return result, err
+	}
 	dispatched = true
 	raw, err := d.control(ctx, args...)
 	// A lost create response has an unknown effect: reconcile by our unique name,
@@ -341,6 +368,15 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 			id = strings.TrimSpace(string(reconciled))
 		}
 		if validContainerID(id) {
+			if capsule != nil {
+				bound, bindingErr := d.inspect(cleanupCtx, id)
+				if bindingErr != nil {
+					return result, errors.Join(err, bindingErr)
+				}
+				if bindingErr = validateCapsule(bound, *capsule); bindingErr != nil {
+					return result, errors.Join(err, bindingErr)
+				}
+			}
 			_, cleanupErr := d.control(cleanupCtx, "rm", "--force", id)
 			return result, errors.Join(err, cleanupErr)
 		}
@@ -349,7 +385,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if !validContainerID(id) {
 		return result, c.Fail(c.UnsupportedCapability, "unbound container identity")
 	}
-	result = Result{SchemaVersion: c.SchemaVersion, CandidateDigest: inv.CandidateDigest, ContainerID: id, ExitCode: -1}
+	result = Result{Ownership: capsule, SchemaVersion: c.SchemaVersion, CandidateDigest: inv.CandidateDigest, ContainerID: id, ExitCode: -1}
 	result.ProfileDigest, err = c.Digest(p)
 	if err != nil {
 		return result, err
@@ -361,6 +397,17 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	defer func() {
 		removeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		if capsule != nil {
+			bound, bindingErr := d.inspect(removeCtx, id)
+			if bindingErr != nil {
+				resultErr = errors.Join(resultErr, bindingErr)
+				return
+			}
+			if bindingErr = validateCapsule(bound, *capsule); bindingErr != nil {
+				resultErr = errors.Join(resultErr, bindingErr)
+				return
+			}
+		}
 		_, removeErr := d.control(removeCtx, "rm", "--force", id)
 		if removeErr != nil {
 			resultErr = errors.Join(resultErr, removeErr)
@@ -375,9 +422,22 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if err = validateInspect(initial, p, absolute, inv); err != nil {
 		return result, err
 	}
+	if capsule != nil {
+		if err = validateCapsule(initial, *capsule); err != nil {
+			return result, err
+		}
+	}
 	result.SourceReadOnly = true
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(p.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if value, ok := ctx.Value(ownerContextKey{}).(ownershipContext); ok {
+		leased, leaseCancel := context.WithDeadline(runCtx, value.expires)
+		defer leaseCancel()
+		runCtx = leased
+	}
+	if _, err = activeOwnership(ctx); err != nil {
+		return result, err
+	}
 	stdout, stderr := &boundedOutput{limit: p.MaxOutputBytes}, &boundedOutput{limit: p.MaxOutputBytes}
 	stdout.onLimit = cancel
 	stderr.onLimit = cancel
@@ -415,6 +475,11 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	}
 	if err = validateInspect(final, p, absolute, inv); err != nil {
 		return result, err
+	}
+	if capsule != nil {
+		if err = validateCapsule(final, *capsule); err != nil {
+			return result, err
+		}
 	}
 	if final.State.Error != "" {
 		return result, c.Fail(c.UnsupportedCapability, "engine could not execute sandbox computation")

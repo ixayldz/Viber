@@ -122,7 +122,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		switch event.Type {
@@ -133,6 +133,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		case "UserResponseRecorded":
 			if event.Actor != "user" || !nonterminal(next.Execution) || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.Reason) || p.InputID == "" {
 				return next, c.Fail(c.PolicyDenied, "bound user response required")
+			}
+			next.DocumentDigest = p.DocumentDigest
+		case "NativeRiskReconciled", "NativeCleanupObserved":
+			if event.Actor != "user" || !nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration) {
+				return next, c.Fail(c.PolicyDenied, "native cleanup requires quiescent unknown process risk and an older generation")
 			}
 			next.DocumentDigest = p.DocumentDigest
 		case "ModelRiskReconciled":
@@ -338,7 +343,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		return next, c.Fail(c.PolicyDenied, "operator risk accounting cannot be manufactured by a kernel/model event")
 	}
 	if p.Tokens != nil {
-		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Tokens.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" || p.Tokens.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) {
+		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Tokens.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" || p.Tokens.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) && !(state != nil && event.Type == "NativeRiskReconciled" && event.Actor == "user" && nativeCleanupAllowed(*state, p, event.Type, event.KernelGeneration)) {
 			return next, c.Fail(c.PolicyDenied, "token mutation requires an atomic kernel document event")
 		}
 		var err error
@@ -347,8 +352,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			return next, err
 		}
 	}
+	if p.Resources != nil && p.Resources.Reservation.Meter == "KERNEL_FENCED_NATIVE_UPPER_BOUND" && (event.Type != "NativeRiskReconciled" || event.Actor != "user") {
+		return next, c.Fail(c.PolicyDenied, "native process risk cannot be released outside fenced reconciliation")
+	}
 	if p.Resources != nil {
-		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Resources.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" && event.Type != "CandidateRecorded" || p.Resources.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) {
+		if (event.Actor != "kernel" || !c.ValidDigest(p.DocumentDigest) || (state == nil && (event.Type != "TaskCreated" || p.Resources.Action != "INIT")) || (state != nil && (event.Type != "SessionRecorded" && event.Type != "CandidateRecorded" || p.Resources.Action == "INIT"))) && !(state != nil && event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(*state, p)) && !(state != nil && event.Type == "NativeRiskReconciled" && event.Actor == "user" && nativeCleanupAllowed(*state, p, event.Type, event.KernelGeneration)) {
 			return next, c.Fail(c.PolicyDenied, "resource mutation requires an atomic kernel document event")
 		}
 		var err error

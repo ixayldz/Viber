@@ -326,7 +326,7 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "GC envelope ID mismatch")
 		}
 		return o.Session.CollectGarbage(ctx, command)
-	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources":
+	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources", "runtime-info":
 		var args agent.Observation
 		if err := c.DecodeStrict(request.Payload, &args); err != nil {
 			return nil, err
@@ -443,11 +443,21 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "attempt envelope mismatch")
 		}
 		return o.Session.NewAttempt(ctx, options)
-	case "context-edit", "model-switch", "reconcile-model-risk":
+	case "context-edit", "model-switch", "reconcile-model-risk", "reconcile-native-risk":
 		o.mu.Lock()
 		defer o.mu.Unlock()
 		if o.active != nil {
 			return nil, c.Fail(c.Conflict, "continuity revision requires quiescent owner")
+		}
+		if request.Command == "reconcile-native-risk" {
+			var command agent.NativeRiskCommand
+			if err := c.DecodeStrict(request.Payload, &command); err != nil {
+				return nil, err
+			}
+			if command.TaskID != request.TaskID || command.CommandID != request.ID {
+				return nil, c.Fail(c.InvalidArgument, "native cleanup envelope mismatch")
+			}
+			return o.Session.ReconcileNativeRisk(ctx, command)
 		}
 		if request.Command == "reconcile-model-risk" {
 			var command agent.ModelRiskCommand

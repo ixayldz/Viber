@@ -111,6 +111,12 @@ func (g *gcTracer) document(task, digest string) error {
 	if c.DecodeStrict(raw, &doc) != nil || doc.TaskID != task {
 		return c.Fail(c.StoreIntegrityError, "GC document binding invalid")
 	}
+	if err = validateNativeLease(doc); err != nil {
+		return err
+	}
+	if err = g.session.validateNativeCleanup(doc); err != nil {
+		return err
+	}
 	g.docs[ref] = true
 	for _, ref := range []artifact.Ref{doc.Baseline, doc.Candidate} {
 		if err = g.snapshot(ref); err != nil {
@@ -124,6 +130,18 @@ func (g *gcTracer) document(task, digest string) error {
 	}
 	for _, digest := range []string{doc.FixtureDigest, doc.LastResponseBlob, doc.FinalArtifactDigest, doc.VerificationReport} {
 		if err = g.blob(task, digest); err != nil {
+			return err
+		}
+	}
+	for _, digest := range doc.NativeCleanupAttempts {
+		if err = g.blob(task, digest); err != nil {
+			return err
+		}
+		proof, err := g.session.readNativeRisk(doc, digest)
+		if err != nil {
+			return err
+		}
+		if err = g.document(task, proof.PreviousDocument); err != nil {
 			return err
 		}
 	}
@@ -211,7 +229,7 @@ func (s *Session) gcRoots(ctx context.Context) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		if doc.Pending != nil || doc.UnknownEffect || len(doc.PendingReplies) > 0 {
+		if doc.Pending != nil || doc.UnknownEffect {
 			return nil, c.Fail(c.UnknownOutcome, "pending or unknown effects pin the archive")
 		}
 		if state.Tokens != nil {

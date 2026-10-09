@@ -28,10 +28,20 @@ func runContinuityEdit(action string, args []string, out, errout io.Writer) int 
 	}
 	var edit agent.ContinuityCommand
 	var change agent.ModelSwitch
+	var nativeRisk agent.NativeRiskCommand
 	var risk agent.ModelRiskCommand
 	var payload any
 	var id string
-	if action == "reconcile-model-risk" {
+	if action == "reconcile-native-risk" {
+		if err := readJSON(*input, &nativeRisk); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		if nativeRisk.TaskID != task {
+			return report(out, errout, c.Fail(c.InvalidArgument, "native cleanup task mismatch"), *jsonMode)
+		}
+		payload = nativeRisk
+		id = nativeRisk.CommandID
+	} else if action == "reconcile-model-risk" {
 		if err := readJSON(*input, &risk); err != nil {
 			return report(out, errout, err, *jsonMode)
 		}
@@ -75,7 +85,9 @@ func runContinuityEdit(action string, args []string, out, errout io.Writer) int 
 	}
 	defer s.Close()
 	var state c.TaskState
-	if action == "reconcile-model-risk" {
+	if action == "reconcile-native-risk" {
+		state, err = s.ReconcileNativeRisk(context.Background(), nativeRisk)
+	} else if action == "reconcile-model-risk" {
 		state, err = s.ReconcileModelRisk(context.Background(), risk)
 	} else if action == "model-switch" {
 		state, err = s.SwitchModel(context.Background(), change)

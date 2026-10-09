@@ -124,6 +124,12 @@ func (s *Session) backupClosure(ctx context.Context) ([]string, error) {
 		if doc.SchemaVersion != 1 || doc.TaskID != ref.TaskID || doc.Spec.TaskID != ref.TaskID || doc.Baseline.TaskID != ref.TaskID || doc.Candidate.TaskID != ref.TaskID {
 			return nil, c.Fail(c.StoreIntegrityError, "historical task document binding mismatch")
 		}
+		if err = validateNativeLease(doc); err != nil {
+			return nil, err
+		}
+		if err = s.validateNativeCleanup(doc); err != nil {
+			return nil, err
+		}
 		if err = s.validateAttempt(doc); err != nil {
 			return nil, err
 		}
@@ -432,6 +438,9 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 		if err = fileguard.Publish(stage, filepath.FromSlash(name), raw); err != nil {
 			return m, err
 		}
+	}
+	if _, err = createRuntimeInstance(stagePath); err != nil {
+		return m, err
 	}
 	restored, err := Open(ctx, stagePath)
 	if err != nil {

@@ -63,6 +63,11 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 		return nil, c.Fail(c.InvalidArgument, "source parameters require source observation")
 	}
 	switch args.Kind {
+	case "runtime-info":
+		if args.Offset != 0 || args.Limit != 0 || args.RunID != "" || args.Stream != "" || args.Query != "" || args.Path != "" || args.HistoryDigest != "" {
+			return nil, c.Fail(c.InvalidArgument, "runtime-info accepts no page arguments")
+		}
+		return s.NativeRiskInfo(ctx, task)
 	case "continuity-info":
 		return struct {
 			SchemaVersion int             `json:"schema_version"`

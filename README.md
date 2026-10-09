@@ -652,3 +652,21 @@ Goal review operator tarafından hazırlanır: schema_version=1, input_digests h
 Her deneme saklanır. Beklenmeyen çıktı, sıfır/eksik senaryo, stale digest, unknown cleanup ve başarısız tekrar PASS'e dönüşmez. Aynı candidate üzerinde sonradan PASS almak önceki FAIL'i silmez. Gizli fixture verisi stdout'a yazılabileceği için protected observer çıktısı model tool'una verilmez; yerel kullanıcı exact byte sayfalarını okuyabilir. /verification TUI'da aynı kaynak bağlı kriter tablosunu gösterir.
 
 Bu V4 external STDIO case kabulüdür. Genel repository test runner'ının kendi “PASS” beyanı, arbitrary framework discovery, bütün V0–V5 katmanları, analysis raporunun semantik kabulü veya üretim release'i değildir. [Güven zinciri ve sınırlar](docs/adr/0013-protected-stdio-observer.md).
+
+## Beklenmedik owner kapanışından sonra native işlem recovery
+
+Yeni görevlerde Docker check'lerinin izinli subject kimlikleri process başlamadan kalıcı kaydedilir. Owner aniden ölürse resume, eski check'i körlemesine tekrar çalıştırmaz; işlem UNKNOWN olarak durur. Aynı physical store'u daha yeni owner generation ile açtıktan sonra durumu inceleyin:
+
+```powershell
+.\bin\viber.exe runtime-info TASK --store STORE --json
+```
+
+Background owner hâlâ eski generation'da çalışıyorsa önce `owner-stop --store STORE` ile kapatıp store'u yeniden açın. `runtime-info` içindeki `can_fence` true olduğunda `command_template` nesnesini dış bir JSON dosyasına kaydedin; `command_id` alanına benzersiz, sabit bir ID verin. Sonra:
+
+```powershell
+.\bin\viber.exe reconcile-native-risk TASK --store STORE --command-file native-recovery.json --json
+```
+
+Komut kayıp check çıktısını başarı saymaz. Eski subject'leri exact kimlikleriyle temizleyip gecikmiş create/start'ı engelleyen, hiç çalıştırılmayan fence container'larını tutar. Tam native kaynak üst sınırı charge edilir; task budget tükenebilir. Eksik kanıtta UNKNOWN rezervasyon kalır; aynı command ID effect'i yeniden çalıştırmaz. Yeni deneme için önce current cursor'u inceleyip yeni command ID kullanın. TUI'de `/runtime` aynı görünümü verir.
+
+Fence container'larını otomatik prune etmeyin: eski owner'ın gecikmiş create isteğine karşı tutulan isim rezervasyonlarıdır. Restore edilen store kendi physical runtime kimliğini alır ve özgün store'un süreçlerine dokunamaz. Legacy unowned intent bu cleanup yolu ile serbest bırakılamaz. Tam backend/rootless/host process lifetime kabulü hâlâ geliştirme kapsamındadır; [ADR 0014](docs/adr/0014-owned-process-fences.md) ayrıntıları açıklar.

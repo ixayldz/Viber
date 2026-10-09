@@ -147,9 +147,16 @@ func (s *Session) validateObservedEvidence(doc Document, ref CheckRunRef, record
 		}
 	}
 	containers := map[string]bool{}
-	for _, run := range []*verify.ObservedRun{e.Baseline, e.Current} {
+	for runIndex, run := range []*verify.ObservedRun{e.Baseline, e.Current} {
 		if run != nil {
-			for _, a := range run.Attempts {
+			for attemptIndex, a := range run.Attempts {
+				phase := "BASELINE"
+				if runIndex == 1 {
+					phase = "CANDIDATE"
+				}
+				if err := validateOwnedResult(a.Result, doc, record, phase, attemptIndex+1); err != nil {
+					return err
+				}
 				id := a.Result.ContainerID
 				if !c.ValidDigest(id) {
 					continue
@@ -184,10 +191,18 @@ func (s *Session) executeObservedCheck(ctx context.Context, state c.TaskState, d
 	if doc.GoalCoverage != nil {
 		evidence.GoalReviewDigest, _ = c.Digest(doc.GoalCoverage)
 	}
-	base, runErr := verify.Observe(runCtx, broker, baseline.SourceDirectory, doc.CheckRuntime.Profile, doc.Baseline.SnapshotDigest, check, suite)
+	baseSubject, leaseErr := s.leasedRunner(*doc, broker, "BASELINE")
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	base, runErr := verify.Observe(runCtx, baseSubject, baseline.SourceDirectory, doc.CheckRuntime.Profile, doc.Baseline.SnapshotDigest, check, suite)
 	evidence.Baseline = &base
 	if runErr == nil {
-		current, currentErr := verify.Observe(runCtx, broker, source, doc.CheckRuntime.Profile, doc.Candidate.SnapshotDigest, check, suite)
+		currentSubject, leaseErr := s.leasedRunner(*doc, broker, "CANDIDATE")
+		if leaseErr != nil {
+			return nil, leaseErr
+		}
+		current, currentErr := verify.Observe(runCtx, currentSubject, source, doc.CheckRuntime.Profile, doc.Candidate.SnapshotDigest, check, suite)
 		evidence.Current = &current
 		runErr = currentErr
 	}
@@ -223,7 +238,7 @@ func (s *Session) executeObservedCheck(ctx context.Context, state c.TaskState, d
 		}
 		return nil, err
 	}
-	record := CheckRun{SchemaVersion: 1, TaskID: doc.TaskID, CallID: call.ID, CheckID: check.ID, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch, Generation: state.KernelGeneration, OriginDigest: doc.Spec.ProtectedOrigin, Discovery: verify.ObserverProtocol, Observer: evidence}
+	record := CheckRun{NativeLease: doc.Pending.NativeLease, SchemaVersion: 1, TaskID: doc.TaskID, CallID: call.ID, CheckID: check.ID, SpecVersion: doc.Spec.Version, PolicyEpoch: state.PolicyEpoch, Generation: state.KernelGeneration, OriginDigest: doc.Spec.ProtectedOrigin, Discovery: verify.ObserverProtocol, Observer: evidence}
 	record.Outcome = observedOutcome(evidence)
 	if evidence.Current != nil && len(evidence.Current.Attempts) > 0 {
 		record.Result = evidence.Current.Attempts[0].Result
