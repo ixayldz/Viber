@@ -40,7 +40,7 @@ func admitPrivacyCatalog(root *os.Root, names ...string) (int, error) {
 	}
 	existing := map[string]bool{}
 	for _, name := range entries {
-		if strings.HasSuffix(name, ".json") && c.ValidDigest(strings.TrimSuffix(name, ".json")) || len(name) == 37 && strings.HasSuffix(name, ".lock") {
+		if strings.HasSuffix(name, ".json") && c.ValidDigest(strings.TrimSuffix(name, ".json")) || validPrivacyLeaseFilename(name) {
 			existing[name] = true
 		} else {
 			return 0, c.Fail(c.StoreIntegrityError, "foreign privacy catalog entry")
@@ -191,7 +191,7 @@ func (s *Session) PrivacyMetadataCapacity(ctx context.Context) (*PrivacyMetadata
 // must never suggest that those limits or UNKNOWN effects have been cleared.
 func classifyPrivacyCapacity(result *PrivacyMetadataStatus, reservePresent bool) {
 	result.WorkBlockers = []string{}
-	result.NextActions = []string{"REFRESH_CAPACITY"}
+	result.NextActions = []string{"REFRESH_CAPACITY", "RETIRE_INACTIVE_OPERATION_LEASES"}
 	if result.Records >= result.WorkRecordLimit {
 		result.WorkBlockers = append(result.WorkBlockers, "WORK_JOURNAL_FULL_CHECKPOINT_REQUIRED")
 	}

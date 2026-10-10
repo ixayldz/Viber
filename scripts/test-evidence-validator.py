@@ -11,6 +11,13 @@ foreign = "example.invalid/foreign/acceptance"
 native = "TestActualOSVaultRoundTripAndEnvironmentIsolation"
 diskguard = "github.com/ixayldz/Viber/internal/diskguard"
 pressure = "TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen"
+runner = "github.com/ixayldz/Viber/internal/runner"
+rootless = [
+    "TestActualDockerHostileProcessMatrix",
+    "TestActualDockerPersistentFenceInventoryAndReopen",
+    "TestDockerOfflineReadOnlyQuiescenceAndTimeout",
+    "TestActualDockerNativeOrphanFencingPreventsLateCreateAndStart",
+]
 failures = [
     "TestVaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey",
     "TestVaultExecutableTrustIncludesEveryResolvedAncestor",
@@ -32,6 +39,10 @@ def package_events(package, results, complete=True):
 
 
 samples = [
+    ("rootless required native parents", package_events(runner, [(test, "pass") for test in rootless]), ["--rootless"], True),
+    ("rootless parent skipped", package_events(runner, [(test, "skip" if index == 0 else "pass") for index, test in enumerate(rootless)]), ["--rootless"], False),
+    ("rootless missing required parent", package_events(runner, [(test, "pass") for test in rootless[:-1]]), ["--rootless"], False),
+    ("rootless foreign package", package_events(foreign, [(test, "pass") for test in rootless]), ["--rootless"], False),
     ("actual bounded pressure", package_events(diskguard, [(pressure, "pass")]), ["--disk-pressure"], True),
     ("bounded pressure skipped", package_events(diskguard, [(pressure, "skip")]), ["--disk-pressure"], False),
     ("bounded pressure foreign identity", package_events(foreign, [(pressure, "pass")]), ["--disk-pressure"], False),
@@ -56,4 +67,4 @@ with tempfile.TemporaryDirectory(prefix="viber-evidence-validator-") as director
         if not accepted and "FAIL:" not in result.stderr:
             raise SystemExit("FAIL: fixture was rejected without the expected validation failure: " + name)
 
-print("PASS: 12 evidence identity/failure/gap contracts; fixture evidence is not native acceptance")
+print("PASS: 16 evidence identity/failure/gap contracts; fixture evidence is not native acceptance")

@@ -86,7 +86,7 @@ func readPrivacyScopes(root *os.Root) ([]privacyScope, string, error) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if strings.HasSuffix(name, ".lock") && len(name) == 37 {
+		if validPrivacyLeaseFilename(name) {
 			continue
 		}
 		if !strings.HasSuffix(name, ".json") || !c.ValidDigest(strings.TrimSuffix(name, ".json")) {

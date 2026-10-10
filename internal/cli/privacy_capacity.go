@@ -16,11 +16,12 @@ func runPrivacyCapacity(args []string, out, errout io.Writer) int {
 	f := flags("privacy-capacity", errout)
 	directory := f.String("store", "", "existing private store")
 	replenish := f.Bool("replenish-control-reserve", false, "replenish bounded physical reserve; does not prune metadata or fences")
+	retire := f.Bool("retire-operation-leases", false, "retire only inactive typed restore operation leases")
 	jsonMode := f.Bool("json", false, "numeric capacity and fixed reason codes")
 	if err := f.Parse(args); err != nil {
 		return 4
 	}
-	if f.NArg() != 0 || *directory == "" {
+	if f.NArg() != 0 || *directory == "" || (*replenish && *retire) {
 		return report(out, errout, c.Fail(c.InvalidArgument, "privacy capacity requires only an existing store"), *jsonMode)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -32,6 +33,9 @@ func runPrivacyCapacity(args []string, out, errout io.Writer) int {
 	action := "privacy-capacity"
 	if *replenish {
 		action = "privacy-reserve-replenish"
+	}
+	if *retire {
+		action = "privacy-operation-retire"
 	}
 	raw, routed, err := ownerCall(ctx, *directory, "", action, id, nil)
 	if err != nil {
@@ -45,7 +49,9 @@ func runPrivacyCapacity(args []string, out, errout io.Writer) int {
 		session, err = agent.OpenExisting(ctx, *directory)
 		if err == nil {
 			defer session.Close()
-			if *replenish {
+			if *retire {
+				result, err = session.RetirePrivacyOperationLeases(ctx)
+			} else if *replenish {
 				result, err = session.ReplenishPrivacyControlReserve(ctx)
 			} else {
 				result, err = session.PrivacyMetadataCapacity(ctx)

@@ -14,12 +14,18 @@ func Lock(root *os.Root, name string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	var overlapped windows.Overlapped
-	if err = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped); err != nil {
+	if err = lockFile(f); err != nil {
 		f.Close()
-		return nil, c.Fail(c.StoreOwned, "artifact store already owned")
+		return nil, err
 	}
 	return f, nil
+}
+func lockFile(f *os.File) error {
+	var overlapped windows.Overlapped
+	if err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped); err != nil {
+		return c.Fail(c.StoreOwned, "artifact store already owned")
+	}
+	return nil
 }
 func Private(root *os.Root) error {
 	token := windows.GetCurrentProcessToken()
@@ -51,6 +57,11 @@ func SingleLink(f *os.File) error {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
 		return err
+	}
+	if info.NumberOfLinks == 0 {
+		// A reader may still hold the old inode while its owner unlinks the
+		// endpoint during shutdown. It is absent, not a hardlinked substitute.
+		return os.ErrNotExist
 	}
 	if info.NumberOfLinks != 1 {
 		return c.Fail(c.UnsupportedCapability, "hardlinked input is outside supported capture semantics")

@@ -33,7 +33,7 @@ func TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks(t *testing.T
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	for _, flags := range [][]string{{"--json"}, {"--replenish-control-reserve", "--json"}, {}} {
+	for _, flags := range [][]string{{"--json"}, {"--replenish-control-reserve", "--json"}, {"--retire-operation-leases", "--json"}, {}} {
 		out.Reset()
 		args := append([]string{"privacy-capacity", "--store", directory}, flags...)
 		if code := Execute(args, &out, &errs); code != 0 {
@@ -52,7 +52,7 @@ func TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks(t *testing.T
 		}
 	}
 	u := uiSession{task: "absent-task", directory: directory}
-	for _, command := range []string{"/capacity", "/capacity replenish"} {
+	for _, command := range []string{"/capacity", "/capacity replenish", "/capacity retire-operations"} {
 		text, detached, err := u.command(ctx, command)
 		var capacity agent.PrivacyMetadataStatus
 		if err != nil || detached || c.DecodeStrict([]byte(text), &capacity) != nil || !capacity.WorkReady {
@@ -62,7 +62,7 @@ func TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks(t *testing.T
 	if _, _, err = u.command(ctx, "/capacity prune"); err == nil {
 		t.Fatal("UI enabled unsupported pruning")
 	}
-	for _, action := range []string{"privacy-capacity", "privacy-reserve-replenish"} {
+	for _, action := range []string{"privacy-capacity", "privacy-reserve-replenish", "privacy-operation-retire"} {
 		for _, request := range []ipc.Request{
 			{ID: "scope-denied", TaskID: "absent-task", Command: action, Payload: []byte("null")},
 			{ID: "payload-denied", Command: action, Payload: []byte(`{"prune":true}`)},
@@ -102,7 +102,7 @@ func TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks(t *testing.T
 
 func TestPrivacyCapacityMissingStoreAndInvalidFlagsHaveNoEffects(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "missing")
-	for _, extra := range [][]string{{}, {"--replenish-control-reserve"}, {"task"}, {"--prune"}} {
+	for _, extra := range [][]string{{}, {"--replenish-control-reserve"}, {"--retire-operation-leases"}, {"--replenish-control-reserve", "--retire-operation-leases"}, {"task"}, {"--prune"}} {
 		var out, errs bytes.Buffer
 		args := append([]string{"privacy-capacity", "--store", directory, "--json"}, extra...)
 		if code := Execute(args, &out, &errs); code != 4 {

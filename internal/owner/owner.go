@@ -257,11 +257,11 @@ func nullPayload(raw json.RawMessage) error {
 	return nil
 }
 func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
-	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" && request.Command != "privacy-capacity" && request.Command != "privacy-reserve-replenish" {
+	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" && request.Command != "privacy-capacity" && request.Command != "privacy-reserve-replenish" && request.Command != "privacy-operation-retire" {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
-	case "privacy-capacity", "privacy-reserve-replenish":
+	case "privacy-capacity", "privacy-reserve-replenish", "privacy-operation-retire":
 		if request.TaskID != "" {
 			return nil, c.Fail(c.InvalidArgument, "privacy capacity command is store scoped")
 		}
@@ -270,6 +270,9 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 		}
 		if request.Command == "privacy-reserve-replenish" {
 			return o.Session.ReplenishPrivacyControlReserve(ctx)
+		}
+		if request.Command == "privacy-operation-retire" {
+			return o.Session.RetirePrivacyOperationLeases(ctx)
 		}
 		return o.Session.PrivacyMetadataCapacity(ctx)
 	case "support", "support-export":

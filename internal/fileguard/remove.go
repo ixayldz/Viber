@@ -12,6 +12,19 @@ import (
 // RemoveBound is for private, quiescent managed copies. It grants no live source
 // exclusivity. Missing files are accepted only by callers with a durable intent.
 func RemoveBound(root *os.Root, name, digest string, size, limit int64) (bool, error) {
+	return removeBound(root, name, nil, digest, size, limit)
+}
+
+// RemoveBoundIdentity additionally requires the caller's exact inventoried
+// inode. Identical bytes in a replacement file do not grant retirement rights.
+func RemoveBoundIdentity(root *os.Root, name string, identity os.FileInfo, digest string, size, limit int64) (bool, error) {
+	if identity == nil {
+		return false, c.Fail(c.InvalidArgument, "exact retirement identity required")
+	}
+	return removeBound(root, name, identity, digest, size, limit)
+}
+
+func removeBound(root *os.Root, name string, identity os.FileInfo, digest string, size, limit int64) (bool, error) {
 	if !c.ValidDigest(digest) || size < 0 || size > limit {
 		return false, c.Fail(c.InvalidArgument, "bounded unlink binding required")
 	}
@@ -35,6 +48,9 @@ func RemoveBound(root *os.Root, name, digest string, size, limit int64) (bool, e
 	}
 	if err != nil {
 		return false, err
+	}
+	if identity != nil && !os.SameFile(identity, before) {
+		return false, c.Fail(c.StaleBase, "retirement identity changed")
 	}
 	raw, err := ReadRegular(root, name, limit)
 	if err != nil {

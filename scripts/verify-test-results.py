@@ -6,6 +6,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("evidence", type=Path)
 parser.add_argument("--docker", action="store_true")
+parser.add_argument("--rootless", action="store_true")
 parser.add_argument("--disk-pressure", action="store_true")
 parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
@@ -19,6 +20,13 @@ args = parser.parse_args()
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestUnlinkedOpenMetadataIsAbsentWhileHardlinkRemainsDenied": "github.com/ixayldz/Viber/internal/fileguard",
+    "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyOperationRetirementPreservesActiveChildAndForeignCatalog": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyOperationRetirementRejectsWrongAuthorityScopeAndHardlink": "github.com/ixayldz/Viber/internal/agent",
+    "TestExistingLeaseAndRetirementNeverAdoptMissingOrReplacementIdentity": "github.com/ixayldz/Viber/internal/fileguard",
     "TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen": "github.com/ixayldz/Viber/internal/diskguard",
     "TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks": "github.com/ixayldz/Viber/internal/cli",
     "TestPrivacyCapacityMissingStoreAndInvalidFlagsHaveNoEffects": "github.com/ixayldz/Viber/internal/cli",
@@ -134,6 +142,13 @@ if args.disk_pressure:
     required.add("TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen")
 if args.privacy:
     required |= {
+        "TestUnlinkedOpenMetadataIsAbsentWhileHardlinkRemainsDenied",
+        "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory",
+        "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins",
+        "TestPrivacyOperationRetirementPreservesActiveChildAndForeignCatalog",
+        "TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity",
+        "TestPrivacyOperationRetirementRejectsWrongAuthorityScopeAndHardlink",
+        "TestExistingLeaseAndRetirementNeverAdoptMissingOrReplacementIdentity",
         "TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks",
         "TestPrivacyCapacityMissingStoreAndInvalidFlagsHaveNoEffects",
         "TestPrivacyReserveRemediationReplenishesPhysicalBytesWithoutChangingAuthorityOrLedger",
@@ -194,6 +209,13 @@ if args.docker:
         "TestActualIndependentHiddenFailureOverridesSelfVerifiedOnlyInEvaluation",
         "TestActualIndependentEvaluationPrivacyPurgesNativeReceipts",
         "TestActualDockerMergedCandidateReverificationRunsFreshRegisteredChecks",
+    }
+if args.rootless:
+    required |= {
+        "TestActualDockerHostileProcessMatrix",
+        "TestActualDockerPersistentFenceInventoryAndReopen",
+        "TestDockerOfflineReadOnlyQuiescenceAndTimeout",
+        "TestActualDockerNativeOrphanFencingPreventsLateCreateAndStart",
     }
 if args.migration:
     required |= {

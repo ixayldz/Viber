@@ -432,7 +432,7 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 
 // Legacy migration validation is confined to a disposable private destination;
 // it is never a public restore capability or an authorization to run its tasks.
-func restoreBackup(ctx context.Context, backup, destination string, legacyMigrationValidation bool) (BackupManifest, error) {
+func restoreBackup(ctx context.Context, backup, destination string, legacyMigrationValidation bool) (manifest BackupManifest, resultErr error) {
 	var m BackupManifest
 	if !fileguard.Disjoint(backup, destination) {
 		return m, c.Fail(c.PolicyDenied, "backup and restore destination overlap")
@@ -462,7 +462,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 		if err != nil {
 			return m, err
 		}
-		defer operation.Close()
+		defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
 		if err = checkBackupAuthority(ctx, m, raw, backup); err != nil {
 			return m, err
 		}

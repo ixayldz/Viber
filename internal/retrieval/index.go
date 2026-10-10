@@ -154,11 +154,33 @@ func New(ctx context.Context, binding Binding, documents []Document) (*Index, er
 		return nil, boundedBuildError(ctx, err)
 	}
 	defer tx.Rollback()
+	// Compile the two fixed insert statements once per private index. Repeated
+	// SQL preparation for every chunk consumes the same bounded build deadline,
+	// especially under race instrumentation; source/schema/query bindings stay
+	// identical and repository content never becomes SQL or tokenizer settings.
+	statements := []*sql.Stmt{}
+	defer func() {
+		for _, statement := range statements {
+			statement.Close()
+		}
+	}()
+	for _, table := range []string{"lexical", "substrings"} {
+		statement, prepareErr := tx.PrepareContext(ctx, "INSERT INTO "+table+"(rowid,path,body) VALUES(?,?,?)")
+		if prepareErr != nil {
+			return nil, boundedBuildError(ctx, prepareErr)
+		}
+		statements = append(statements, statement)
+	}
 	for n, item := range index.chunks {
-		for _, table := range []string{"lexical", "substrings"} {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO "+table+"(rowid,path,body) VALUES(?,?,?)", n+1, item.path, item.text); err != nil {
+		for _, statement := range statements {
+			if _, err = statement.ExecContext(ctx, n+1, item.path, item.text); err != nil {
 				return nil, boundedBuildError(ctx, err)
 			}
+		}
+	}
+	for _, statement := range statements {
+		if err = statement.Close(); err != nil {
+			return nil, boundedBuildError(ctx, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {

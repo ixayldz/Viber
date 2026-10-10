@@ -62,7 +62,7 @@ Usage:
   viber ui TASK --store PATH
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
-  viber privacy-capacity --store PATH [--replenish-control-reserve] [--json]
+  viber privacy-capacity --store PATH [--replenish-control-reserve | --retire-operation-leases] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
   viber delivery-preview TASK --store PATH --output NEW_PATH [--json]
   viber delivery-reverify TASK --store PATH --command-file FILE [--json]

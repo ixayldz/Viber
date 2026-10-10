@@ -24,16 +24,31 @@ type PrivacyAuthority struct {
 	PhysicalRoot  string `json:"physical_root"`
 }
 type privacyOwner struct {
-	root  *os.Root
-	lease *os.File
-	name  string
+	root      *os.Root
+	lease     *os.File
+	name      string
+	operation *PrivacyAuthority
 }
 
 func (o *privacyOwner) Close() error {
 	if o == nil || o.root == nil {
 		return nil
 	}
-	err := o.lease.Close()
+	var err error
+	if o.operation != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		lock, lockErr := privacyLock(ctx, o.root)
+		err = errors.Join(lockErr, o.lease.Close())
+		if lockErr == nil {
+			if err == nil {
+				_, err = retirePrivacyOperationLeases(ctx, o.root, *o.operation, o.name)
+			}
+			err = errors.Join(err, lock.Close())
+		}
+	} else {
+		err = o.lease.Close()
+	}
 	o.root = closePrivacyRoot(o.root, &err)
 	return err
 }
@@ -367,7 +382,7 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		root.Close()
 		return err
 	}
-	s.privacy, s.privacyOwner = &authority, &privacyOwner{root, lease, name}
+	s.privacy, s.privacyOwner = &authority, &privacyOwner{root: root, lease: lease, name: name}
 	return nil
 }
 func (s *Session) ensurePrivacy(ctx context.Context) error {
@@ -443,14 +458,14 @@ func onlyPrivacyOwner(root *os.Root, current string) error {
 		if strings.HasSuffix(name, ".json") && c.ValidDigest(strings.TrimSuffix(name, ".json")) {
 			continue
 		}
-		if len(name) != 37 || !strings.HasSuffix(name, ".lock") {
+		if !validPrivacyLeaseFilename(name) {
 			return c.Fail(c.StoreIntegrityError, "foreign privacy owner record")
 		}
 		path := filepath.Join("owners", name)
 		if path == current {
 			continue
 		}
-		probe, err := fileguard.Lock(root, path)
+		probe, err := fileguard.LockExisting(root, path)
 		if err != nil {
 			return c.Fail(c.StoreOwned, "another restored owner is active; close all family owners before deletion")
 		}

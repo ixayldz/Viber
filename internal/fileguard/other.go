@@ -10,6 +10,7 @@ import (
 func unsupported() error {
 	return c.Fail(c.UnsupportedCapability, "private artifact backend unavailable")
 }
+func lockFile(*os.File) error                    { return unsupported() }
 func Lock(*os.Root, string) (*os.File, error)    { return nil, unsupported() }
 func Private(*os.Root) error                     { return unsupported() }
 func SingleLink(*os.File) error                  { return unsupported() }
