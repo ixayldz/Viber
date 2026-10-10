@@ -1,6 +1,6 @@
 # Güncel kullanıcı yetenekleri ve kabul sınırları
 
-10 Ekim 2026. Bu tablo aktif kullanım kapsamıdır. Tarihsel kanıtlar [VALIDATION](VALIDATION.md), PRD saldırı family'lerinin tam kapanışı [RELEASE_GATES](RELEASE_GATES.md), kalan implementasyon ve kabul [KEYLESS_DELIVERY_PLAN](KEYLESS_DELIVERY_PLAN.md) içindedir. Test sayısı veya implementasyon varlığı production kabulü değildir.
+11 Ekim 2026. Bu tablo aktif kullanım kapsamıdır. Tarihsel kanıtlar [VALIDATION](VALIDATION.md), PRD saldırı family'lerinin tam kapanışı [RELEASE_GATES](RELEASE_GATES.md), kalan implementasyon ve kabul [KEYLESS_DELIVERY_PLAN](KEYLESS_DELIVERY_PLAN.md) içindedir. Test sayısı veya implementasyon varlığı production kabulü değildir.
 
 | Kullanıcı yeteneği | Kullanılabilir kapsam | Açık kabul/eksik |
 |---|---|---|
@@ -15,6 +15,6 @@
 | Background owner/TUI | Detach/attach, durable cursor, pause/cancel, temel queue/context/plan/status/recovery araçları | Provider delta/gap/resync, tam goal scheduling/native PTY/restore yolculuğu |
 | Policy/extension/team | Temel privacy restrictions/config | Current admin revision, isolated MCP/extensions/skills/team/remote executor |
 | Eval | Ayrı hidden evaluator owner ve bütün attempt/UNKNOWN accounting; paired rapor | Preregistered dataset/build/holdout, gerçek model kalite ve insan pilotu |
-| Dağıtım | MIT, reproducible exact-commit bundle, dependency lisansları/CycloneDX SBOM; native Windows/Linux portable smoke ve archive readback | Yeni üç-platform paket/OIDC akışının exact-SHA kabulü; otomatik install/update/rollback; OS signing/pilot/stable A–D gates |
+| Dağıtım | [Public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416); üç native portable smoke, repo/workflow/ref/SHA bağlı OIDC consumer verification, MIT/dependency lisansları/CycloneDX SBOM; anonim indirme/readback | Otomatik install/update/rollback; OS certificate signing/notarization; bağımsız pilot ve stable A–D gates; publisher düzeltmesinin ayrı native write kabulü |
 
-`0af0d3f` CI kırmızıydı: Windows permission fixture başarısız; rootful/vault acceptance atlanmıştı. Düzeltme `a00a6b352d4a2c896976fbc2a22c88da37970b22` [exact-SHA CI attempt2](https://github.com/ixayldz/Viber/actions/runs/38082184557) bütün sekiz foundation job'ında SUCCESS. Windows runner'ın gerçekten etkin backup privilege dalı kabul edildi. İlk attempt'in registry rate failure kaydı korunur. Yeni revision'ın kabulü önceki başarılı revision'dan miras alınmaz; portable packaging/signing takip akışı kendi exact-SHA sonucunu gerektirir.
+Yayımlanan source `1f145f6d1062129a3b2506b1a7ab570ad0739416` [exact-SHA CI](https://github.com/ixayldz/Viber/actions/runs/38087257996) bütün **12 native/foundation/package/provenance job'ında SUCCESS**. Windows permission fixture, üç OS full/vet/vulnerability/migration, Linux full race/tüm fuzz, gerçek rootful/rootless ve iki native vault kabulüne üç portable paket ve consumer provenance doğrulaması eklendi. Tag publisher'ın ilk draft lookup failure'ı tarihsel kayıtta korunur; original draft explicit ID ile yeniden doğrulanıp yayınlandı. Yeni revision'ın kabulü önceki başarılı revision'dan miras alınmaz. Bu engineering dağıtımı PRD'nin stable kapılarını açmaz.

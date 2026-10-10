@@ -26,14 +26,69 @@ PLATFORMS = {"windows-latest": "windows/amd64", "ubuntu-latest": "linux/amd64", 
 
 def gh(*args):
     result = subprocess.run(["gh", *args], capture_output=True, timeout=180)
-    if result.returncode or len(result.stdout) > 8 << 20:
-        portable.fail("GitHub operation failed; raw response withheld; any draft is retained")
+    if result.returncode or len(result.stdout) > 64 << 20:
+        diagnostic = result.stderr.decode(errors="replace")
+        status = re.search(r"HTTP ([0-9]{3})", diagnostic)
+        portable.fail(f"GitHub {args[0]} operation failed: exit={result.returncode} http={status.group(1) if status else 'NONE'}; raw response withheld; any draft is retained")
     return result.stdout
 
 
 def api(path, pages=False):
     options = ["--paginate", "--slurp"] if pages else []
     return portable.strict_json(gh("api", path, *options))
+
+
+def api_body(path, method, body, output):
+    request = output / "release-request.json"
+    request.write_bytes(portable.canonical(body))
+    return portable.strict_json(gh("api", path, "--method", method, "--input", str(request)))
+
+
+def validate_draft(release, tag, notes, paths):
+    if (type(release.get("id")) is not int or release["id"] < 1 or release.get("draft") is not True
+            or release.get("prerelease") is not True or release.get("tag_name") != tag or release.get("body") != notes
+            or {asset.get("name") for asset in release.get("assets", [])} != {p.name for p in paths}
+            or len(release.get("assets", [])) != len(paths)
+            or any(type(asset.get("id")) is not int or asset["id"] < 1 or asset.get("state") != "uploaded" for asset in release.get("assets", []))):
+        portable.fail("draft release source/body/asset inventory mismatch; draft retained")
+    expected = {path.name: path.read_bytes() for path in paths}
+    ids = set()
+    for asset in release["assets"]:
+        raw = expected[asset["name"]]
+        if (asset["id"] in ids or type(asset.get("size")) is not int or asset["size"] != len(raw)
+                or asset.get("digest") != "sha256:" + hashlib.sha256(raw).hexdigest()):
+            portable.fail("draft asset identity/size/digest mismatch; draft retained")
+        ids.add(asset["id"])
+
+
+def finish_draft(release, tag, notes, paths, revision, run, output):
+    validate_draft(release, tag, notes, paths)
+    release_id = release["id"]
+    asset_ids = {asset["name"]: asset["id"] for asset in release["assets"]}
+    readback = output / "readback"
+    readback.mkdir()
+    for asset in release["assets"]:
+        raw = gh("api", f"repos/{REPO}/releases/assets/{asset['id']}", "--header", "Accept: application/octet-stream")
+        if len(raw) != asset["size"]:
+            portable.fail("draft asset download size mismatch; draft retained")
+        (readback / asset["name"]).write_bytes(raw)
+    for path in paths:
+        if portable.read_regular(readback, path.name, 64 << 20) != path.read_bytes():
+            portable.fail("draft upload/readback byte mismatch; draft retained")
+    # A concurrent operator must not replace the exact draft or asset identities
+    # between readback and publication. GitHub has no atomic release CAS; these
+    # guards reduce that window without claiming immutable repository policy.
+    current = api(f"repos/{REPO}/releases/{release_id}")
+    validate_draft(current, tag, notes, paths)
+    if current["id"] != release_id or {a["name"]: a["id"] for a in current["assets"]} != asset_ids:
+        portable.fail("draft or asset identity changed before publication; draft retained")
+    if accepted_run(revision)["id"] != run["id"] or api(f"repos/{REPO}/git/ref/tags/{tag}").get("object", {}).get("sha") != revision:
+        portable.fail("CI or tag changed before publication; draft retained")
+    release = api_body(f"repos/{REPO}/releases/{release_id}", "PATCH", {"draft": False, "prerelease": True, "make_latest": "false"}, output)
+    published = api(f"repos/{REPO}/releases/tags/{tag}")
+    if release.get("id") != release_id or published.get("id") != release_id or release.get("draft") is not False or release.get("prerelease") is not True or release.get("tag_name") != tag:
+        portable.fail("public engineering release readback failed")
+    return release
 
 
 def validate_run(run, jobs, revision):
@@ -166,7 +221,7 @@ def publish(args):
     manifest = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": revision, "tag": args.tag, "native_ci_run": run["id"], "provenance_verified": True, "platform_certificate_signing": "NOT_ACCEPTED", "assets": inventory}
     (assets / "release.json").write_bytes(portable.canonical(manifest))
     sums = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(assets.iterdir()))
-    (assets / "SHA256SUMS").write_text(sums, encoding="utf-8")
+    (assets / "SHA256SUMS").write_bytes(sums.encode())
     notes = output / "notes.md"
     notes.write_text(f"""Engineering snapshot — not a production/stable release. PRD A–D release gates remain CLOSED; doctor.release_ready=false.
 
@@ -181,26 +236,24 @@ Build provenance is not Windows Authenticode/macOS notarization or coding qualit
 Keep stores outside the program directory. Install/update by selecting a fresh versioned directory; no automatic store migration or downgrade. Safe live apply, metadata checkpoint/compaction, aggregate physical quotas, full verification/language tooling, supervisor/extension/worker/eval/pilot acceptance remain open. Provider-key acceptance is separate from these engineering gaps.
 """, encoding="utf-8")
     paths = sorted(assets.iterdir())
-    # Never use --clobber or edit/reuse an existing release. If interrupted after
-    # this call, an operator can inspect the retained draft and its exact assets.
-    gh("release", "create", args.tag, *map(str, paths), "-R", REPO, "--verify-tag", "--draft", "--prerelease", "--latest=false", "--title", "Viber engineering " + revision[:12], "--notes-file", str(notes))
-    release = api(f"repos/{REPO}/releases/tags/{args.tag}")
-    if release.get("draft") is not True or release.get("prerelease") is not True or release.get("tag_name") != args.tag or {asset.get("name") for asset in release.get("assets", [])} != {p.name for p in paths} or len(release.get("assets", [])) != len(paths):
-        portable.fail("draft release asset inventory mismatch; draft retained")
-    readback = output / "readback"
-    gh("release", "download", args.tag, "-R", REPO, "--dir", str(readback))
-    if set(p.name for p in readback.iterdir()) != {p.name for p in paths}:
-        portable.fail("draft download inventory mismatch; draft retained")
-    for path in paths:
-        if portable.read_regular(readback, path.name, 64 << 20) != path.read_bytes():
-            portable.fail("draft upload/readback byte mismatch; draft retained")
-    # Re-read current CI status and tag immediately before the public effect.
-    if accepted_run(revision)["id"] != run["id"] or api(f"repos/{REPO}/git/ref/tags/{args.tag}").get("object", {}).get("sha") != revision:
-        portable.fail("CI or tag changed before publication; draft retained")
-    gh("release", "edit", args.tag, "-R", REPO, "--verify-tag", "--draft=false", "--prerelease", "--latest=false")
-    release = api(f"repos/{REPO}/releases/tags/{args.tag}")
-    if release.get("draft") is not False or release.get("prerelease") is not True or release.get("tag_name") != args.tag:
-        portable.fail("public engineering release readback failed")
+    # Tag lookup returns only PUBLISHED releases. The create response's database
+    # ID binds every subsequent upload/readback/publication to this exact draft.
+    recovery = getattr(args, "recover_draft_id", None)
+    if recovery is not None:
+        if type(recovery) is not int or recovery < 1:
+            portable.fail("positive explicit draft recovery ID required")
+        release = api(f"repos/{REPO}/releases/{recovery}")
+    else:
+        pages = api(f"repos/{REPO}/releases?per_page=100", pages=True)
+        if any(row.get("tag_name") == args.tag for page in pages for row in page):
+            portable.fail("existing release/draft requires explicit exact-ID recovery; no overwrite")
+        release = api_body(f"repos/{REPO}/releases", "POST", {"tag_name": args.tag, "target_commitish": revision, "name": "Viber engineering " + revision[:12], "body": notes.read_text(encoding="utf-8"), "draft": True, "prerelease": True, "make_latest": "false"}, output)
+        if type(release.get("id")) is not int or release["id"] < 1 or release.get("draft") is not True or release.get("tag_name") != args.tag:
+            portable.fail("created draft ID mismatch; any draft retained")
+        for path in paths:
+            gh("api", f"https://uploads.github.com/repos/{REPO}/releases/{release['id']}/assets?name={path.name}", "--method", "POST", "--header", "Content-Type: application/octet-stream", "--input", str(path))
+        release = api(f"repos/{REPO}/releases/{release['id']}")
+    release = finish_draft(release, args.tag, notes.read_text(encoding="utf-8"), paths, revision, run, output)
     print(json.dumps({"tag": args.tag, "source_revision": revision, "url": release["html_url"], "release_ready": False, "native_ci_run": run["id"]}))
 
 
@@ -209,6 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("--revision", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--recover-draft-id", type=int, help="explicit recovery; requires identical source/body and every uploaded asset byte")
     try:
         publish(parser.parse_args())
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:

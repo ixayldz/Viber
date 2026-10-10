@@ -88,6 +88,80 @@ def main():
                 count += 1
             else:
                 raise AssertionError("invalid publication archive admitted: " + name)
+        paths = [parent / "archive.zip", parent / "release.json"]
+        for path in paths:
+            path.write_bytes(("uploaded " + path.name).encode())
+        draft = {"id": 41, "draft": True, "prerelease": True, "tag_name": "engineering-" + REV, "body": "exact reviewed notes", "assets": [{"id": i + 1, "name": path.name, "state": "uploaded", "size": path.stat().st_size, "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()} for i, path in enumerate(paths)]}
+        release.validate_draft(draft, "engineering-" + REV, "exact reviewed notes", paths)
+        for name, mutate in [
+            ("wrong tag", lambda d: d.update(tag_name="foreign-tag")),
+            ("published overwrite", lambda d: d.update(draft=False)),
+            ("stable promotion", lambda d: d.update(prerelease=False)),
+            ("foreign notes", lambda d: d.update(body="unreviewed notes")),
+            ("bool release ID", lambda d: d.update(id=True)),
+            ("partial upload", lambda d: d["assets"][0].update(state="new")),
+            ("duplicate upload", lambda d: d["assets"].append(copy.deepcopy(d["assets"][0]))),
+            ("asset path injection", lambda d: d["assets"][0].update(name="../outside")),
+            ("duplicate asset ID", lambda d: d["assets"][1].update(id=1)),
+            ("bool asset size", lambda d: d["assets"][0].update(size=True)),
+            ("changed uploaded bytes", lambda d: d["assets"][0].update(digest="sha256:" + "0" * 64)),
+            ("missing server digest", lambda d: d["assets"][0].pop("digest")),
+        ]:
+            changed = copy.deepcopy(draft)
+            mutate(changed)
+            try:
+                release.validate_draft(changed, "engineering-" + REV, "exact reviewed notes", paths)
+            except ValueError:
+                count += 1
+            else:
+                raise AssertionError("invalid draft recovery admitted: " + name)
+        # Tag lookup intentionally cannot see drafts. Publication must use the
+        # create response's exact ID until PATCH succeeds, then use public tag.
+        original = release.api, release.gh, release.accepted_run, release.api_body
+        try:
+            for failure in (None, "readback", "body", "asset ID", "asset digest", "release ID", "new CI", "tag"):
+                calls = []
+                current = copy.deepcopy(draft)
+                if failure == "body": current["body"] = "changed after download"
+                if failure == "asset ID": current["assets"][0]["id"] = 99
+                if failure == "asset digest": current["assets"][0]["digest"] = "sha256:" + "0" * 64
+                if failure == "release ID": current["id"] = 42
+                public = dict(copy.deepcopy(draft), draft=False, html_url="https://github.com/ixayldz/Viber/releases/tag/engineering-" + REV)
+
+                def fake_api(path, pages=False):
+                    calls.append(("GET", path))
+                    if path == f"repos/{release.REPO}/releases/41": return current
+                    if path == f"repos/{release.REPO}/git/ref/tags/engineering-{REV}":
+                        return {"object": {"sha": "b" * 40 if failure == "tag" else REV}}
+                    if path == f"repos/{release.REPO}/releases/tags/engineering-{REV}" and any(c[0] == "PATCH" for c in calls): return public
+                    raise AssertionError("premature/foreign release lookup: " + path)
+
+                def fake_gh(*args):
+                    assert args[0] == "api" and args[2:] == ("--header", "Accept: application/octet-stream")
+                    asset_id = int(args[1].rsplit("/", 1)[1])
+                    raw = paths[asset_id - 1].read_bytes()
+                    return b"x" * len(raw) if failure == "readback" else raw
+
+                def fake_body(path, method, body, output):
+                    assert method == "PATCH" and path == f"repos/{release.REPO}/releases/41"
+                    assert body == {"draft": False, "prerelease": True, "make_latest": "false"}
+                    calls.append((method, path))
+                    return public
+
+                release.api, release.gh, release.api_body = fake_api, fake_gh, fake_body
+                release.accepted_run = lambda revision: {"id": 8 if failure == "new CI" else 7}
+                output = parent / ("finish-" + str(failure).replace(" ", "-"))
+                output.mkdir()
+                try:
+                    release.finish_draft(copy.deepcopy(draft), "engineering-" + REV, draft["body"], paths, REV, {"id": 7}, output)
+                except ValueError:
+                    assert failure is not None and not any(c[0] == "PATCH" for c in calls), failure
+                    count += 1
+                else:
+                    assert failure is None and calls[-1] == ("GET", f"repos/{release.REPO}/releases/tags/engineering-{REV}"), failure
+                    count += 1
+        finally:
+            release.api, release.gh, release.accepted_run, release.api_body = original
         print(f"PASS: {count} engineering publication trust contracts; no native inference/signature/GitHub write acceptance")
     finally:
         release.portable.remove_private_tree(parent, cache, "release-contract-")

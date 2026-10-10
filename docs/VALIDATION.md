@@ -391,3 +391,37 @@ Paket inventory ve archive verifier **24 adversarial fixture kontratında PASS**
 `32fb4be8510bf5090a5cddfeb6934912312c8471` [CI 38085952146](https://github.com/ixayldz/Viber/actions/runs/38085952146): bütün sekiz foundation job SUCCESS. Native Windows portable job SUCCESS; Linux/macOS portable jobs FAILURE, çünkü `Get-Item` gizli `.cache` directory'yi `-Force` olmadan görünür item saymadı. Build dispatch öncesinde durdu, attester SKIPPED ve public yayın yapılmadı. Follow-up Unix-safe hidden ancestor/reparse inventory düzeltmesi yeni exact-SHA kabulünü gerektirir; Windows sonucu Unix kabulüne aktarılmaz.
 
 Publisher commit `ef1aedc` yanlış push/tag filter nedeniyle branch CI dispatch etmedi. `8a07124` explicit branches=** ile düzeltildi ve [exact CI 38086463657](https://github.com/ixayldz/Viber/actions/runs/38086463657) dispatch edildi; eski success bu SHA kabulü değildir. Yerel Windows `8a07124` binary iki build equality ve native portable smoke/readback PASS (`.cache/portable-8a07124-native`). Ayrıca PATH gerçekten EMPTY, doctor.git_discovered=false koşulunda version/doctor/offline greeting/diff/source unchanged PASS (`.cache/windows-portable-no-tools.json`): bu Windows ilk görevinde Go/Git kurulumu kullanılmadı. Linux/macOS veya tam install/update/rollback kabulü diye genişletilmez.
+
+## Üç native paket, OIDC ve public engineering dağıtım — 11 Ekim 2026
+
+`8a07124` native foundation işleri SUCCESS, Windows package SUCCESS; Linux/macOS package aynı hidden `.cache` ancestor inventory nedeniyle FAILURE, attester SKIPPED. `1f145f6d1062129a3b2506b1a7ab570ad0739416` hidden ancestor `Get-Item -Force` düzeltmesini taşır. [CI 38087257996](https://github.com/ixayldz/Viber/actions/runs/38087257996) bütün **12 job SUCCESS**: üç native full/vet/vulnerability/migration, Linux full race/beş fuzz, rootful Docker/physical pressure, supported rootless real restart/beş hostile, iki native vault, foundation, üç portable package ve ayrı minimum-permission attester. [Attester job114320339102](https://github.com/ixayldz/Viber/actions/runs/38087257996/job/114320339102) üç archive için OIDC provenance üretip her birini repo/workflow/ref/exact source digest bağlı consumer verification'dan geçirdi. Build provenance OS certificate signing veya kalite verdict'i değildir.
+
+Üç native portable scope `VERSION_DOCTOR_OFFLINE_GREETING_DIFF_ONLY`: version/doctor, offline greeting, diff, kaynak unchanged, deliberate run exit2/UNVERIFIED. Full install/update/rollback/uninstall veya gerçek model kabulü olarak genişletilmez.
+
+| Native asset | Byte | SHA-256 |
+|---|---:|---|
+| viber-1f145f6d1062-windows-amd64.zip | 6,142,886 | `98a7eaea818bdfeec7d35ba7f99e6eeec719e7c77fb940ec592abc8296ccdeab` |
+| viber-1f145f6d1062-linux-amd64.tar.gz | 6,056,010 | `a766df15deb8c477c07d75362cf9275d748ab232c3662c8670ac666538a6519b` |
+| viber-1f145f6d1062-darwin-arm64.tar.gz | 5,722,032 | `4a6eb4f209d6d3fd2d5ff89ea71d55df6e1d8918a84b36494b8ef4e06d546d36` |
+
+[Tag publisher CI 38088866093](https://github.com/ixayldz/Viber/actions/runs/38088866093) FAILURE: archive provenance/native inventory kabulü ve beş asset'in draft upload'u tamamlandı, fakat tag endpoint'i unpublished draft'ı döndürmedi. Original draft ID409224769 korundu; yeniden denemede oluşan yalnız görev kaynaklı duplicate ID409228155 daha sonra exact source/body/asset hash/length ve yayımlanan ID doğrulanarak silindi. Başarısız workflow sonucu geçmişte FAILURE kalır.
+
+Explicit-ID recovery gerçek GitHub API'de üç archive provenance'ı yeniden doğruladı, original draft'ın beş asset'ini exact ID ile indirdi ve byte readback yaptı; current CI/tag reread ardından draft=false/prerelease=true/latest=false public effect PASS. [Public release](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) ID409224769 exact tag/source taşıyor. `.cache/publication-recovered-1f` operator-native kanıttır; eski tag workflow'u başarılı sayılmaz. Repo credential yalnız yetkili aynı-repo işlem için bellekte kullanıldı, provider API key kullanılmadı.
+
+Ayrı `.cache/public-download-1f/anonymous-acceptance.json`: **Authorization/Git credential/GitHub login olmadan** bütün beş public asset indirme PASS. Binary archive ve manifest/checksum byte'ları doğrulanmış original draft ile birebir aynı. Bu anonim kullanıcı dağıtım kabulüdür; yeni publisher kodunun normal POST/upload route kabulü değildir.
+
+Publisher düzeltmesi exact create-response ID kullanır; existing draft/release için overwrite yerine explicit recovery ister, checksum LF byte'ları platformdan bağımsızdır. Draft size/digest/unique asset ID doğrulanır, readback sonrası current draft/body/asset ID/digest tekrar kontrol edilir. **45 publication trust kontratı PASS**: malformed source/run/archive/recovery ile download sırasında değiştirilmiş body/asset/current CI/tag hiçbir PATCH üretmez; public tag yalnız PATCH'ten sonra okunur. Bunlar fixture'dır; gerçek yeni normal POST/upload workflow kabulü ayrıca kaydedilmelidir.
+
+## External metadata replay baseline — 11 Ekim 2026
+
+Go 1.27.2 native Windows/amd64, Intel Core i5-7300HQ 2.50GHz; source `1f145f6`. `BenchmarkPrivacyRegistryReplayAndInventory`, `-benchtime=1x -count=1`, `.cache/privacy-metadata-baseline-1f-windows.jsonl`, PASS. Actual legacy record files ve bounded inventory kullanıldı.
+
+| Record | Tek replay (ms) | Logical metadata byte/op | Allocation byte/op | Inventory (ms) |
+|---:|---:|---:|---:|---:|
+| 0 | 0.265 | 0 | 67,080 | 0.192 |
+| 256 | 1,922.037 | 104,020 | 2,075,992 | 0.742 |
+| 1,024 | 7,764.320 | 416,621 | 8,069,336 | 2.113 |
+| 1,536 | 11,550.664 | 623,981 | 12,083,944 | 3.212 |
+| 2,048 | 15,935.294 | 1,136,385 | 30,397,536 | 4.164 |
+
+Bu tek observation cold-cache, physical I/O, p95 veya sabit reference-host conformance değildir. Legacy per-file replay maliyeti görünürdür; checkpoint/current anchor/compaction ve all-scope migration runtime eksikliği kapanmaz. Bounded 64 MiB saturation ve deletion control reserve kabulü ayrıca önceki native kanıttır. PRD NFR performans kapısı bu tabloyla PASS sayılmaz.

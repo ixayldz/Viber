@@ -4,7 +4,9 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 **Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.
 
-[Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+**İndirilebilir paketler:** [GitHub engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) — Windows amd64, Linux amd64, macOS arm64. GitHub hesabı veya Go derleyicisi olmadan indirilebilir; ilk offline görev model anahtarı istemez. Çalıştırmadan önce [paket doğrulama ve kurulum kılavuzunu](docs/INSTALL.md) izleyin. Bu exact revision'ın 12 native CI/paket/provenance işi başarılıdır; stable PRD kapıları açık değildir.
+
+[Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız teslim planı](docs/KEYLESS_DELIVERY_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
@@ -23,7 +25,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Varsayılan fixture profili `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, metadata/audit retention ve checkpoint, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı tarihsel değerlendirme [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+TUI, background owner, detach/attach, durable queue, task context compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, privacy metadata/audit retention ve checkpoint, semantic AST/LSP ve OS sertifikasıyla imzalı kurulum henüz hazır değildir. Portable paketler GitHub build provenance taşır. Güncel teslim ve açık işler [anahtarsız teslim planında](docs/KEYLESS_DELIVERY_PLAN.md); ayrıntılı tarihsel değerlendirme [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -40,9 +42,9 @@ Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. 
 
 ## Kurulum
 
-Go derleyicisi kullanmadan portable engineering paketini indirme/doğrulama/kurulum ve ilk görev akışı [GitHub paket kılavuzunda](docs/INSTALL.md) anlatılır. Paket CI native smoke ve ayrı OIDC provenance kabulü gerektirir; public stable release kapıları henüz kapalıdır. Aşağıdaki yol kaynak derlemesidir.
+Go derleyicisi kullanmadan [yayımlanmış portable engineering paketini](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) kullanabilirsiniz. İndirme/doğrulama/kurulum ve ilk görev akışı [GitHub paket kılavuzunda](docs/INSTALL.md) anlatılır. Üç platform native smoke ve ayrı OIDC provenance kabulü geçti; public stable release kapıları henüz kapalıdır. Aşağıdaki yol kaynak derlemesidir.
 
-Henüz yayımlanmış installer veya paket yöneticisi dağıtımı yoktur. Kaynaktan derleyin:
+Otomatik installer veya paket yöneticisi dağıtımı yoktur. Kaynaktan derlemek için:
 
 ~~~sh
 git clone https://github.com/ixayldz/Viber.git
