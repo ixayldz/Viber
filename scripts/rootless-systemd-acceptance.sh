@@ -96,7 +96,14 @@ task_dropin_owned=true
 # those after unit Environment=, so override only this fresh UID's ExecStart
 # environment after PAM. Keep the original systemd --user manager and sandbox;
 # do not edit the host's global PAM/environment configuration.
-printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\nExecStart=\nExecStart=/usr/bin/env XDG_RUNTIME_DIR=/run/user/%%i XDG_CONFIG_HOME=%s/.config XDG_DATA_HOME=%s/.local/share XDG_CACHE_HOME=%s/.cache XDG_STATE_HOME=%s/.local/state DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%%i/bus /usr/lib/systemd/systemd --user\n' \
+# The normal environment.d generator also imports /etc/environment after exec.
+# A later fresh-user config restores only that user's XDG values. Starting the
+# manager with DBUS_SESSION_BUS_ADDRESS already set can deadlock dbus.socket's
+# own systemctl ExecStartPost; let that stock unit publish it after listening.
+sudo install -d -o "$task_user" -g "$task_user" -m 0700 "$task_home/.config/environment.d"
+printf 'XDG_RUNTIME_DIR=/run/user/%s\nXDG_CONFIG_HOME=%s/.config\nXDG_DATA_HOME=%s/.local/share\nXDG_CACHE_HOME=%s/.cache\nXDG_STATE_HOME=%s/.local/state\n' \
+  "$task_uid" "$task_home" "$task_home" "$task_home" "$task_home" | sudo -H -u "$task_user" tee "$task_home/.config/environment.d/99-viber-acceptance.conf" >/dev/null
+printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\nExecStart=\nExecStart=/usr/bin/env -u DBUS_SESSION_BUS_ADDRESS -u DOCKER_HOST -u DOCKER_CONTEXT XDG_RUNTIME_DIR=/run/user/%%i XDG_CONFIG_HOME=%s/.config XDG_DATA_HOME=%s/.local/share XDG_CACHE_HOME=%s/.cache XDG_STATE_HOME=%s/.local/state /usr/lib/systemd/systemd --user\n' \
   "$task_home" "$task_home" "$task_home" "$task_home" | sudo tee "$task_dropin" >/dev/null
 sudo systemctl daemon-reload
 sudo loginctl enable-linger "$task_user"
@@ -109,7 +116,7 @@ uid, home, pid = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
 runtime = '/run/user/' + str(uid)
 assert os.stat('/proc/' + str(pid)).st_uid == uid
 environment = dict(item.split(b'=', 1) for item in open('/proc/' + str(pid) + '/environ', 'rb').read().split(b'\0') if b'=' in item)
-expected = {'XDG_RUNTIME_DIR': runtime, 'XDG_CONFIG_HOME': home + '/.config', 'XDG_DATA_HOME': home + '/.local/share', 'XDG_CACHE_HOME': home + '/.cache', 'XDG_STATE_HOME': home + '/.local/state', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=' + runtime + '/bus'}
+expected = {'XDG_RUNTIME_DIR': runtime, 'XDG_CONFIG_HOME': home + '/.config', 'XDG_DATA_HOME': home + '/.local/share', 'XDG_CACHE_HOME': home + '/.cache', 'XDG_STATE_HOME': home + '/.local/state'}
 for key, value in expected.items():
     assert environment.get(key.encode()) == value.encode(), key
 info = os.stat(runtime)
@@ -124,6 +131,18 @@ task_as_user=(sudo -H -u "$task_user" env -u DOCKER_HOST -u DOCKER_CONTEXT "XDG_
 # as a missing socket. Bind XDG paths in the manager and caller independently.
 for task_attempt in {1..30}; do "${task_as_user[@]}" test -S "$task_runtime/bus" && break; sleep 1; done
 "${task_as_user[@]}" test -S "$task_runtime/bus"
+# Validate the manager's generated/exported environment, separately from its
+# initial /proc environment. Never write non-allowlisted values to evidence.
+"${task_as_user[@]}" systemctl --user show-environment | python3 -c '
+import json, sys
+uid, home = int(sys.argv[1]), sys.argv[2]
+values = dict(line.rstrip("\n").split("=", 1) for line in sys.stdin if "=" in line)
+runtime = "/run/user/" + str(uid)
+expected = {"XDG_RUNTIME_DIR": runtime, "XDG_CONFIG_HOME": home + "/.config", "XDG_DATA_HOME": home + "/.local/share", "XDG_CACHE_HOME": home + "/.cache", "XDG_STATE_HOME": home + "/.local/state", "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + runtime + "/bus"}
+for key, value in expected.items():
+    assert values.get(key) == value, key
+print(json.dumps({"schema_version": 1, "uid": uid, "paths": expected}))
+' "$task_uid" "$task_home" > "$task_evidence/rootless-service-profile.json"
 "${task_as_user[@]}" dockerd-rootless-setuptool.sh install --force
 sudo install -d -o "$task_user" -g "$task_user" -m 0755 "$task_home/matrix"
 sudo install -o "$task_user" -g "$task_user" -m 0755 "$task_binary" "$task_home/matrix/runner.test"
