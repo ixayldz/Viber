@@ -232,22 +232,18 @@ func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error 
 	if len(raw) > 8<<20 {
 		return c.Fail(c.BudgetLimitReached, "privacy record too large")
 	}
-	// Enforce the aggregate budget before publication, including temporary bytes.
-	dir, err := root.Open("records")
+	// Metadata space and physically allocated control reserve are admitted
+	// under the same registry lock held by every caller.
+	retained, err := privacyMetadataBytes(root)
 	if err != nil {
 		return err
 	}
-	entries, err := dir.Readdir(2049)
-	err = errors.Join(err, dir.Close())
-	if err != nil && !errors.Is(err, io.EOF) {
+	control := record.Type == "DELETE_INTENT"
+	if err = privacyMetadataAdmission(view.Sequence, retained, int64(len(raw))*2, control); err != nil {
 		return err
 	}
-	total := int64(len(raw)) * 2
-	for _, entry := range entries {
-		total += entry.Size()
-	}
-	if total > 64<<20 {
-		return c.Fail(c.BudgetLimitReached, "privacy metadata capacity exhausted")
+	if err = admitPrivacyDisk(root, int64(len(raw))*2, control); err != nil {
+		return err
 	}
 	return fileguard.Publish(root, filepath.Join("records", fmt.Sprintf("%010d.json", record.Sequence)), raw)
 }
@@ -347,20 +343,26 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		root.Close()
 		return err
 	}
+	directory, err := filepath.EvalSymlinks(s.directory)
+	if err == nil {
+		directory, err = filepath.Abs(directory)
+	}
+	if err != nil {
+		root.Close()
+		return err
+	}
 	name := filepath.Join("owners", s.instance.ID+".lock")
+	scope := privacyScope{s.instance.ID, directory, s.instance.PhysicalRoot}
+	if _, err = admitPrivacyCatalog(root, name, filepath.Join("owners", scopeName(scope))); err != nil {
+		root.Close()
+		return err
+	}
 	lease, err := fileguard.Lock(root, name)
 	if err != nil {
 		root.Close()
 		return err
 	}
-	directory, err := filepath.EvalSymlinks(s.directory)
-	if err == nil {
-		directory, err = filepath.Abs(directory)
-	}
-	if err == nil {
-		err = publishPrivacyScope(root, privacyScope{s.instance.ID, directory, s.instance.PhysicalRoot})
-	}
-	if err != nil {
+	if err = publishPrivacyScope(root, scope); err != nil {
 		lease.Close()
 		root.Close()
 		return err
@@ -398,6 +400,9 @@ func (s *Session) ensurePrivacy(ctx context.Context) error {
 	}
 	authority := PrivacyAuthority{1, newID(""), directory, id}
 	if err = root.Mkdir("records", 0700); err != nil {
+		return err
+	}
+	if err = admitPrivacyDisk(root, 4096, false); err != nil {
 		return err
 	}
 	raw, err := c.CanonicalV1(authority)

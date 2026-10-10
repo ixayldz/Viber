@@ -27,6 +27,11 @@ func privacyOperation(ctx context.Context, authority PrivacyAuthority) (*privacy
 		return nil, err
 	}
 	name := filepath.Join("owners", newID("")+".lock")
+	if _, err = admitPrivacyCatalog(root, name); err != nil {
+		lock.Close()
+		root.Close()
+		return nil, err
+	}
 	lease, err := fileguard.Lock(root, name)
 	err = errors.Join(err, lock.Close())
 	if err != nil {

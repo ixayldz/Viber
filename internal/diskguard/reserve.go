@@ -37,6 +37,23 @@ func Open(directory string) (*Reserve, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openOwnedRoot(root)
+}
+
+// OpenRoot clones an already pinned directory handle. Renaming/replacing its
+// textual pathname cannot redirect reserve allocation into a different root.
+func OpenRoot(root *os.Root) (*Reserve, error) {
+	if root == nil {
+		return nil, c.Fail(c.InvalidArgument, "pinned reserve root required")
+	}
+	owned, err := root.OpenRoot(".")
+	if err != nil {
+		return nil, err
+	}
+	return openOwnedRoot(owned)
+}
+func openOwnedRoot(root *os.Root) (*Reserve, error) {
+	var err error
 	if err = fileguard.RegularPath(root, "control.reserve", true); err != nil {
 		root.Close()
 		return nil, err

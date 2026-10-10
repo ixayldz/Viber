@@ -48,6 +48,12 @@ if args.retrieval:
 if args.privacy:
     required |= {
         "TestTaskContentDeletionPurgesCASMaterializationsAndManagedBackups",
+        "TestPrivacyMetadataPressurePreservesDeletionClassAndBoundsTemporaryBytes",
+        "TestPrivacyWorkJournalSaturationStillPublishesRealDeletionIntent",
+        "TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete",
+        "TestPrivacyExternalPhysicalReserveReplacementStopsPublication",
+        "TestRootedReserveOpeningNeverAdoptsReplacementDirectory",
+        "TestAvailableBytesRemainsBoundToRenamedHandleWhenOldPathIsAFile",
         "TestEvaluationPrivacyChildFirstPurgesReportsBackupsAndRestoredOwners",
         "TestEvaluationPrivacyUnpublishedProcessCrashPurgesImportedCandidate",
         "TestEvaluationPrivacyFreshOwnersHaveUniqueReservedTaskIdentities",

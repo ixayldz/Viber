@@ -5,6 +5,8 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -99,5 +101,64 @@ func TestDiskUnknownCapacityFailsClosed(t *testing.T) {
 		if !errors.As(err, &typed) || typed.Code != c.UnsupportedCapability {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestRootedReserveOpeningNeverAdoptsReplacementDirectory(t *testing.T) {
+	parent := t.TempDir()
+	original := filepath.Join(parent, "owned")
+	moved := filepath.Join(parent, "moved")
+	if err := os.Mkdir(original, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = os.Rename(original, moved); err != nil {
+		if runtime.GOOS != "windows" || !errors.Is(err, syscall.Errno(32)) {
+			t.Fatal(err)
+		}
+		reserve, openErr := OpenRoot(root)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer reserve.Close()
+		if openErr = reserve.Admit(4096, false); openErr != nil {
+			t.Fatal(openErr)
+		}
+		status, openErr := reserve.Status()
+		if openErr != nil || status.RetainedReserveBytes != ReserveBytes {
+			t.Fatal("root rename fenced but rooted reserve unavailable", status, openErr)
+		}
+		return
+	}
+	if err = os.Mkdir(original, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(original, "control.reserve")
+	if err = os.WriteFile(foreign, []byte("foreign reserve must survive"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reserve, err := OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reserve.Close()
+	if err = reserve.Admit(4096, false); err != nil {
+		t.Fatal(err)
+	}
+	status, err := reserve.Status()
+	if err != nil || status.RetainedReserveBytes != ReserveBytes {
+		t.Fatal(status, err)
+	}
+	raw, err := os.ReadFile(foreign)
+	if err != nil || string(raw) != "foreign reserve must survive" {
+		t.Fatal("root pathname replacement redirected reserve write", err)
+	}
+	owned, err := os.Stat(filepath.Join(moved, "control.reserve"))
+	if err != nil || owned.Size() != ReserveBytes {
+		t.Fatal("pinned owned reserve not allocated", err)
 	}
 }

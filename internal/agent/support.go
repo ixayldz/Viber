@@ -30,23 +30,24 @@ type SupportTask struct {
 	Checks              int              `json:"retained_check_runs"`
 }
 type SupportReport struct {
-	SchemaVersion              int              `json:"schema_version"`
-	Profile                    string           `json:"profile"`
-	StoreSchema                int              `json:"store_schema"`
-	ReducerVersion             int              `json:"reducer_version"`
-	JournalSeq                 int64            `json:"journal_seq"`
-	Tasks                      []SupportTask    `json:"tasks"`
-	TokenCoverage              string           `json:"token_coverage"`
-	TokenCharged               c.TokenLimits    `json:"global_token_charge"`
-	TokenReserved              c.TokenLimits    `json:"global_token_reservation"`
-	ResourceCoverage           string           `json:"resource_coverage"`
-	ResourceCharged            c.ResourceVector `json:"global_resource_charge"`
-	ResourceReserved           c.ResourceVector `json:"global_resource_reservation"`
-	Telemetry                  bool             `json:"telemetry"`
-	TrainingExport             bool             `json:"training_export"`
-	RawPayloadsIncluded        bool             `json:"raw_payloads_included"`
-	CredentialMetadataIncluded bool             `json:"credential_metadata_included"`
-	ReleaseReady               bool             `json:"release_ready"`
+	PrivacyMetadata            *PrivacyMetadataStatus `json:"privacy_metadata_capacity,omitempty"`
+	SchemaVersion              int                    `json:"schema_version"`
+	Profile                    string                 `json:"profile"`
+	StoreSchema                int                    `json:"store_schema"`
+	ReducerVersion             int                    `json:"reducer_version"`
+	JournalSeq                 int64                  `json:"journal_seq"`
+	Tasks                      []SupportTask          `json:"tasks"`
+	TokenCoverage              string                 `json:"token_coverage"`
+	TokenCharged               c.TokenLimits          `json:"global_token_charge"`
+	TokenReserved              c.TokenLimits          `json:"global_token_reservation"`
+	ResourceCoverage           string                 `json:"resource_coverage"`
+	ResourceCharged            c.ResourceVector       `json:"global_resource_charge"`
+	ResourceReserved           c.ResourceVector       `json:"global_resource_reservation"`
+	Telemetry                  bool                   `json:"telemetry"`
+	TrainingExport             bool                   `json:"training_export"`
+	RawPayloadsIncluded        bool                   `json:"raw_payloads_included"`
+	CredentialMetadataIncluded bool                   `json:"credential_metadata_included"`
+	ReleaseReady               bool                   `json:"release_ready"`
 }
 
 // Support includes only an explicit typed allowlist. It does not depend on a
@@ -114,6 +115,10 @@ func (s *Session) Support(ctx context.Context) (SupportReport, error) {
 		return report, err
 	}
 	report.ResourceCoverage, report.ResourceCharged, report.ResourceReserved = resources.Coverage, resources.Used, resources.Reserved
+	report.PrivacyMetadata, err = s.PrivacyMetadataCapacity(ctx)
+	if err != nil {
+		return report, err
+	}
 	current, err := s.Journal.SnapshotInfo(ctx)
 	if err != nil {
 		return report, err
