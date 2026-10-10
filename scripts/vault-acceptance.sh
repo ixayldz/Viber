@@ -8,5 +8,5 @@ if [[ "$(uname -s)" == Linux ]]; then
   printf '%s' 'viber-ephemeral-ci-unlock' | gnome-keyring-daemon --unlock --components=secrets >/dev/null
 fi
 export VIBER_OS_VAULT_TEST=1
-go test -json -count=1 -timeout 2m ./internal/auth -run '^TestActualOSVaultRoundTripAndEnvironmentIsolation$' | tee "$evidence/vault.jsonl"
-python3 scripts/verify-test-results.py "$evidence/vault.jsonl" --vault
+go test -json -count=1 -timeout 2m ./internal/auth -run '^Test(ActualOSVaultRoundTripAndEnvironmentIsolation|VaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey|VaultExecutableTrustIncludesEveryResolvedAncestor|VaultProcessBoundsTimeoutOverflowAndInheritedPipeDrain|VaultRotationFailureKeepsExistingCiphertextAndAccountIdentity)$' | tee "$evidence/vault.jsonl"
+python3 scripts/verify-test-results.py "$evidence/vault.jsonl" --vault --vault-failure

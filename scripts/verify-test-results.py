@@ -8,6 +8,7 @@ parser.add_argument("evidence", type=Path)
 parser.add_argument("--docker", action="store_true")
 parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
+parser.add_argument("--vault-failure", action="store_true")
 parser.add_argument("--privacy", action="store_true")
 parser.add_argument("--retrieval", action="store_true")
 parser.add_argument("--delivery", action="store_true")
@@ -78,6 +79,13 @@ if args.privacy:
     }
 if args.vault:
     required.add("TestActualOSVaultRoundTripAndEnvironmentIsolation")
+if args.vault_failure:
+    required |= {
+        "TestVaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey",
+        "TestVaultExecutableTrustIncludesEveryResolvedAncestor",
+        "TestVaultProcessBoundsTimeoutOverflowAndInheritedPipeDrain",
+        "TestVaultRotationFailureKeepsExistingCiphertextAndAccountIdentity",
+    }
 if args.docker:
     required |= {
 		"TestActualDockerHostileProcessMatrix",

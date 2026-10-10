@@ -33,10 +33,15 @@ func (commandVault) Backend() string {
 }
 
 type vaultOutput struct {
-	bytes.Buffer
+	// Do not embed bytes.Buffer: its promoted ReaderFrom would bypass Write's
+	// quota when os/exec copies helper pipes with io.Copy.
+	buffer   bytes.Buffer
 	overflow bool
 	limit    int
 }
+
+func (w *vaultOutput) Len() int      { return w.buffer.Len() }
+func (w *vaultOutput) Bytes() []byte { return w.buffer.Bytes() }
 
 func (w *vaultOutput) Write(p []byte) (int, error) {
 	n := len(p)
@@ -44,7 +49,7 @@ func (w *vaultOutput) Write(p []byte) (int, error) {
 	if n > remaining {
 		w.overflow = true
 	}
-	w.Buffer.Write(p[:min(n, remaining)])
+	w.buffer.Write(p[:min(n, remaining)])
 	return n, nil
 }
 
@@ -77,26 +82,55 @@ func execVaultHelper(executable string, args []string, input []byte) vaultRespon
 		response.Err = err
 		return response
 	}
-	info, err := os.Stat(resolved)
-	if err != nil {
+	if err = trustedVaultPath(resolved, os.Lstat); err != nil {
 		response.Err = err
-		return response
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
-		response.Err = c.Fail(c.PolicyDenied, "OS vault helper must be a root-owned nonwritable system executable")
 		return response
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, resolved, args...)
+	command.Env = vaultEnvironment(os.Environ())
+	return runVaultProcess(ctx, command, input)
+}
+
+// A root-owned file inside a user-writable ancestor can be replaced between
+// inspection and exec. Every resolved ancestor must have the same system trust.
+// This excludes untrusted namespace writers; privileged OS administrators are
+// not isolated from their own credential helper by this check.
+func trustedVaultPath(resolved string, inspect func(string) (os.FileInfo, error)) error {
+	if !filepath.IsAbs(resolved) || filepath.Clean(resolved) != resolved {
+		return c.Fail(c.PolicyDenied, "canonical system vault executable required")
+	}
+	for path := resolved; ; path = filepath.Dir(path) {
+		info, err := inspect(path)
+		if err != nil {
+			return c.Fail(c.UnsupportedCapability, "system vault executable path unavailable")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		validKind := info.IsDir()
+		if path == resolved {
+			validKind = info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0
+		}
+		if !ok || stat.Uid != 0 || !validKind || info.Mode().Perm()&0022 != 0 {
+			return c.Fail(c.PolicyDenied, "vault executable and ancestors require root-owned nonwritable system paths")
+		}
+		if parent := filepath.Dir(path); parent == path {
+			return nil
+		}
+	}
+}
+
+func runVaultProcess(ctx context.Context, command *exec.Cmd, input []byte) vaultResponse {
+	response := vaultResponse{Exit: -1}
 	command.Stdin = bytes.NewReader(input)
 	stdout, stderr := &vaultOutput{limit: 512}, &vaultOutput{limit: 512}
+	defer func() { clear(stdout.Bytes()); clear(stderr.Bytes()) }()
 	command.Stdout = stdout
 	command.Stderr = stderr
-	// Locale stabilizes the tool protocol. No secret is placed in argv or env.
-	command.Env = vaultEnvironment(os.Environ())
-	err = command.Run()
+	// A descendant retaining a pipe must not make helper timeout unbounded.
+	// WaitDelay bounds pipe draining; it is not a process-tree fencing receipt.
+	command.WaitDelay = 250 * time.Millisecond
+	err := command.Run()
 	response.Output = append([]byte{}, stdout.Bytes()...)
 	response.Stderr = stderr.Len() > 0 || stderr.overflow
 	if stdout.overflow || stderr.overflow || ctx.Err() != nil {
@@ -112,7 +146,7 @@ func execVaultHelper(executable string, args []string, input []byte) vaultRespon
 		response.Exit = exit.ExitCode()
 		return response
 	}
-	response.Err = c.Fail(c.UnsupportedCapability, "OS vault helper could not start")
+	response.Err = c.Fail(c.UnsupportedCapability, "OS vault helper failed bounded completion")
 	return response
 }
 
@@ -197,19 +231,19 @@ func (v commandVault) Get(handle string) ([]byte, error) {
 		return nil, c.Fail(c.UnsupportedCapability, "OS credential vault not supported")
 	}
 	result := runVaultHelper(executable, args, nil)
+	defer clear(result.Output)
 	if result.Err != nil {
 		return nil, c.Fail(c.UnsupportedCapability, "OS credential vault unavailable")
 	}
-	defer clear(result.Output)
 	if runtime.GOOS == "linux" && result.Exit == 1 && !result.Stderr && len(result.Output) == 0 || runtime.GOOS == "darwin" && result.Exit == 44 && len(result.Output) == 0 {
 		return nil, errVaultKeyMissing
 	}
-	if result.Exit != 0 {
+	if result.Exit != 0 || result.Stderr {
 		return nil, c.Fail(c.UnsupportedCapability, "OS credential vault locked or unavailable")
 	}
 	encoded := bytes.TrimSuffix(result.Output, []byte("\n"))
 	key, err := base64.StdEncoding.Strict().DecodeString(string(encoded))
-	if err != nil || len(key) != 32 {
+	if err != nil || len(key) != 32 || base64.StdEncoding.EncodeToString(key) != string(encoded) {
 		clear(key)
 		return nil, c.Fail(c.StoreIntegrityError, "invalid OS vault key material")
 	}
