@@ -145,8 +145,8 @@ def git_bytes(source, revision, path):
     return result.stdout
 
 
-def invoke(binary, args, expected=0):
-    result = subprocess.run([str(binary), *args], capture_output=True, timeout=90)
+def invoke(binary, args, expected=0, environment=None):
+    result = subprocess.run([str(binary), *args], capture_output=True, timeout=90, env=environment)
     if result.returncode != expected or len(result.stdout) > 1 << 20 or len(result.stderr) > 64 << 10:
         code = "UNKNOWN"
         if len(result.stdout) <= 1 << 20:
@@ -178,28 +178,31 @@ def remove_private_tree(directory, parent, prefix):
     shutil.rmtree(directory, onerror=lambda function, path, info: readonly(function, path, info[1]))
 
 
-def smoke(binary, folder, expected_target):
+def smoke(binary, folder, expected_target, environment=None, store_parent=None, after_task=None):
     source = folder / "examples/offline/source/hello.txt"
     before = source.read_bytes()
-    version = invoke(binary, ["version"]).decode().strip()
-    doctor = strict_json(invoke(binary, ["doctor", "--json"]))
+    version = invoke(binary, ["version"], environment=environment).decode().strip()
+    doctor = strict_json(invoke(binary, ["doctor", "--json"], environment=environment))
     if doctor.get("platform") != expected_target or doctor.get("version") != version or doctor.get("release_ready") is not False:
         fail("native version/platform/capability mismatch")
-    temp = Path(tempfile.mkdtemp(prefix=".native-smoke-", dir=folder))
+    parent = folder if store_parent is None else store_parent
+    temp = Path(tempfile.mkdtemp(prefix=".native-smoke-", dir=parent))
     try:
         store = temp / "store"
-        result = strict_json(invoke(binary, ["run", "Update hello.txt to the fixture greeting", "--offline", "--fixture", str(folder / "examples/offline/greeting.json"), "--root", str(source.parent), "--store", str(store), "--task", "greeting", "--allow-unverified", "--json"], expected=2))
+        result = strict_json(invoke(binary, ["run", "Update hello.txt to the fixture greeting", "--offline", "--fixture", str(folder / "examples/offline/greeting.json"), "--root", str(source.parent), "--store", str(store), "--task", "greeting", "--allow-unverified", "--json"], expected=2, environment=environment))
         state = result.get("state", {})
         expected = {"execution_state": "TERMINATED", "terminal_outcome": "FINISHED", "quality_verdict": "UNVERIFIED", "fulfillment_status": "SATISFIED"}
         if any(state.get(k) != v for k, v in expected.items()):
             fail("offline sample manufactured quality or failed delivery")
-        diff = strict_json(invoke(binary, ["diff", "greeting", "--store", str(store), "--json"]))
+        diff = strict_json(invoke(binary, ["diff", "greeting", "--store", str(store), "--json"], environment=environment))
         if len(diff) != 1 or diff[0].get("path") != "hello.txt" or diff[0].get("before_digest") != hashlib.sha256(before).hexdigest() or diff[0].get("after_digest") != hashlib.sha256(b"hello, Viber\n").hexdigest() or source.read_bytes() != before:
             fail("native sample did not preserve source or exact candidate")
+        if after_task is not None:
+            after_task(temp, store, diff)
         return {"status": "PASS", "platform": expected_target, "cli_version": version, "run_exit": 2, "quality": "UNVERIFIED", "source_preserved": True, "scope": "VERSION_DOCTOR_OFFLINE_GREETING_DIFF_ONLY"}
     finally:
         # Recursive cleanup is limited to the exact freshly created child.
-        remove_private_tree(temp, folder, ".native-smoke-")
+        remove_private_tree(temp, parent, ".native-smoke-")
 
 
 def quickstart(revision, target):
@@ -242,6 +245,14 @@ https://github.com/ixayldz/Viber/blob/{revision}/docs/CAPABILITIES.md
 
 
 def verify_archive(archive, prefix, content, binary_name):
+    names = set()
+    for name in content:
+        if (not isinstance(name, str) or not name or len(name) > 2048 or PurePosixPath(name).is_absolute()
+                or PurePosixPath(name).as_posix() != name or "\\" in name or ":" in name
+                or any(part in ("", ".", "..") or part.endswith((" ", ".")) for part in name.split("/"))
+                or name.casefold() in names):
+            fail("archive extraction path alias denied")
+        names.add(name.casefold())
     expected = {prefix + "/" + name: raw for name, raw in content.items()}
     seen = set()
     if archive.suffix == ".zip":
@@ -265,6 +276,68 @@ def verify_archive(archive, prefix, content, binary_name):
                 seen.add(entry.name)
     if seen != set(expected):
         fail("archive omitted a required file")
+
+
+def private_inventory(root):
+    inventory, total = {}, 0
+    for path in sorted(root.rglob("*")):
+        if link(path):
+            fail("private lifecycle fixture contains a link/reparse point")
+        if path.is_dir():
+            continue
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or len(inventory) >= MAX_FILES or info.st_size > MAX_BYTES - total:
+            fail("private lifecycle fixture inventory exceeded")
+        total += info.st_size
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(block)
+        inventory[path.relative_to(root).as_posix()] = {"bytes": info.st_size, "sha256": digest.hexdigest()}
+    return inventory
+
+
+def archive_install_smoke(archive, prefix, content, binary_name, target, parent, inspector):
+    # Generated, trusted CI package only. Authentication of public downloads is
+    # a separate consumer gate. Validate before creating/executing the install.
+    verify_archive(archive, prefix, content, binary_name)
+    stage = Path(tempfile.mkdtemp(prefix=".archive-install-", dir=parent))
+    environment = dict(os.environ, PATH="")
+    try:
+        if archive.suffix == ".zip":
+            with zipfile.ZipFile(archive) as container:
+                extracted = {name: container.read(prefix + "/" + name) for name in content}
+        else:
+            with tarfile.open(archive, "r:gz") as container:
+                extracted = {name: container.extractfile(prefix + "/" + name).read() for name in content}
+        if extracted != content:
+            fail("archive changed between validation and installation")
+        for name, raw in extracted.items():
+            path = stage / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        binary = stage / binary_name
+        binary.chmod(0o755)
+        doctor = strict_json(invoke(binary, ["doctor", "--json"], environment=environment))
+        if doctor.get("git_discovered") is not False:
+            fail("archive install unexpectedly discovered external Git")
+
+        def uninstall(temp, store, diff):
+            before = private_inventory(temp)
+            remove_private_tree(stage, parent, ".archive-install-")
+            if stage.exists() or private_inventory(temp) != before:
+                fail("manual program uninstall changed separately stored task/authority bytes")
+            observed = strict_json(invoke(inspector, ["diff", "greeting", "--store", str(store), "--json"], environment=environment))
+            if observed != diff:
+                fail("external task store unavailable after program uninstall")
+
+        proof = smoke(binary, stage, target, environment=environment, store_parent=parent, after_task=uninstall)
+        return {"status": "PASS", "platform": target, "path": "EMPTY", "git_discovered": False,
+                "source_preserved": proof["source_preserved"], "run_exit": proof["run_exit"], "quality": proof["quality"],
+                "external_store_preserved": True, "scope": "FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY"}
+    finally:
+        if stage.exists():
+            remove_private_tree(stage, parent, ".archive-install-")
 
 
 def build(args):
@@ -312,9 +385,10 @@ def build(args):
                         entry.size, entry.mode, entry.mtime = len(raw), (0o755 if path == binary_name else 0o644), 0
                         tar.addfile(entry, io.BytesIO(raw))
         verify_archive(archive, name, content, binary_name)
+        install = archive_install_smoke(archive, name, content, binary_name, target, output, binary)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (output / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
-        descriptor = {"schema_version": 1, "source_revision": args.revision, "platform": target, "archive": archive.name, "sha256": digest, "bytes": archive.stat().st_size, "release_ready": False, "native_smoke": native, "signature_status": "PROVENANCE_REQUIRED_NOT_YET_ATTESTED"}
+        descriptor = {"schema_version": 1, "source_revision": args.revision, "platform": target, "archive": archive.name, "sha256": digest, "bytes": archive.stat().st_size, "release_ready": False, "native_smoke": native, "archive_install_smoke": install, "signature_status": "PROVENANCE_REQUIRED_NOT_YET_ATTESTED"}
     finally:
         remove_private_tree(stage, output, ".portable-stage-")
     # Cleanup must also succeed before publication. The CI signer attests the

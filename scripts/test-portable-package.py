@@ -118,6 +118,23 @@ def main():
                 count += 1
             else:
                 raise AssertionError("invalid archive accepted: " + name)
+        original_invoke = portable.invoke
+        try:
+            def deny_native(*args, **kwargs):
+                raise AssertionError("unsafe extraction reached native execution")
+            portable.invoke = deny_native
+            for invalid in ("../escape", "/absolute", "LICENSE:stream", "examples\\escape", "./alias", "trailing. ", "case-alias"):
+                content = {invalid: b"unsafe"} if invalid != "case-alias" else {"LICENSE": b"first", "license": b"second"}
+                before = {p.name for p in parent.iterdir()}
+                try:
+                    portable.archive_install_smoke(parent / "never-opened.zip", "snapshot", content, "viber", "linux/amd64", parent, parent / "unused-inspector")
+                except ValueError:
+                    assert {p.name for p in parent.iterdir()} == before, "unsafe extraction allocated output"
+                    count += 1
+                else:
+                    raise AssertionError("unsafe extraction input accepted: " + invalid)
+        finally:
+            portable.invoke = original_invoke
         print(f"PASS: {count} adversarial portable inventory contracts; fixtures are not native execution or signature acceptance")
     finally:
         portable.remove_private_tree(parent, cache, "portable-contract-")

@@ -172,6 +172,15 @@ def provenance(path, revision):
     gh("attestation", "verify", str(path), "-R", REPO, "--signer-workflow", REPO + "/.github/workflows/ci.yml", "--source-ref", "refs/heads/main", "--source-digest", revision)
 
 
+def validate_install(proof, target):
+    expected = {"status": "PASS", "platform": target, "path": "EMPTY", "git_discovered": False,
+                "source_preserved": True, "run_exit": 2, "quality": "UNVERIFIED",
+                "external_store_preserved": True, "scope": "FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY"}
+    if (not isinstance(proof, dict) or proof != expected or type(proof.get("run_exit")) is not int
+            or any(type(proof.get(key)) is not bool for key in ("git_discovered", "source_preserved", "external_store_preserved"))):
+        portable.fail("attested native archive installation proof missing or changed")
+
+
 def publish(args):
     revision = args.revision
     if not portable.REVISION.fullmatch(revision) or args.tag != "engineering-" + revision:
@@ -200,7 +209,9 @@ def publish(args):
     for os, name in selected:
         folder = output / os
         gh("run", "download", str(run["id"]), "-R", REPO, "--name", name, "--dir", str(folder))
-        descriptor = portable.strict_json(portable.read_regular(folder, "distribution.json", 64 << 10))
+        descriptor_raw = portable.read_regular(folder, "distribution.json", 64 << 10)
+        provenance(folder / "distribution.json", revision)
+        descriptor = portable.strict_json(descriptor_raw)
         archive_name = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}" + (".zip" if os == "windows-latest" else ".tar.gz")
         if set(p.name for p in folder.iterdir()) != {archive_name, "SHA256SUMS", "distribution.json"}:
             portable.fail("portable artifact contains unexpected members")
@@ -216,8 +227,13 @@ def publish(args):
         native = archive_identity(path, revision, PLATFORMS[os])
         if descriptor.get("native_smoke") != native:
             portable.fail("distribution/native archive proof mismatch")
+        install = descriptor.get("archive_install_smoke")
+        validate_install(install, PLATFORMS[os])
+        proof_name = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-distribution.json"
+        (assets / proof_name).write_bytes(descriptor_raw)
         (assets / archive_name).write_bytes(raw)
-        inventory.append({"path": archive_name, "sha256": digest, "bytes": len(raw), "platform": PLATFORMS[os], "native_smoke": native})
+        inventory.append({"path": archive_name, "sha256": digest, "bytes": len(raw), "platform": PLATFORMS[os], "native_smoke": native, "archive_install_smoke": install,
+                          "attested_distribution": {"path": proof_name, "sha256": hashlib.sha256(descriptor_raw).hexdigest(), "bytes": len(descriptor_raw)}})
     manifest = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": revision, "tag": args.tag, "native_ci_run": run["id"], "provenance_verified": True, "platform_certificate_signing": "NOT_ACCEPTED", "assets": inventory}
     (assets / "release.json").write_bytes(portable.canonical(manifest))
     sums = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(assets.iterdir()))
@@ -231,6 +247,8 @@ Verify the downloaded archive before extracting/executing:
 ```sh
 gh attestation verify ARCHIVE -R {REPO} --signer-workflow {REPO}/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest {revision}
 ```
+The platform's `*-distribution.json` asset is also attested with the same command. It binds archive bytes to native fresh-archive first-task/manual-uninstall acceptance: PATH empty, Git undiscovered, source preserved and external task store preserved. This scope does not measure automated updates, rollback or certificate signing.
+
 Build provenance is not Windows Authenticode/macOS notarization or coding quality. Checksums alone do not authenticate a publisher. [Installation/update/rollback/uninstall](https://github.com/{REPO}/blob/{revision}/docs/INSTALL.md) · [Capabilities and open PRD acceptance](https://github.com/{REPO}/blob/{revision}/docs/CAPABILITIES.md).
 
 Keep stores outside the program directory. Install/update by selecting a fresh versioned directory; no automatic store migration or downgrade. Safe live apply, metadata checkpoint/compaction, aggregate physical quotas, full verification/language tooling, supervisor/extension/worker/eval/pilot acceptance remain open. Provider-key acceptance is separate from these engineering gaps.

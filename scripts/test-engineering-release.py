@@ -162,6 +162,30 @@ def main():
                     count += 1
         finally:
             release.api, release.gh, release.accepted_run, release.api_body = original
+        install = {"status": "PASS", "platform": "linux/amd64", "path": "EMPTY", "git_discovered": False,
+                   "source_preserved": True, "run_exit": 2, "quality": "UNVERIFIED", "external_store_preserved": True,
+                   "scope": "FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY"}
+        release.validate_install(install, "linux/amd64")
+        for name, mutate in [
+            ("missing native installation", lambda p: p.pop("scope")),
+            ("foreign install platform", lambda p: p.update(platform="windows/amd64")),
+            ("external tools dependency", lambda p: p.update(path="POPULATED")),
+            ("external Git dependency", lambda p: p.update(git_discovered=True)),
+            ("integer bool alias", lambda p: p.update(git_discovered=0)),
+            ("source changed", lambda p: p.update(source_preserved=False)),
+            ("user store deleted", lambda p: p.update(external_store_preserved=False)),
+            ("manufactured verification", lambda p: p.update(quality="VERIFIED")),
+            ("manufactured success exit", lambda p: p.update(run_exit=0)),
+            ("unmeasured automatic update", lambda p: p.update(scope="FULL_AUTOMATED_UPDATE_ROLLBACK")),
+        ]:
+            changed = copy.deepcopy(install)
+            mutate(changed)
+            try:
+                release.validate_install(changed, "linux/amd64")
+            except ValueError:
+                count += 1
+            else:
+                raise AssertionError("invalid installation proof admitted: " + name)
         print(f"PASS: {count} engineering publication trust contracts; no native inference/signature/GitHub write acceptance")
     finally:
         release.portable.remove_private_tree(parent, cache, "release-contract-")

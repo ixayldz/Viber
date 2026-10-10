@@ -230,28 +230,32 @@ jobs:
           pattern: portable-*-${{ github.sha }}
           path: packages
           merge-multiple: false
-      - name: Require all three native archives
+      - name: Require three native archives and three installation descriptors
         shell: bash
         run: |
           shopt -s globstar nullglob
           archives=(packages/**/*.zip packages/**/*.tar.gz)
           test "${#archives[@]}" = 3
-      - name: Attest immutable portable archive bytes
+          descriptors=(packages/**/distribution.json)
+          test "${#descriptors[@]}" = 3
+      - name: Attest immutable portable archives and native installation descriptors
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
             packages/**/*.zip
             packages/**/*.tar.gz
+            packages/**/distribution.json
       - name: Verify consumer repo, workflow, source ref and exact revision
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s globstar nullglob
-          archives=(packages/**/*.zip packages/**/*.tar.gz)
-          for archive in "${archives[@]}"; do
-            gh attestation verify "$archive" -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
+          subjects=(packages/**/*.zip packages/**/*.tar.gz packages/**/distribution.json)
+          test "${#subjects[@]}" = 6
+          for subject in "${subjects[@]}"; do
+            gh attestation verify "$subject" -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
