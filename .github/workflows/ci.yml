@@ -1,6 +1,7 @@
 name: core
 on:
   push:
+    branches: ['**']
     tags-ignore: ['engineering-*']
   pull_request:
 permissions:
