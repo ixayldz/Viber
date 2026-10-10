@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/ipc"
 	"github.com/ixayldz/Viber/internal/owner"
 	"os"
@@ -125,5 +126,31 @@ func TestCLIBackgroundRunAttachAndGracefulStop(t *testing.T) {
 	current, _ := os.ReadFile(filepath.Join(source, "a.txt"))
 	if string(current) != "source" {
 		t.Fatal("background command changed source")
+	}
+}
+
+func TestSupervisorShutdownCannotCompleteWhileStoreLockRemainsHeld(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	lease, err := fileguard.Lock(root, "owner.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	err = waitSupervisorStopped(ctx, directory, "already-acknowledged-owner")
+	cancel()
+	if err == nil {
+		t.Fatal("descriptor absence waived held kernel store lock")
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = waitSupervisorStopped(context.Background(), directory, "already-acknowledged-owner"); err != nil {
+		t.Fatal(err)
 	}
 }

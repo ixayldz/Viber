@@ -58,31 +58,41 @@ type activeRun struct {
 	err       error
 }
 type Owner struct {
-	Session   *agent.Session
-	Server    *ipc.Server
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mu        sync.Mutex
-	control   sync.Mutex
-	active    *activeRun
-	serveDone chan error
-	closeOnce sync.Once
-	closeErr  error
-	closed    bool
+	Session        *agent.Session
+	Server         *ipc.Server
+	ctx            context.Context
+	cancel         context.CancelFunc
+	mu             sync.Mutex
+	control        sync.Mutex
+	active         *activeRun
+	serveDone      chan error
+	closeOnce      sync.Once
+	closeErr       error
+	closed         bool
+	retentionDone  chan struct{}
+	retentionLast  *agent.RetentionRun
+	retentionError string
 }
 
 func Open(ctx context.Context, directory string, session *agent.Session) (*Owner, error) {
+	return openWithRetentionInterval(ctx, directory, session, time.Minute)
+}
+func openWithRetentionInterval(ctx context.Context, directory string, session *agent.Session, interval time.Duration) (*Owner, error) {
+	if interval <= 0 || interval > time.Minute {
+		return nil, c.Fail(c.InvalidArgument, "bounded retention interval required")
+	}
 	if session == nil {
 		return nil, c.Fail(c.InvalidArgument, "owned kernel session required")
 	}
 	ownerCtx, cancel := context.WithCancel(ctx)
-	owner := &Owner{Session: session, ctx: ownerCtx, cancel: cancel, serveDone: make(chan error, 1)}
+	owner := &Owner{Session: session, ctx: ownerCtx, cancel: cancel, serveDone: make(chan error, 1), retentionDone: make(chan struct{})}
 	server, err := ipc.OpenServer(ownerCtx, directory, session.Journal.Generation(), owner.Handle)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	owner.Server = server
+	go owner.retentionLoop(interval)
 	go func() {
 		err := server.Serve()
 		owner.mu.Lock()
@@ -115,6 +125,7 @@ func (o *Owner) close() error {
 		active.cancel()
 		<-active.done
 	}
+	<-o.retentionDone
 	serveErr := <-o.serveDone
 	return errors.Join(err, serveErr)
 }
@@ -257,10 +268,40 @@ func nullPayload(raw json.RawMessage) error {
 	return nil
 }
 func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
-	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" && request.Command != "privacy-capacity" && request.Command != "privacy-reserve-replenish" && request.Command != "privacy-operation-retire" {
+	if request.TaskID == "" && request.Command != "retention-run" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" && request.Command != "privacy-capacity" && request.Command != "privacy-reserve-replenish" && request.Command != "privacy-operation-retire" {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
+	case "retention-run":
+		if request.TaskID != "" {
+			return nil, c.Fail(c.InvalidArgument, "retention maintenance is store scoped")
+		}
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		return o.RetentionMaintenance(ctx)
+	case "retention-status":
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		return o.Session.RetentionStatus(ctx, request.TaskID)
+	case "retention-set":
+		var options agent.RetentionOptions
+		if err := c.DecodeStrict(request.Payload, &options); err != nil {
+			return nil, err
+		}
+		if options.CommandID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "retention request ID mismatch")
+		}
+		o.control.Lock()
+		defer o.control.Unlock()
+		o.mu.Lock()
+		unavailable := o.closed || o.active != nil
+		o.mu.Unlock()
+		if unavailable {
+			return nil, c.Fail(c.Conflict, "retention configuration requires a quiescent owner")
+		}
+		return o.Session.SetRetention(ctx, request.TaskID, options)
 	case "privacy-capacity", "privacy-reserve-replenish", "privacy-operation-retire":
 		if request.TaskID != "" {
 			return nil, c.Fail(c.InvalidArgument, "privacy capacity command is store scoped")

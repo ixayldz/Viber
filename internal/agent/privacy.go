@@ -34,8 +34,9 @@ type DeletionPlan struct {
 	Digest            string             `json:"plan_digest"`
 }
 type DeletionCommand struct {
-	CommandID string       `json:"command_id"`
-	Plan      DeletionPlan `json:"plan"`
+	Expiry    *c.RetentionExpiry `json:"retention_expiry,omitempty"`
+	CommandID string             `json:"command_id"`
+	Plan      DeletionPlan       `json:"plan"`
 }
 type DeletionResult struct {
 	StagedAttempts int    `json:"staged_attempts,omitempty"`
@@ -68,6 +69,9 @@ func deletionObjectsDigest(plan DeletionPlan) string {
 }
 func validateDeletionCommand(command DeletionCommand) error {
 	plan := command.Plan
+	if command.Expiry != nil && (command.Expiry.Validate() != nil || command.Expiry.Policy.TaskID != plan.TaskID || command.Expiry.Policy.AuthorityDigest != plan.AuthorityDigest) {
+		return c.Fail(c.PolicyDenied, "bound elapsed retention consent required")
+	}
 	if len(plan.StagedAttempts) > 128 {
 		return c.Fail(c.InvalidArgument, "staged attempt inventory quota exceeded")
 	}
@@ -250,7 +254,7 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	}
 	plan.ObjectsDigest = deletionObjectsDigest(plan)
 	plan.Digest = deletionDigest(plan)
-	return plan, validateDeletionCommand(DeletionCommand{"preview", plan})
+	return plan, validateDeletionCommand(DeletionCommand{CommandID: "preview", Plan: plan})
 }
 func (s *Session) DeletionPreview(ctx context.Context, task string) (DeletionPlan, error) {
 	s.mu.Lock()
@@ -343,6 +347,9 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	defer s.mu.Unlock()
 	s.publicationMu.Lock()
 	defer s.publicationMu.Unlock()
+	return s.deleteContentLocked(ctx, command)
+}
+func (s *Session) deleteContentLocked(ctx context.Context, command DeletionCommand) (DeletionResult, error) {
 	plan := command.Plan
 	result := DeletionResult{SchemaVersion: 1, TaskID: plan.TaskID, CommandID: command.CommandID, PlanDigest: plan.Digest, Watermark: plan.Watermark, Status: "PENDING", LocalObjects: len(plan.Objects), ManagedCopies: len(plan.Copies), RestoredStores: len(plan.Stores), StagedAttempts: len(plan.StagedAttempts), ExternalCopies: "UNMANAGED_OR_PROVIDER_COPIES_NOT_ERASED", MediaErasure: "NO_PHYSICAL_MEDIA_ERASURE_GUARANTEE"}
 	if err := validateDeletionCommand(command); err != nil {
@@ -373,6 +380,14 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		err = onlyPrivacyOwner(root, s.privacyOwner.name)
 	}
 	prior, retry := view.Deletions[plan.TaskID]
+	if err == nil {
+		if retentionDeletionCollision(view, command) {
+			err = c.Fail(c.CommandIDConflict, "deletion command collides with retention")
+		}
+	}
+	if err == nil && command.Expiry != nil {
+		err = checkCurrentExpiry(command, view)
+	}
 	if err == nil && retry {
 		expected, _ := c.Digest(prior)
 		actual, _ := c.Digest(command)
@@ -436,6 +451,9 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		if err == nil && (view.Sequence != plan.RegistrySequence || view.Tail != plan.RegistryTail || view.Watermark+1 != plan.Watermark) {
 			err = c.Fail(c.StaleBase, "privacy journal changed before deletion")
 		}
+		if err == nil && command.Expiry != nil {
+			err = checkCurrentExpiry(command, view)
+		}
 		if err == nil {
 			_, digest, scopeErr := readPrivacyScopes(root)
 			err = scopeErr
@@ -445,6 +463,9 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		}
 		if err == nil {
 			err = appendPrivacy(root, view, privacyRecord{Type: "DELETE_INTENT", Command: &command})
+		}
+		if err == nil && command.Expiry != nil && s.retentionFault != nil {
+			err = s.retentionFault("intent")
 		}
 		err = errors.Join(err, lock.Close(), root.Close())
 		if err != nil {
@@ -475,8 +496,9 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	}
 	state := states[plan.TaskID]
 	tombstone := c.TaskDeletion{SchemaVersion: 1, PlanDigest: plan.Digest, OriginalDocument: plan.DocumentDigest, ObjectsDigest: plan.ObjectsDigest, Scope: plan.Scope, Status: "PENDING", Watermark: plan.Watermark}
+	actor := bindRetentionTombstone(command, &tombstone)
 	if state.Deletion == nil {
-		state, err = s.Journal.Execute(ctx, store.Command{ID: command.CommandID, TaskID: plan.TaskID, Actor: "user", ExpectedTaskSeq: plan.TaskSequence, Type: "TaskContentDeleted", Payload: c.EventPayload{Deletion: &tombstone, Reason: plan.Digest}})
+		state, err = s.Journal.Execute(ctx, store.Command{ID: command.CommandID, TaskID: plan.TaskID, Actor: actor, ExpectedTaskSeq: plan.TaskSequence, Type: "TaskContentDeleted", Payload: c.EventPayload{Deletion: &tombstone, Reason: plan.Digest}})
 		if err != nil {
 			return result, err
 		}
@@ -487,6 +509,11 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 	}
 	if state.Deletion == nil || *state.Deletion != expected {
 		return result, c.Fail(c.StoreIntegrityError, "deletion journal intent mismatch")
+	}
+	if command.Expiry != nil && s.retentionFault != nil {
+		if err = s.retentionFault("pending"); err != nil {
+			return result, err
+		}
 	}
 	// Verify remaining paths before side effects. Missing paths are only valid
 	// because the external intent and journal tombstone are already durable.
@@ -501,6 +528,11 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		}
 		if _, err = s.Archive.RemoveTaskContent(plan.TaskID, object); err != nil {
 			return result, err
+		}
+		if command.Expiry != nil && s.retentionFault != nil {
+			if err = s.retentionFault("object"); err != nil {
+				return result, err
+			}
 		}
 	}
 	for _, copy := range plan.Copies {
@@ -529,6 +561,11 @@ func (s *Session) DeleteContent(ctx context.Context, command DeletionCommand) (D
 		return result, c.Fail(c.Conflict, "new or unplanned content prevents PURGED receipt")
 	}
 	if state.Deletion.Status != "PURGED" {
+		if command.Expiry != nil && s.retentionFault != nil {
+			if err = s.retentionFault("before-purged"); err != nil {
+				return result, err
+			}
+		}
 		tombstone.Status = "PURGED"
 		if _, err = s.Journal.Execute(ctx, store.Command{ID: "privacy-purge-" + c.HashBytes([]byte(command.CommandID)), TaskID: plan.TaskID, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: "TaskDeletionPurged", Payload: c.EventPayload{Deletion: &tombstone, Reason: plan.Digest}}); err != nil {
 			return result, err

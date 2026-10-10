@@ -114,20 +114,23 @@ type Document struct {
 	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
-	privacyInitFault  func(string) error
-	publicationMu     sync.RWMutex
-	privacy           *PrivacyAuthority
-	privacyOwner      *privacyOwner
-	retrievalCache    *retrieval.Cache
-	instance          RuntimeInstance
-	clockOrigin       time.Time
-	clockDomain       string
-	creationFault     func(c.ExecutionState) error
-	attemptStageFault func(int) error
-	mu                sync.Mutex
-	directory         string
-	Journal           *store.Store
-	Archive           *artifact.Archive
+	retentionFault          func(string) error
+	retentionCursorTask     string
+	retentionCursorDeadline time.Time
+	privacyInitFault        func(string) error
+	publicationMu           sync.RWMutex
+	privacy                 *PrivacyAuthority
+	privacyOwner            *privacyOwner
+	retrievalCache          *retrieval.Cache
+	instance                RuntimeInstance
+	clockOrigin             time.Time
+	clockDomain             string
+	creationFault           func(c.ExecutionState) error
+	attemptStageFault       func(int) error
+	mu                      sync.Mutex
+	directory               string
+	Journal                 *store.Store
+	Archive                 *artifact.Archive
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {

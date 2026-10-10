@@ -555,6 +555,35 @@ TUI karşılığı `/capacity`, `/capacity replenish` ve `/capacity retire-opera
 
 0.8 ve önceki resource-untracked store'lara yeni accounted task karıştırılmaz. Yeni 0.9 görevleri için fresh store kullanın; mevcut tarihsel accounting'e sıfır kullanım eklenmez. SQLite format 2 korunur; yeni optional task alanlarını eski strict clients okuyamaz, downlevel resume desteklenmez.
 
+## Görev içeriği için otomatik süre dolumu
+
+Görevler varsayılan olarak **KEEP** durumundadır; Viber kendiliğinden silme süresi seçmez. Bir görevin yakalanmış içeriğini ve kayıtlı aile kopyalarını belirli bir UTC zamanından sonra silmek için aşağıdaki komutu kullanabilirsiniz. Bu işlem API anahtarı istemez.
+
+```powershell
+# Mevcut politikayı ve revision değerini öğrenin. İlk politika revision=0'dır.
+.\bin\viber.exe retention TASK --store C:\ViberData\review --json
+
+# UTC zamanı örnektir; komutu çalıştırdığınız anda gelecekte olan bir zaman seçin.
+.\bin\viber.exe retention TASK --store C:\ViberData\review `
+  --expires-at 2027-01-01T00:00:00Z --revision 0 --command-id task-expiry-1 `
+  --acknowledge DELETE_MANAGED_FAMILY_TASK_CONTENT_AFTER_DEADLINE_V1 --json
+
+# Henüz silme intent'i başlamadıysa güncel revision ile otomatik expiry'yi kapatın.
+.\bin\viber.exe retention TASK --store C:\ViberData\review `
+  --keep --revision 1 --command-id task-keep-2 --json
+
+# Owner kapalıyken de mevcut store üzerinde bir bounded tarama çalıştırabilirsiniz.
+.\bin\viber.exe retention --store C:\ViberData\review --run-due --json
+```
+
+Her politika değişikliğinde `revision` artar. Aynı `command-id` ve aynı girdiler, restart sonrasında da ilk sonucu döndürür; aynı ID ile farklı girdi reddedilir. Bir başka istemci politikayı değiştirdiyse önce status'u yenileyin. Süre canonical UTC biçimindedir (`Z`); saat dilimi offset'i ve gereksiz `.000` gibi alternatif biçimler kabul edilmez. Deadline sistem UTC saatine bağlıdır; işletim sistemi saatinin ileri alınması süreyi doldurabilir, geri alınması silmeyi geciktirebilir.
+
+Background owner başlangıçta ve her dakika süre dolumunu tarar. Aktif invocation varken bekler; bir tarama en fazla 16 görevi dener. Engellenmiş erken görevler sonraki uygun görevleri aç bırakmaz. Owner kapalıyken zamanlayıcı çalışmaz; yeniden başladığında kalıcı politikaları ve yarım kalmış expiry intent'lerini okur. `owner-status --json` son taramayı ve sabit hata kodunu gösterir. TUI komutları `/retention`, `/retention keep REV`, `/retention expires UTC REV CONSENT` ve `/retention run-due` biçimindedir; `CONSENT` yukarıdaki tam acknowledgement metnidir.
+
+`KEEP`, `NOT_DUE`, `DUE`, `BLOCKED`, `PENDING` ve `PURGED` durumları ayrı gösterilir. Aktif görev, UNKNOWN süreç/maliyet riski, tutulan alt görev veya başka aile owner'ı silmeyi engeller; zamanlayıcı bunları iptal etmez veya riski silmez. Başlayan kalıcı silme intent'i `--keep` ile geri alınamaz; otomatik retry aynı orijinal planı kullanır. Kullanıcının başlattığı manuel silme komutu zamanlayıcı tarafından yeniden yürütülmez.
+
+Purge yalnız bu authority ailesinin yönettiği görev içeriği, kayıtlı backup/export/preview/support/evaluator kopyaları ve restored store'ları kapsar. Bir backup birden fazla görevi içeriyorsa süre dolan görevin verilerini taşıyan ortak backup dosyaları da kaldırılır; o backup diğer görevleri restore etmek için kullanılamaz. Eski backup'lar içeriği yeniden canlandıramaz. Canlı kaynak dizini, kayıtlı olmayan dış kopyalar ve model sağlayıcısındaki veriler bu işlemle silinmez. Minimal kernel/ledger/tombstone kayıtları korunur; fiziksel medya erasure garantisi yoktur. Metadata/audit retention, UNKNOWN durumunda explicit raw redaction ve checkpoint/compaction ayrı geliştirme kapsamındadır. [Retention sözleşmesi](docs/adr/0019-managed-content-retention.md).
+
 ## UNKNOWN model riskini hesapta kapatma (0.9)
 
 UNKNOWN model response/usage kendiliğinden retry edilmez. Kullanıcı `status/resources` içindeki exact reservation/request/profile ve current task sequence'i inceleyip `reconcile-model-risk TASK --store STORE --command-file risk.json --json` verebilir:

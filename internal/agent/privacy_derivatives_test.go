@@ -127,7 +127,7 @@ func TestPrivacyDeletesExportPreviewSupportAndInterruptedAllocation(t *testing.T
 	if err != nil || len(plan.Copies) != 4 {
 		t.Fatal("derivatives absent", plan.Copies, err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"delete-managed-derivatives", plan}); err != nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-managed-derivatives", Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	for _, copy := range plan.Copies {
@@ -169,7 +169,7 @@ func TestPrivacyCopyAllocationRejectsForeignFileAndRootReplacement(t *testing.T)
 	if err = os.Mkdir(output, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"replaced-root", plan}); err == nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "replaced-root", Plan: plan}); err == nil {
 		t.Fatal("replacement root accepted")
 	}
 	// No intent was written: the original task is still fully readable.
@@ -188,7 +188,7 @@ func TestPrivacyDuplicateCommandIDRejectedBeforeIrreversibleIntent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{history.Records[0].Event.ID, plan}); err == nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: history.Records[0].Event.ID, Plan: plan}); err == nil {
 		t.Fatal("existing command ID reused")
 	}
 	root, _ := openPrivacyRoot(*s.privacy)
@@ -206,7 +206,7 @@ func TestPrivacyDuplicateCommandIDRejectedBeforeIrreversibleIntent(t *testing.T)
 	attacked.Objects[0].Path = "../outside"
 	attacked.ObjectsDigest = deletionObjectsDigest(attacked)
 	attacked.Digest = deletionDigest(attacked)
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"escape", attacked}); err == nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "escape", Plan: attacked}); err == nil {
 		t.Fatal("task path escaped")
 	}
 }

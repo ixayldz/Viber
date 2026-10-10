@@ -1,6 +1,6 @@
 # ADR 0017: Privacy checkpoint/retention için kabul tasarımı
 
-10 Ekim 2026. **ÖNERİ; runtime henüz uygulanmadı.** [ADR 0016](0016-privacy-authority-allocation.md) allocation crash yolunu kapatır; bu ADR compaction/retention/migration kararını önceden sabitler. Yalnız bir JSON snapshot yazmak journal silme yetkisi sağlamaz.
+10 Ekim 2026. **Checkpoint/compaction/migration ÖNERİ; bu backend runtime henüz uygulanmadı.** [ADR 0016](0016-privacy-authority-allocation.md) allocation crash yolunu kapatır; managed task content expiry ayrı [ADR 0019](0019-managed-content-retention.md) ile uygulanmıştır. Bu ADR kalan metadata compaction/retention/migration kararını önceden sabitler. Yalnız bir JSON snapshot yazmak journal silme yetkisi sağlamaz.
 
 ## Authority ve storage formatı
 

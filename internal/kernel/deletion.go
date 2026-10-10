@@ -1,6 +1,8 @@
 package kernel
 
-import c "github.com/ixayldz/Viber/internal/contracts"
+import (
+	c "github.com/ixayldz/Viber/internal/contracts"
+)
 
 func deletionAllowed(state c.TaskState, event c.Event, p c.EventPayload) bool {
 	if p.Deletion == nil || p.Deletion.Validate() != nil || state.Execution != c.Terminated || p.DocumentDigest != "" || p.SnapshotDigest != "" || p.Verification != nil || p.Tokens != nil || p.Resources != nil || p.State != "" || p.Outcome != "" || p.Quality != "" || p.Fulfillment != "" || p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.InputID != "" || p.InputDigest != "" || p.QueueID != "" || p.InputBytes != 0 || p.RequiredObligations != 0 || p.CommandError != nil || p.Reason != p.Deletion.PlanDigest {
@@ -21,7 +23,13 @@ func deletionAllowed(state c.TaskState, event c.Event, p c.EventPayload) bool {
 		}
 	}
 	if event.Type == "TaskContentDeleted" {
-		return event.Actor == "user" && state.Deletion == nil && p.Deletion.Status == "PENDING" && p.Deletion.OriginalDocument == state.DocumentDigest
+		actorOK := event.Actor == "user" && p.Deletion.RetentionDigest == ""
+		if event.Actor == "retention" && p.Deletion.RetentionDigest != "" {
+			deadline, err := c.RetentionTime(p.Deletion.RetentionDeadline)
+			observed, timeErr := c.RetentionTime(event.Timestamp)
+			actorOK = err == nil && timeErr == nil && !observed.Before(deadline)
+		}
+		return actorOK && state.Deletion == nil && p.Deletion.Status == "PENDING" && p.Deletion.OriginalDocument == state.DocumentDigest
 	}
 	if event.Type == "TaskDeletionPurged" && event.Actor == "kernel" && state.Deletion != nil && state.Deletion.Status == "PENDING" && p.Deletion.Status == "PURGED" {
 		expected := *state.Deletion

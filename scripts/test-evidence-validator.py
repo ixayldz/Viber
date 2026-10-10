@@ -66,6 +66,34 @@ samples = [
     ("failure parents in foreign package", package_events(foreign, [(test, "pass") for test in failures]), ["--vault-failure"], False),
 ]
 
+retention = {
+    "contracts": ["TestRetentionConsentRejectsImplicitScopeActorClockAndNoncanonicalDeadline"],
+    "kernel": ["TestRetentionExpiryRequiresDistinctActorElapsedDeadlineAndNoUnknownRisk"],
+    "agent": [
+        "TestRetentionActualExpiryPurgesManagedBackupWithoutChangingRiskLedger",
+        "TestRetentionRevisionConsentDedupAndEarlyForgeryPreserveContent",
+        "TestRetentionActualCrashRecoveryUsesImmutableExpiryIntent",
+        "TestRetentionBoundedPassDoesNotStarveEligibleTasksBehindActiveTasks",
+        "TestRetentionUnknownRiskAndRetainedDescendantRemainPinned",
+        "TestRetentionReservesPendingDeletionReceiptNamespacesAndRejectsRehashedConsent",
+        "TestRetentionPendingExpiryKeepsConsentAndPurgesRegisteredRestoredOwner",
+    ],
+    "owner": ["TestOwnerActualRetentionTimerPurgesAfterDeadlineAndStatusHasNoMutableAlias"],
+    "cli": ["TestRetentionCLIAndUIUseBoundedOwnerCommandsAndExplicitConsent", "TestRetentionMissingStoreAndInvalidFlagsHaveNoEffects"],
+}
+retention_events = []
+for suffix, names in retention.items():
+    retention_events += package_events("github.com/ixayldz/Viber/internal/" + suffix, [(name, "pass") for name in names])
+samples.append(("retention complete identities", retention_events, ["--retention"], True))
+for suffix, name in [("owner", retention["owner"][0]), ("agent", retention["agent"][2]), ("agent", retention["agent"][3]), ("contracts", retention["contracts"][0])]:
+    events = [dict(event) for event in retention_events]
+    for event in events:
+        if event.get("Test") == name and event["Action"] == "pass":
+            event["Action"] = "skip"
+    samples.append(("retention cannot skip " + suffix + ":" + name, events, ["--retention"], False))
+events = [dict(event, Package=foreign) for event in retention_events]
+samples.append(("retention foreign identities", events, ["--retention"], False))
+
 with tempfile.TemporaryDirectory(prefix="viber-evidence-validator-") as directory:
     evidence = Path(directory) / "fixture.jsonl"
     for name, events, flags, accepted in samples:

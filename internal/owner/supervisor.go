@@ -2,6 +2,7 @@ package owner
 
 import (
 	"context"
+	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/ipc"
 	"github.com/ixayldz/Viber/internal/store"
@@ -16,17 +17,32 @@ func (o *Owner) StartDetached(ctx context.Context, task, id string) (View, error
 }
 
 type SupervisorStatus struct {
-	SchemaVersion int      `json:"schema_version"`
-	Owner         ipc.Info `json:"owner"`
-	ActiveTask    string   `json:"active_task,omitempty"`
-	InvocationID  string   `json:"invocation_id,omitempty"`
-	Closing       bool     `json:"closing"`
+	Retention      *agent.RetentionRun `json:"retention_maintenance,omitempty"`
+	RetentionError string              `json:"retention_maintenance_error,omitempty"`
+	SchemaVersion  int                 `json:"schema_version"`
+	Owner          ipc.Info            `json:"owner"`
+	ActiveTask     string              `json:"active_task,omitempty"`
+	InvocationID   string              `json:"invocation_id,omitempty"`
+	Closing        bool                `json:"closing"`
 }
 
 func (o *Owner) SupervisorStatus() SupervisorStatus {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	status := SupervisorStatus{SchemaVersion: 1, Owner: o.Server.Info, Closing: o.closed}
+	status := SupervisorStatus{SchemaVersion: 1, Owner: o.Server.Info, Closing: o.closed, Retention: o.retentionLast, RetentionError: o.retentionError}
+	if o.retentionLast != nil {
+		raw, err := c.CanonicalV1(o.retentionLast)
+		var owned agent.RetentionRun
+		if err == nil {
+			err = c.DecodeStrict(raw, &owned)
+		}
+		if err == nil {
+			status.Retention = &owned
+		} else {
+			status.Retention = nil
+			status.RetentionError = "RETENTION_STATUS_INTEGRITY"
+		}
+	}
 	if o.active != nil {
 		status.ActiveTask = o.active.task
 		status.InvocationID = o.active.id

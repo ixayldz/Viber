@@ -223,6 +223,7 @@ func purgeDeletionStore(ctx context.Context, bound DeletionStore, authority Priv
 	state := states[command.Plan.TaskID]
 	plan := command.Plan
 	tombstone := c.TaskDeletion{SchemaVersion: 1, PlanDigest: plan.Digest, OriginalDocument: bound.DocumentDigest, ObjectsDigest: plan.ObjectsDigest, Scope: plan.Scope, Status: "PENDING", Watermark: plan.Watermark}
+	actor := bindRetentionTombstone(command, &tombstone)
 	id := "privacy-scope-" + c.HashBytes([]byte(command.CommandID+":"+bound.Scope.PhysicalRoot))
 	if state.Deletion == nil {
 		// A retry before this scope's first event still requires its original cursor.
@@ -233,7 +234,7 @@ func purgeDeletionStore(ctx context.Context, bound DeletionStore, authority Priv
 		if info != bound.Store {
 			return c.Fail(c.StaleBase, "restored scope journal changed after deletion intent")
 		}
-		state, err = journal.Execute(ctx, store.Command{ID: id, TaskID: plan.TaskID, Actor: "user", ExpectedTaskSeq: bound.TaskSequence, Type: "TaskContentDeleted", Payload: c.EventPayload{Deletion: &tombstone, Reason: plan.Digest}})
+		state, err = journal.Execute(ctx, store.Command{ID: id, TaskID: plan.TaskID, Actor: actor, ExpectedTaskSeq: bound.TaskSequence, Type: "TaskContentDeleted", Payload: c.EventPayload{Deletion: &tombstone, Reason: plan.Digest}})
 		if err != nil {
 			return err
 		}

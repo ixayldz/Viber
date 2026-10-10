@@ -47,7 +47,7 @@ func TestTaskContentDeletionPurgesCASMaterializationsAndManagedBackups(t *testin
 	if len(plan.Objects) == 0 || len(plan.Copies) != 1 {
 		t.Fatal("incomplete plan", plan)
 	}
-	command := DeletionCommand{"delete-one", plan}
+	command := DeletionCommand{CommandID: "delete-one", Plan: plan}
 	first, err := s.DeleteContent(ctx, command)
 	if err != nil || first.Status != "PURGED_MANAGED_LOCAL_CONTENT" {
 		t.Fatal(first, err)
@@ -154,14 +154,14 @@ func TestTaskContentDeletionRefusesUnknownActiveAndRetainedDescendants(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"delete-child", childPlan}); err != nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-child", Plan: childPlan}); err != nil {
 		t.Fatal(err)
 	}
 	parentPlan, err := s.DeletionPreview(ctx, options.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"delete-parent", parentPlan}); err != nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-parent", Plan: parentPlan}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -172,7 +172,7 @@ func TestDeletionIntentRecoversAfterProcessRestartAndPartialUnlink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := DeletionCommand{"interrupted-deletion", plan}
+	command := DeletionCommand{CommandID: "interrupted-deletion", Plan: plan}
 	registry, err := openPrivacyRoot(*s.privacy)
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestDeletionRejectsStalePlanAndChangedManagedCopyWithoutFalseReceipt(t *tes
 	if _, err = s.Archive.PutBytes(options.TaskID, []byte("orphan after preview")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"stale", first}); err == nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "stale", Plan: first}); err == nil {
 		t.Fatal("stale object set accepted")
 	}
 	backup := filepath.Join(t.TempDir(), "backup")
@@ -233,7 +233,7 @@ func TestDeletionRejectsStalePlanAndChangedManagedCopyWithoutFalseReceipt(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := DeletionCommand{"changed-backup", plan}
+	command := DeletionCommand{CommandID: "changed-backup", Plan: plan}
 	// Persist intent, then alter a managed byte as a hostile external writer.
 	registry, _ := openPrivacyRoot(*s.privacy)
 	view, _ := readPrivacy(registry)
@@ -290,7 +290,7 @@ func TestDeletionAuthorityLossAndConcurrentRestoredOwnerFailClosed(t *testing.T)
 	if err != nil || len(plan.Stores) != 1 {
 		t.Fatal("restored scope not traced", plan.Stores, err)
 	}
-	if _, err = s.DeleteContent(ctx, DeletionCommand{"delete-family-scopes", plan}); err != nil {
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-family-scopes", Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	clone, err = OpenExisting(ctx, restored)

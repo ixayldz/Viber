@@ -12,6 +12,7 @@ parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
 parser.add_argument("--vault-failure", action="store_true")
 parser.add_argument("--privacy", action="store_true")
+parser.add_argument("--retention", action="store_true")
 parser.add_argument("--retrieval", action="store_true")
 parser.add_argument("--delivery", action="store_true")
 args = parser.parse_args()
@@ -20,6 +21,19 @@ args = parser.parse_args()
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestSupervisorShutdownCannotCompleteWhileStoreLockRemainsHeld": "github.com/ixayldz/Viber/internal/cli",
+    "TestRetentionConsentRejectsImplicitScopeActorClockAndNoncanonicalDeadline": "github.com/ixayldz/Viber/internal/contracts",
+    "TestRetentionExpiryRequiresDistinctActorElapsedDeadlineAndNoUnknownRisk": "github.com/ixayldz/Viber/internal/kernel",
+    "TestRetentionActualExpiryPurgesManagedBackupWithoutChangingRiskLedger": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionRevisionConsentDedupAndEarlyForgeryPreserveContent": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionActualCrashRecoveryUsesImmutableExpiryIntent": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionBoundedPassDoesNotStarveEligibleTasksBehindActiveTasks": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionUnknownRiskAndRetainedDescendantRemainPinned": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionReservesPendingDeletionReceiptNamespacesAndRejectsRehashedConsent": "github.com/ixayldz/Viber/internal/agent",
+    "TestRetentionPendingExpiryKeepsConsentAndPurgesRegisteredRestoredOwner": "github.com/ixayldz/Viber/internal/agent",
+    "TestOwnerActualRetentionTimerPurgesAfterDeadlineAndStatusHasNoMutableAlias": "github.com/ixayldz/Viber/internal/owner",
+    "TestRetentionCLIAndUIUseBoundedOwnerCommandsAndExplicitConsent": "github.com/ixayldz/Viber/internal/cli",
+    "TestRetentionMissingStoreAndInvalidFlagsHaveNoEffects": "github.com/ixayldz/Viber/internal/cli",
     "TestUnlinkedOpenMetadataIsAbsentWhileHardlinkRemainsDenied": "github.com/ixayldz/Viber/internal/fileguard",
     "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins": "github.com/ixayldz/Viber/internal/agent",
@@ -114,6 +128,20 @@ HOSTILE_SCENARIOS = {
     "TestActualDockerHostileProcessMatrix/memory-exhaustion",
 }
 EXPECTED_TEST_PACKAGES.update({name: "github.com/ixayldz/Viber/internal/runner" for name in HOSTILE_SCENARIOS})
+RETENTION_ACCEPTANCE = {
+    "TestRetentionConsentRejectsImplicitScopeActorClockAndNoncanonicalDeadline",
+    "TestRetentionExpiryRequiresDistinctActorElapsedDeadlineAndNoUnknownRisk",
+    "TestRetentionActualExpiryPurgesManagedBackupWithoutChangingRiskLedger",
+    "TestRetentionRevisionConsentDedupAndEarlyForgeryPreserveContent",
+    "TestRetentionActualCrashRecoveryUsesImmutableExpiryIntent",
+    "TestRetentionBoundedPassDoesNotStarveEligibleTasksBehindActiveTasks",
+    "TestRetentionUnknownRiskAndRetainedDescendantRemainPinned",
+    "TestRetentionReservesPendingDeletionReceiptNamespacesAndRejectsRehashedConsent",
+    "TestRetentionPendingExpiryKeepsConsentAndPurgesRegisteredRestoredOwner",
+    "TestOwnerActualRetentionTimerPurgesAfterDeadlineAndStatusHasNoMutableAlias",
+    "TestRetentionCLIAndUIUseBoundedOwnerCommandsAndExplicitConsent",
+    "TestRetentionMissingStoreAndInvalidFlagsHaveNoEffects",
+}
 
 events = [json.loads(line) for line in args.evidence.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
 started = {(e["Package"], e["Test"]) for e in events if e.get("Action") == "run" and e.get("Test")}
@@ -125,6 +153,8 @@ finished = {e["Package"] for e in events if e.get("Action") in {"pass", "skip"} 
 if failed or not passed or packages != finished or started != passed | skipped:
     raise SystemExit("FAIL: incomplete or failing Go test evidence")
 required = set()
+if args.retention or args.privacy:
+    required |= RETENTION_ACCEPTANCE
 if args.docker or args.rootless:
     required |= HOSTILE_SCENARIOS
 if args.delivery:
@@ -154,6 +184,7 @@ if args.disk_pressure:
     required.add("TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen")
 if args.privacy:
     required |= {
+        "TestSupervisorShutdownCannotCompleteWhileStoreLockRemainsHeld",
         "TestUnlinkedOpenMetadataIsAbsentWhileHardlinkRemainsDenied",
         "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory",
         "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins",

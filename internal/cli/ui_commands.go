@@ -11,6 +11,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/owner"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -32,9 +33,11 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 		id = value.CommandID
 	case agent.ModelSwitch:
 		id = value.CommandID
+	case agent.RetentionOptions:
+		id = value.CommandID
 	}
 	task := u.task
-	if action == "privacy-capacity" || action == "privacy-reserve-replenish" || action == "privacy-operation-retire" {
+	if action == "retention-run" || action == "privacy-capacity" || action == "privacy-reserve-replenish" || action == "privacy-operation-retire" {
 		task = ""
 	}
 	raw, routed, err := ownerCall(ctx, u.directory, task, action, id, payload)
@@ -131,6 +134,40 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	command, arg, _ := strings.Cut(text, " ")
 	arg = strings.TrimSpace(arg)
 	switch command {
+	case "/retention":
+		if arg == "" {
+			raw, err := u.call(ctx, "retention-status", nil)
+			return string(raw), false, err
+		}
+		if arg == "run-due" {
+			raw, err := u.call(ctx, "retention-run", nil)
+			return string(raw), false, err
+		}
+		parts := strings.Fields(arg)
+		if len(parts) != 2 && len(parts) != 4 {
+			return "", false, c.Fail(c.InvalidArgument, "retention accepts keep REVISION or expires UTC REVISION CONSENT or run-due")
+		}
+		options := agent.RetentionOptions{Mode: "KEEP"}
+		revisionIndex := 1
+		if len(parts) == 4 && parts[0] == "expires" {
+			options.Mode = "EXPIRE"
+			options.Deadline = parts[1]
+			options.Acknowledgement = parts[3]
+			revisionIndex = 2
+		} else if len(parts) != 2 || parts[0] != "keep" {
+			return "", false, c.Fail(c.InvalidArgument, "invalid retention action")
+		}
+		revision, err := strconv.ParseInt(parts[revisionIndex], 10, 64)
+		if err != nil || revision < 0 {
+			return "", false, c.Fail(c.InvalidArgument, "current retention revision required")
+		}
+		options.ExpectedRevision = revision
+		options.CommandID, err = resolveCommandID("")
+		if err != nil {
+			return "", false, err
+		}
+		raw, err := u.call(ctx, "retention-set", options)
+		return string(raw), false, err
 	case "/capacity":
 		if arg != "" && arg != "replenish" && arg != "retire-operations" {
 			return "", false, c.Fail(c.InvalidArgument, "capacity accepts optional replenish or retire-operations")
@@ -147,7 +184,7 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	case "/quit", "/detach":
 		return "UI detached; background task continues.", true, nil
 	case "/help":
-		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
+		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")

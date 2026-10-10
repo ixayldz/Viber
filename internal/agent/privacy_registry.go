@@ -66,21 +66,24 @@ type ManagedCopy struct {
 	Tasks         []string      `json:"tasks"`
 }
 type privacyRecord struct {
-	SchemaVersion int              `json:"schema_version"`
-	Sequence      int64            `json:"sequence"`
-	Previous      string           `json:"previous"`
-	Type          string           `json:"type"`
-	Copy          *ManagedCopy     `json:"copy,omitempty"`
-	Command       *DeletionCommand `json:"command,omitempty"`
-	Attempt       *privacyAttempt  `json:"attempt,omitempty"`
+	SchemaVersion int                     `json:"schema_version"`
+	Sequence      int64                   `json:"sequence"`
+	Previous      string                  `json:"previous"`
+	Type          string                  `json:"type"`
+	Copy          *ManagedCopy            `json:"copy,omitempty"`
+	Command       *DeletionCommand        `json:"command,omitempty"`
+	Attempt       *privacyAttempt         `json:"attempt,omitempty"`
+	Retention     *privacyRetentionRecord `json:"retention,omitempty"`
 }
 type privacyView struct {
-	Sequence  int64
-	Tail      string
-	Watermark int64
-	Copies    []ManagedCopy
-	Deletions map[string]DeletionCommand
-	Attempts  []privacyAttempt
+	Sequence          int64
+	Tail              string
+	Watermark         int64
+	Copies            []ManagedCopy
+	Deletions         map[string]DeletionCommand
+	Attempts          []privacyAttempt
+	Retentions        map[string]privacyRetentionRecord
+	RetentionCommands map[string]privacyRetentionRecord
 }
 
 func (authority PrivacyAuthority) validate() error {
@@ -145,7 +148,7 @@ func privacyLock(ctx context.Context, root *os.Root) (*os.File, error) {
 	}
 }
 func readPrivacy(root *os.Root) (privacyView, error) {
-	view := privacyView{Deletions: map[string]DeletionCommand{}, Copies: []ManagedCopy{}}
+	view := privacyView{Deletions: map[string]DeletionCommand{}, Copies: []ManagedCopy{}, Retentions: map[string]privacyRetentionRecord{}, RetentionCommands: map[string]privacyRetentionRecord{}}
 	dir, err := root.Open("records")
 	if err != nil {
 		return view, err
@@ -183,7 +186,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 		}
 		switch record.Type {
 		case "MANAGED_COPY":
-			if record.Copy == nil || record.Command != nil || record.Attempt != nil || validateManagedCopy(*record.Copy) != nil {
+			if record.Copy == nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || validateManagedCopy(*record.Copy) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "managed copy record invalid")
 			}
 			replaced := false
@@ -202,17 +205,28 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				view.Copies = append(view.Copies, *record.Copy)
 			}
 		case "DELETE_INTENT":
-			if record.Command == nil || record.Copy != nil || record.Attempt != nil || validateDeletionCommand(*record.Command) != nil {
+			if record.Command == nil || record.Copy != nil || record.Attempt != nil || record.Retention != nil || validateDeletionCommand(*record.Command) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "privacy intent invalid")
 			}
 			command := *record.Command
+			if retentionDeletionCollision(view, command) {
+				return view, c.Fail(c.StoreIntegrityError, "retention and deletion command identity collision")
+			}
+			if command.Expiry != nil {
+				policy, exists := view.Retentions[command.Plan.TaskID]
+				expected, _ := c.Digest(policy.Policy)
+				actual, _ := c.Digest(command.Expiry.Policy)
+				if !exists || actual != expected {
+					return view, c.Fail(c.StoreIntegrityError, "expiry used stale or missing retention consent")
+				}
+			}
 			if _, exists := view.Deletions[command.Plan.TaskID]; exists || command.Plan.Watermark != view.Watermark+1 {
 				return view, c.Fail(c.StoreIntegrityError, "privacy intent duplicate or watermark gap")
 			}
 			view.Watermark++
 			view.Deletions[command.Plan.TaskID] = command
 		case "ATTEMPT_LINEAGE":
-			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Attempt.validate() != nil {
+			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Retention != nil || record.Attempt.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid durable attempt lineage")
 			}
 			for _, prior := range view.Attempts {
@@ -227,6 +241,35 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				return view, c.Fail(c.StoreIntegrityError, "attempt was allocated after child deletion")
 			}
 			view.Attempts = append(view.Attempts, *record.Attempt)
+		case "RETENTION_POLICY":
+			if record.Retention == nil || record.Command != nil || record.Copy != nil || record.Attempt != nil || record.Retention.validate() != nil {
+				return view, c.Fail(c.StoreIntegrityError, "invalid retention record")
+			}
+			retention := *record.Retention
+			genesis, err := fileguard.ReadRegular(root, "authority.json", 4096)
+			var authority PrivacyAuthority
+			authorityDigest := ""
+			if err == nil && c.DecodeStrict(genesis, &authority) == nil {
+				authorityDigest, _ = c.Digest(authority)
+			}
+			if err != nil || authorityDigest != retention.Policy.AuthorityDigest {
+				return view, c.Fail(c.StoreIntegrityError, "retention authority mismatch")
+			}
+			if _, exists := view.Deletions[retention.Policy.TaskID]; exists {
+				return view, c.Fail(c.StoreIntegrityError, "retention cannot revise a deletion intent")
+			}
+			if _, exists := view.RetentionCommands[retention.CommandID]; exists || retention.Policy.Revision != view.Retentions[retention.Policy.TaskID].Policy.Revision+1 {
+				return view, c.Fail(c.StoreIntegrityError, "retention command duplicate or revision gap")
+			}
+			for _, deletion := range view.Deletions {
+				for _, id := range deletionCommandIDs(deletion) {
+					if id == retention.CommandID {
+						return view, c.Fail(c.StoreIntegrityError, "retention command collides with deletion")
+					}
+				}
+			}
+			view.Retentions[retention.Policy.TaskID] = retention
+			view.RetentionCommands[retention.CommandID] = retention
 		default:
 			return view, c.Fail(c.StoreIntegrityError, "unknown privacy journal record")
 		}

@@ -195,7 +195,11 @@ func waitSupervisorStopped(ctx context.Context, directory, ownerID string) error
 		if discoverErr == nil && info.ID != ownerID {
 			return c.Fail(c.Conflict, "another owner appeared during shutdown; do not stop it with the old request")
 		}
-		if discoverErr != nil && !errors.Is(discoverErr, ipc.ErrNoOwner) {
+		// On Windows an acknowledged shutdown can leave owner.json delete-pending
+		// while another native reader still holds its inode. ACCESS_DENIED is not
+		// absence: retry within the existing bound, and still require ErrNoOwner
+		// plus the released store lock before returning success.
+		if discoverErr != nil && !errors.Is(discoverErr, ipc.ErrNoOwner) && !errors.Is(discoverErr, os.ErrPermission) {
 			return discoverErr
 		}
 		if errors.Is(discoverErr, ipc.ErrNoOwner) {
