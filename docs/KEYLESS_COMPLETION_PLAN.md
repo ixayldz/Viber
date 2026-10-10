@@ -8,7 +8,7 @@ Her paket gerçek CLI/owner akışına bağlı uygulama, saldırgan ve recovery 
 
 | Paket | Bağımlılık | Çalışan sonuç ve kabul | Durum |
 |---|---|---|---|
-| K01 CI/güvenlik | Yok | Go 1.27.2; üç OS full test/vet/vulnerability; Linux race/tüm fuzz target'ları; migration; actual rootful Docker; package-bound mandatory evidence; aggregate foundation | `6f0c529` GREEN; vault cleanup regression fix ve evidence identity/fault kontratı kodlandı; yeni exact revision tekrar ölçülür |
+| K01 CI/güvenlik | Yok | Go 1.27.2; üç OS full test/vet/vulnerability; Linux race/tüm fuzz target'ları; migration; actual rootful Docker; package-bound mandatory evidence; aggregate foundation | `6f0c529` ve `0139535` exact revision bütün yedi foundation job'ında GREEN; yeni runtime değişikliklerinde tekrar ölçülür |
 | K02 lisans/vault/docs | K01 | Kullanıcının seçtiği MIT; Unix helper environment allowlist; actual Secret Service/Keychain unique-item roundtrip; çelişkili plaintext/fencing/eval belgeleri düzeltilir | MIT/native roundtrip PASS; ancestor trust, bounded pipe/timeout/protocol ve rotation failure matrix kodlandı; native locked/multi-user kabulü ayrı |
 | K03 owner retrieval cache | K01 | Task/candidate/policy/source/version binding; fresh hash validation; single build; aktif retired lease quota; TTL/LRU/invalidation; gerçek owner warm benchmark | Kodlandı; Windows kabulü geçti |
 | K04 relevance/spans/ölçek | K03 | Body/path ayrımı; dosya başına üç örtüşmeyen span; truncation; real repo recall@5/correct span/stale tests; OS peak resident ölçümü; büyük repo partition/coverage | Bounded capture'da lazy partition/coverage kodlandı; exact revision kabulü tekrar ölçülür |
@@ -35,3 +35,11 @@ Normal filesystem advisory lock'u, hash kontrolü ile write arasındaki dış wr
 - **API anahtarı isteyen kabul:** OpenAI/Anthropic gerçek protocol/usage/quota/rate/cancel ve model kalitesi. Offline fixtures gerçek provider kabulü diye sayılmaz.
 
 İlk stable A–D ile E–G deneyleri ayrı gate taşır. Kullanıcının bütün PRD vizyonu talebi için FR-28..42 deneyleri de kendi bağımlılık/egress/eval guard'larıyla ele alınır; kapalı deney `DONE` olarak işaretlenmez. PRD yüzdesi test sayısından hesaplanmaz ve dış kabul olmadan `release_ready:true` üretilmez.
+
+## 10 Ekim teknik denetiminin plana işlenmesi
+
+[Güncel kodla karşılaştırma](AUDIT_RECONCILIATION_2026_10_10.md) rapordaki eski CI/vault durumunu ve zaten uygulanmış alt işleri ayırır. F-01–F-08 tam olarak kapanmış sayılmaz. Foundation sonrası öncelik K06 metadata lifecycle → K07 bütün managed payload writer'larında ortak fiziksel budget → K09 kapasite remediation/K11 legacy inventory → K05 exclusive live delivery şeklindedir. Mevcut preview/reverify ve native vault dilimleri yeniden kodlanmaz.
+
+K06 baseline: gerçek 2048 journal/64 MiB ve 8192 katalog sınırları; 0/256/1024/1536/2048 replay/admission ölçümü; 10 reopen/replay; reserve/genesis/bind/scope/checkpoint publication fault sınırları. Checkpoint current external authority, hash-chain continuity, deletion watermark, old-backup rejection, lineage ve UNKNOWN/recovery pin'lerini korumadan yayınlanmaz. Allocation kaydıyla ve exact physical-root kanıtıyla bağlanmamış authority artıklarının inventory/cleanup kabulü ayrı gerekir. Prefix veya dizin yaşı silme yetkisi değildir.
+
+K07 baseline: backup/export/restore/evaluator/report dahil tüm staged/final/temp/outstanding payload'ların writer inventory ve admission/settlement sözleşmesi; eşzamanlı exhaustion, failed writer ve restart recovery; bounded disk-pressure ve kontrol yolunun korunması. Native power-loss veya kullanıcı tarafından ertelenmiş privileged engine kabulü fixture sonuçlarıyla kapatılmaz. F-06 numeric status gelecekteki izin değildir; F-08 schema-1 inspect otomatik lineage migration değildir.
