@@ -162,11 +162,17 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 			return "", false, c.Fail(c.InvalidArgument, "current retention revision required")
 		}
 		options.ExpectedRevision = revision
+		if options.Mode == "EXPIRE" && options.Acknowledgement != c.RetentionAcknowledgement {
+			return "", false, c.Fail(c.PolicyDenied, retentionConsentNotice+" Explicit managed-content expiry consent required.")
+		}
 		options.CommandID, err = resolveCommandID("")
 		if err != nil {
 			return "", false, err
 		}
 		raw, err := u.call(ctx, "retention-set", options)
+		if options.Mode == "EXPIRE" && err == nil {
+			return retentionConsentNotice + "\n" + string(raw), false, nil
+		}
 		return string(raw), false, err
 	case "/capacity":
 		if arg != "" && arg != "replenish" && arg != "retire-operations" {
@@ -184,7 +190,7 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	case "/quit", "/detach":
 		return "UI detached; background task continues.", true, nil
 	case "/help":
-		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
+		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Entire shared backups can be removed, including other tasks' restore paths; advancing the system UTC clock can trigger expiry early. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")

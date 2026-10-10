@@ -40,7 +40,9 @@ jobs:
       - name: Reachable vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Evidence validator identity and gap contract
-        run: python scripts/test-evidence-validator.py
+        run: |
+          python scripts/test-evidence-validator.py
+          python scripts/test-portable-package.py
       - name: Full tests
         run: |
           mkdir -p evidence
@@ -89,7 +91,13 @@ jobs:
           mkdir -p evidence
           docker version > evidence/docker-version.txt
           docker info > evidence/docker-info.txt
-          docker pull "$VIBER_DOCKER_TEST_IMAGE"
+          # Pulling an immutable test image is idempotent. Bound registry
+          # retries, preserve the digest, and fail before tests if unavailable.
+          for attempt in 1 2 3; do
+            if docker pull "$VIBER_DOCKER_TEST_IMAGE"; then break; fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            sleep "$((attempt * 10))"
+          done
           set -o pipefail
           go test -p 1 -json -count=1 -timeout 15m ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation | tee evidence/docker.jsonl
           python3 scripts/verify-test-results.py evidence/docker.jsonl --docker --delivery
@@ -166,3 +174,84 @@ jobs:
           VAULT_RESULT: ${{ needs.vault.result }}
           ROOTLESS_RESULT: ${{ needs.rootless.result }}
         run: test "$TEST_RESULT" = success && test "$DOCKER_RESULT" = success && test "$VAULT_RESULT" = success && test "$ROOTLESS_RESULT" = success
+  packages:
+    # Fork/PR code receives no signing authority. Build/smoke is separated from
+    # the signer, which only downloads archives and never executes a binary.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'ixayldz/Viber'
+    needs: foundation
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Frozen native engineering package and first offline task
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:GOMODCACHE=Join-Path (Get-Location) '.cache/go-mod'
+          $env:GOCACHE=Join-Path (Get-Location) '.cache/go-build'
+          go mod download
+          if($LASTEXITCODE-ne 0){throw 'Pinned dependency download failed'}
+          $taskTarget=(& go env GOOS).Trim()+'/'+(& go env GOARCH).Trim()
+          if($LASTEXITCODE-ne 0 -or $taskTarget-notin @('windows/amd64','linux/amd64','darwin/arm64')){throw 'Unsupported native package host'}
+          ./scripts/package.ps1 -Revision $env:GITHUB_SHA -Output .cache/native-bundle -Targets @($taskTarget)
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          python scripts/portable-package.py --bundle .cache/native-bundle --output evidence/portable --revision $env:GITHUB_SHA
+          if($LASTEXITCODE-ne 0){throw 'Native portable package acceptance failed'}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: portable-${{ matrix.os }}-${{ github.sha }}
+          path: evidence/portable/
+          if-no-files-found: error
+  attest-packages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'ixayldz/Viber'
+    needs: [foundation, packages]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: portable-*-${{ github.sha }}
+          path: packages
+          merge-multiple: false
+      - name: Require all three native archives
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          archives=(packages/**/*.zip packages/**/*.tar.gz)
+          test "${#archives[@]}" = 3
+      - name: Attest immutable portable archive bytes
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            packages/**/*.zip
+            packages/**/*.tar.gz
+      - name: Verify consumer repo, workflow, source ref and exact revision
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar nullglob
+          archives=(packages/**/*.zip packages/**/*.tar.gz)
+          for archive in "${archives[@]}"; do
+            gh attestation verify "$archive" -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: portable-provenance-${{ github.sha }}
+          path: ${{ steps.provenance.outputs.bundle-path }}
+          if-no-files-found: error

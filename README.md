@@ -4,7 +4,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 **Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.
 
-[Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+[Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
@@ -23,7 +23,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Varsayılan fixture profili `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, metadata/audit retention ve checkpoint, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, metadata/audit retention ve checkpoint, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı tarihsel değerlendirme [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -39,6 +39,8 @@ TUI, background owner, detach/attach, durable queue, compaction, kaynak hesaplar
 Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir. Kullanıcının sonraki onayıyla geçici privileged engine üzerinde gerçek rootful restart/fencing geçti; bu hosttaki nested rootless profil gerekli kaynak controller'ları olmadığı için reddedildi. Ayrı disposable Linux CI'da Docker CE 28.0.4/rootless/cgroup2/systemd profilinde gerçek restart, enforcement ve beş düşmanca süreç senaryosu geçti. Bu sonuç yalnız ölçülen destek profilini kapsar. [Güncel kabul kaydı](docs/VALIDATION.md) ve [PRD teslim planı](docs/KEYLESS_DELIVERY_PLAN.md).
 
 ## Kurulum
+
+Go derleyicisi kullanmadan portable engineering paketini indirme/doğrulama/kurulum ve ilk görev akışı [GitHub paket kılavuzunda](docs/INSTALL.md) anlatılır. Paket CI native smoke ve ayrı OIDC provenance kabulü gerektirir; public stable release kapıları henüz kapalıdır. Aşağıdaki yol kaynak derlemesidir.
 
 Henüz yayımlanmış installer veya paket yöneticisi dağıtımı yoktur. Kaynaktan derleyin:
 
@@ -582,7 +584,7 @@ Background owner başlangıçta ve her dakika süre dolumunu tarar. Aktif invoca
 
 `KEEP`, `NOT_DUE`, `DUE`, `BLOCKED`, `PENDING` ve `PURGED` durumları ayrı gösterilir. Aktif görev, UNKNOWN süreç/maliyet riski, tutulan alt görev veya başka aile owner'ı silmeyi engeller; zamanlayıcı bunları iptal etmez veya riski silmez. Başlayan kalıcı silme intent'i `--keep` ile geri alınamaz; otomatik retry aynı orijinal planı kullanır. Kullanıcının başlattığı manuel silme komutu zamanlayıcı tarafından yeniden yürütülmez.
 
-Purge yalnız bu authority ailesinin yönettiği görev içeriği, kayıtlı backup/export/preview/support/evaluator kopyaları ve restored store'ları kapsar. Bir backup birden fazla görevi içeriyorsa süre dolan görevin verilerini taşıyan ortak backup dosyaları da kaldırılır; o backup diğer görevleri restore etmek için kullanılamaz. Eski backup'lar içeriği yeniden canlandıramaz. Canlı kaynak dizini, kayıtlı olmayan dış kopyalar ve model sağlayıcısındaki veriler bu işlemle silinmez. Minimal kernel/ledger/tombstone kayıtları korunur; fiziksel medya erasure garantisi yoktur. Metadata/audit retention, UNKNOWN durumunda explicit raw redaction ve checkpoint/compaction ayrı geliştirme kapsamındadır. [Retention sözleşmesi](docs/adr/0019-managed-content-retention.md).
+Purge yalnız bu authority ailesinin yönettiği görev içeriği, kayıtlı backup/export/preview/support/evaluator kopyaları ve restored store'ları kapsar. Bir backup birden fazla görevi içeriyorsa süre dolan görevin verilerini taşıyan ortak backup dosyaları da kaldırılır; o backup diğer görevleri restore etmek için kullanılamaz. Eski backup'lar içeriği yeniden canlandıramaz. Canlı kaynak dizini, kayıtlı olmayan dış kopyalar ve model sağlayıcısındaki veriler bu işlemle silinmez. Minimal kernel/ledger/tombstone kayıtları korunur; fiziksel medya erasure garantisi yoktur. CLI expiry consent'i kabul etmeden önce stderr'de ortak backup/sistem saati uyarısını gösterir; JSON policy sonucu aynı kalır. TUI /help ve expiry sonucu aynı sınırları gösterir. Metadata/audit retention, UNKNOWN durumunda explicit raw redaction ve checkpoint/compaction ayrı geliştirme kapsamındadır. [Retention sözleşmesi](docs/adr/0019-managed-content-retention.md).
 
 ## UNKNOWN model riskini hesapta kapatma (0.9)
 

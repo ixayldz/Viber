@@ -11,13 +11,15 @@ import (
 	"os/signal"
 )
 
+const retentionConsentNotice = "Expiry can remove entire shared backups containing this task; other tasks may lose those restore paths. It uses the system UTC clock, so advancing that clock can trigger expiry early. Live source files are preserved."
+
 func runRetention(args []string, out, errout io.Writer) int {
 	task, args := promptFirst(args)
 	f := flags("retention", errout)
 	directory := f.String("store", "", "existing private store")
 	keep := f.Bool("keep", false, "disable automatic expiry; existing deletion intent remains immutable")
 	deadline := f.String("expires-at", "", "canonical UTC managed family content deadline")
-	ack := f.String("acknowledge", "", "explicit consent: "+c.RetentionAcknowledgement)
+	ack := f.String("acknowledge", "", retentionConsentNotice+" Explicit consent: "+c.RetentionAcknowledgement)
 	revision := f.Int64("revision", -1, "expected current retention revision; 0 for first policy")
 	id := f.String("command-id", "", "stable configuration command ID")
 	run := f.Bool("run-due", false, "bounded store-scoped expiry pass; does not cancel active work")
@@ -41,7 +43,12 @@ func runRetention(args []string, out, errout io.Writer) int {
 			return report(out, errout, err, *jsonMode)
 		}
 		if *ack != c.RetentionAcknowledgement {
-			return report(out, errout, c.Fail(c.PolicyDenied, "explicit managed-content expiry consent required"), *jsonMode)
+			return report(out, errout, c.Fail(c.PolicyDenied, retentionConsentNotice+" Explicit managed-content expiry consent required."), *jsonMode)
+		}
+		// Preserve the JSON result protocol; disclosure goes to the human channel
+		// before any owner dispatch or local configuration effect.
+		if _, err := fmt.Fprintln(errout, retentionConsentNotice); err != nil {
+			return 4
 		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

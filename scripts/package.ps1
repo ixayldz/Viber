@@ -3,6 +3,9 @@ $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskGo=Join-Path $taskRoot '.tools/go1.27.2/go/bin/go.exe'
 if(!(Test-Path -LiteralPath $taskGo)){$taskGo=(Get-Command go -ErrorAction Stop).Source}
+$env:GOTOOLCHAIN='local'
+$taskGoVersion=(& $taskGo version).Trim()
+if($LASTEXITCODE-ne 0 -or $taskGoVersion-notmatch '^go version go1\.27\.2 [a-zA-Z0-9]+/[a-zA-Z0-9]+$'){throw 'Exact Go 1.27.2 toolchain required'}
 $taskRevision=(& git -C $taskRoot rev-parse --verify ($Revision+'^{commit}')).Trim()
 if($LASTEXITCODE-ne 0 -or $taskRevision-notmatch '^[0-9a-f]{40}$'){throw 'Exact Git commit required'}
 $taskLicense=& git -C $taskRoot show ($taskRevision+':LICENSE') 2>$null
@@ -11,7 +14,8 @@ foreach($target in $Targets){if($target-notin @('windows/amd64','linux/amd64','d
 if($Targets.Count-eq 0 -or ($Targets | Select-Object -Unique).Count-ne $Targets.Count){throw 'Unique supported target list required'}
 if($Output-eq ''){$Output=Join-Path $taskRoot ('.cache/package-'+$taskRevision.Substring(0,12))}
 $taskOutput=[IO.Path]::GetFullPath($Output)
-$taskComparison=[StringComparison]::OrdinalIgnoreCase
+$taskComparison=[StringComparison]::Ordinal
+if([IO.Path]::DirectorySeparatorChar-eq '\'){$taskComparison=[StringComparison]::OrdinalIgnoreCase}
 $taskWorkspace=[IO.Path]::GetFullPath($taskRoot)+[IO.Path]::DirectorySeparatorChar
 if(!$taskOutput.StartsWith($taskWorkspace,$taskComparison)){throw 'Build output must stay inside this workspace'}
 if(Test-Path -LiteralPath $taskOutput){throw 'Fresh output required'}
@@ -41,30 +45,45 @@ $env:CGO_ENABLED='0'
 $taskOldGOOS=$env:GOOS
 $taskOldGOARCH=$env:GOARCH
 New-Item -ItemType Directory -Path $taskOutput | Out-Null
-$taskProof=@{schema_version=1;source_revision=$taskRevision;source_archive_sha256=(Get-FileHash $taskArchive -Algorithm SHA256).Hash.ToLower();go_version=(& $taskGo version);release_ready=$false;signature_status='UNSIGNED_ENGINEERING_BUNDLE';files=@();targets=@()}
+$taskProof=@{schema_version=1;source_revision=$taskRevision;source_archive_sha256=(Get-FileHash $taskArchive -Algorithm SHA256).Hash.ToLower();go_version=$taskGoVersion;release_ready=$false;signature_status='UNSIGNED_ENGINEERING_BUNDLE';files=@();targets=@()}
 Push-Location -LiteralPath $taskSource
 try{
  & $taskGo mod verify
  if($LASTEXITCODE-ne 0){throw 'Pinned dependency verification failed'}
- $taskModules=& $taskGo list -m -f '{{.Path}}|{{.Version}}|{{.Dir}}|{{.Sum}}' all
- if($LASTEXITCODE-ne 0){throw 'Module inventory failed'}
+ # Inventory the union of actual binary dependency closures, including
+ # platform-only imports. `list -m all` also resolves unused test/tool modules
+ # and incorrectly requires their downloads for an offline release build.
+ $taskModules=@()
+ foreach($target in $Targets){
+  $parts=$target -split '/';$env:GOOS=$parts[0];$env:GOARCH=$parts[1]
+  $taskRows=& $taskGo list -deps -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/viber
+  if($LASTEXITCODE-ne 0){throw ('Binary module inventory failed: '+$target)}
+  $taskModules+=@($taskRows | Where-Object {$_-ne ''})
+ }
+ $taskModules=@($taskModules | Sort-Object -Unique -CaseSensitive)
  $taskComponents=@()
  $taskAttribution=Join-Path $taskOutput 'licenses'
  New-Item -ItemType Directory -Path $taskAttribution | Out-Null
  [IO.File]::WriteAllText((Join-Path $taskOutput 'LICENSE'),($taskLicense -join [char]10)+[char]10,[Text.UTF8Encoding]::new($false))
  foreach($row in $taskModules){
-  $module=$row -split '\|',4
-  if(!$module[1]){continue}
-  $taskLicensePaths=@(Get-ChildItem -LiteralPath $module[2] -File | Where-Object {$_.Name -match '^(LICENSE|COPYING|NOTICE)(\..*)?$'} | Sort-Object Name)
-  if($taskLicensePaths.Count-eq 0){throw ('Dependency license material missing: '+$module[0])}
-  $taskName=($module[0] -replace '[^a-zA-Z0-9_.-]','_')+'-'+$module[1]
+  # JSON preserves native paths (including Unix pipe characters); no delimiter
+  # parsing can change the module directory or checksum attribution.
+  $taskModuleJSON=& $taskGo list -m -json $row
+  if($LASTEXITCODE-ne 0){throw ('Selected module metadata failed: '+$row)}
+  $module=($taskModuleJSON -join [char]10) | ConvertFrom-Json
+  if($module.Path-cne $row){throw 'Selected module identity mismatch'}
+  if(!$module.Version){continue}
+  if(!$module.Dir -or $module.Sum-notmatch '^h1:[A-Za-z0-9+/]{43}=$' -or $module.Replace){throw ('Pinned release dependency required: '+$row)}
+  $taskLicensePaths=@(Get-ChildItem -LiteralPath $module.Dir -File | Where-Object {$_.Name -match '^(LICENSE|COPYING|NOTICE)(\..*)?$'} | Sort-Object Name)
+  if($taskLicensePaths.Count-eq 0){throw ('Dependency license material missing: '+$module.Path)}
+  $taskName=($module.Path -replace '[^a-zA-Z0-9_.-]','_')+'-'+$module.Version
   $taskLicenseRefs=@()
   foreach($licenseFile in $taskLicensePaths){
    $taskRelative='licenses/'+$taskName+'-'+$licenseFile.Name
    [IO.File]::Copy($licenseFile.FullName,(Join-Path $taskOutput $taskRelative),$false)
    $taskLicenseRefs+=$taskRelative
   }
-  $taskComponents+=@{type='library';name=$module[0];version=$module[1];purl=('pkg:golang/'+$module[0]+'@'+$module[1]);properties=@(@{name='go:module:sum';value=$module[3]},@{name='viber:license_files';value=($taskLicenseRefs -join ',')})}
+  $taskComponents+=@{type='library';name=$module.Path;version=$module.Version;purl=('pkg:golang/'+$module.Path+'@'+$module.Version);properties=@(@{name='go:module:sum';value=$module.Sum},@{name='viber:license_files';value=($taskLicenseRefs -join ',')})}
  }
  $taskGOROOT=(& $taskGo env GOROOT).Trim()
  [IO.File]::Copy((Join-Path $taskGOROOT 'LICENSE'),(Join-Path $taskAttribution 'go-toolchain-LICENSE'),$false)
