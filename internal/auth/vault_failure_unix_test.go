@@ -38,6 +38,7 @@ func TestVaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey(t *testing.
 		{"native-missing-diagnostic", vaultResponse{Exit: missingExit, Stderr: true}, runtime.GOOS == "darwin", false},
 		{"locked", vaultResponse{Exit: 2, Stderr: true}, false, false},
 		{"helper-error", vaultResponse{Err: errors.New("fixture secret must not be exposed"), Output: []byte(encoded)}, false, false},
+		{"truncated-success", vaultResponse{Exit: 0, Completed: true, OutputTruncated: true, Output: []byte(encoded)}, false, false},
 		{"successful-exit-with-error", vaultResponse{Exit: 0, Stderr: true, Output: []byte(encoded)}, false, false},
 		{"missing-with-output", vaultResponse{Exit: missingExit, Output: []byte(encoded)}, false, false},
 		{"empty-success", vaultResponse{Exit: 0}, false, false},
@@ -172,8 +173,14 @@ func TestVaultProcessBoundsTimeoutOverflowAndInheritedPipeDrain(t *testing.T) {
 			if mode == "overflow" && (len(result.Output) != 512 || !result.Stderr) {
 				t.Fatal("real helper did not exercise both bounded output pipes")
 			}
+			if mode == "overflow" && (!result.Completed || !result.OutputTruncated || result.Exit != 0) {
+				t.Fatal("truncated output lost natural command completion facts")
+			}
 			if mode == "timeout" && ctx.Err() == nil {
 				t.Fatal("real helper did not exercise deadline cancellation")
+			}
+			if mode == "timeout" && result.Completed || mode == "inherited-pipe" && result.Completed {
+				t.Fatal("interrupted helper claimed natural completion")
 			}
 			if mode == "inherited-pipe" {
 				var pid int

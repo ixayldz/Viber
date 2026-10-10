@@ -54,10 +54,13 @@ func (w *vaultOutput) Write(p []byte) (int, error) {
 }
 
 type vaultResponse struct {
-	Output []byte
-	Stderr bool
-	Exit   int
-	Err    error
+	// Completed is natural parent/pipe completion, never tree quiescence.
+	Completed       bool
+	OutputTruncated bool
+	Output          []byte
+	Stderr          bool
+	Exit            int
+	Err             error
 }
 
 var runVaultHelper = execVaultHelper
@@ -131,19 +134,25 @@ func runVaultProcess(ctx context.Context, command *exec.Cmd, input []byte) vault
 	// WaitDelay bounds pipe draining; it is not a process-tree fencing receipt.
 	command.WaitDelay = 250 * time.Millisecond
 	err := command.Run()
+	var exit *exec.ExitError
+	if err == nil {
+		response.Exit = 0
+		response.Completed = ctx.Err() == nil
+	} else if errors.As(err, &exit) {
+		response.Exit = exit.ExitCode()
+		response.Completed = ctx.Err() == nil
+	}
 	response.Output = append([]byte{}, stdout.Bytes()...)
 	response.Stderr = stderr.Len() > 0 || stderr.overflow
-	if stdout.overflow || stderr.overflow || ctx.Err() != nil {
+	response.OutputTruncated = stdout.overflow || stderr.overflow
+	if response.OutputTruncated || ctx.Err() != nil {
 		response.Err = c.Fail(c.UnsupportedCapability, "OS vault helper unavailable or exceeded bounded protocol")
 		return response
 	}
 	if err == nil {
-		response.Exit = 0
 		return response
 	}
-	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		response.Exit = exit.ExitCode()
 		return response
 	}
 	response.Err = c.Fail(c.UnsupportedCapability, "OS vault helper failed bounded completion")
@@ -232,7 +241,7 @@ func (v commandVault) Get(handle string) ([]byte, error) {
 	}
 	result := runVaultHelper(executable, args, nil)
 	defer clear(result.Output)
-	if result.Err != nil {
+	if result.Err != nil || result.OutputTruncated {
 		return nil, c.Fail(c.UnsupportedCapability, "OS credential vault unavailable")
 	}
 	if runtime.GOOS == "linux" && result.Exit == 1 && !result.Stderr && len(result.Output) == 0 || runtime.GOOS == "darwin" && result.Exit == 44 && len(result.Output) == 0 {
@@ -269,7 +278,7 @@ func (v commandVault) Put(handle string, key []byte) error {
 	}
 	result := runVaultHelper(executable, args, input)
 	defer clear(result.Output)
-	if result.Err != nil || result.Exit != 0 {
+	if result.Err != nil || result.Exit != 0 || result.OutputTruncated {
 		return c.Fail(c.UnsupportedCapability, "OS vault did not accept the key")
 	}
 	// Interactive security may finish at EOF despite a failed subcommand.

@@ -33,6 +33,8 @@ jobs:
           go vet ./...
       - name: Reachable vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Evidence validator identity and gap contract
+        run: python scripts/test-evidence-validator.py
       - name: Full tests
         run: |
           mkdir -p evidence

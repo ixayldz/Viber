@@ -35,8 +35,17 @@ func TestActualOSVaultRoundTripAndEnvironmentIsolation(t *testing.T) {
 		}
 		result := execVaultHelper(executable, args, nil)
 		clear(result.Output)
-		if result.Err != nil || result.Exit != 0 {
-			t.Errorf("could not remove unique acceptance key item")
+		// Apple's deletion command prints item attributes before deleting; that
+		// metadata can exceed the lookup protocol's 512-byte retained-output cap.
+		// Keep the cap, require natural successful completion and independently
+		// confirm absence. Truncated output never permits key lookup or storage.
+		if !result.Completed || result.Exit != 0 || result.Err != nil && !result.OutputTruncated {
+			t.Errorf("unique fixture deletion did not complete: exit=%d completed=%t truncated=%t", result.Exit, result.Completed, result.OutputTruncated)
+			return
+		}
+		if key, err := (commandVault{}).Get(handle); !errors.Is(err, errVaultKeyMissing) {
+			clear(key)
+			t.Errorf("unique fixture key remains or its absence cannot be confirmed")
 		}
 	}
 	t.Cleanup(cleanup)

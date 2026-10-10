@@ -8,7 +8,7 @@ Her paket gerçek CLI/owner akışına bağlı uygulama, saldırgan ve recovery 
 
 | Paket | Bağımlılık | Çalışan sonuç ve kabul | Durum |
 |---|---|---|---|
-| K01 CI/güvenlik | Yok | Go 1.27.2; üç OS full test/vet/vulnerability; Linux race/tüm fuzz target'ları; migration; actual rootful Docker; aggregate foundation | Başlangıç revision GREEN; yeni revision tekrar ölçülür |
+| K01 CI/güvenlik | Yok | Go 1.27.2; üç OS full test/vet/vulnerability; Linux race/tüm fuzz target'ları; migration; actual rootful Docker; package-bound mandatory evidence; aggregate foundation | `6f0c529` GREEN; vault cleanup regression fix ve evidence identity/fault kontratı kodlandı; yeni exact revision tekrar ölçülür |
 | K02 lisans/vault/docs | K01 | Kullanıcının seçtiği MIT; Unix helper environment allowlist; actual Secret Service/Keychain unique-item roundtrip; çelişkili plaintext/fencing/eval belgeleri düzeltilir | MIT/native roundtrip PASS; ancestor trust, bounded pipe/timeout/protocol ve rotation failure matrix kodlandı; native locked/multi-user kabulü ayrı |
 | K03 owner retrieval cache | K01 | Task/candidate/policy/source/version binding; fresh hash validation; single build; aktif retired lease quota; TTL/LRU/invalidation; gerçek owner warm benchmark | Kodlandı; Windows kabulü geçti |
 | K04 relevance/spans/ölçek | K03 | Body/path ayrımı; dosya başına üç örtüşmeyen span; truncation; real repo recall@5/correct span/stale tests; OS peak resident ölçümü; büyük repo partition/coverage | Bounded capture'da lazy partition/coverage kodlandı; exact revision kabulü tekrar ölçülür |
