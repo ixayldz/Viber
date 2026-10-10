@@ -41,9 +41,9 @@ cleanup() {
       sudo loginctl disable-linger "$task_user" || task_cleanup=false
       sudo loginctl terminate-user "$task_user" || true
       sudo systemctl stop "user@$task_uid.service" || task_cleanup=false
-      if pgrep -u "$task_uid" >/dev/null; then task_cleanup=false; fi
+      if sudo pgrep -u "$task_uid" >/dev/null; then task_cleanup=false; fi
       sudo userdel --remove -- "$task_user" || task_cleanup=false
-      if getent passwd "$task_user" >/dev/null || [[ -e $task_home || -S /run/user/$task_uid/docker.sock ]]; then task_cleanup=false; fi
+      if getent passwd "$task_user" >/dev/null || [[ -e $task_home ]] || ! sudo test ! -S "/run/user/$task_uid/docker.sock"; then task_cleanup=false; fi
     fi
   fi
   if [[ $task_dropin_owned == true ]]; then
@@ -91,15 +91,19 @@ task_dropin="/etc/systemd/system/user@$task_uid.service.d/viber-acceptance.conf"
 [[ ! -e $(dirname "$task_dropin") ]]
 sudo mkdir -- "$(dirname "$task_dropin")"
 task_dropin_owned=true
-printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\n' | sudo tee "$task_dropin" >/dev/null
+printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\nEnvironment=XDG_RUNTIME_DIR=/run/user/%%i\nEnvironment=XDG_CONFIG_HOME=%s/.config\nEnvironment=XDG_DATA_HOME=%s/.local/share\nEnvironment=XDG_CACHE_HOME=%s/.cache\nEnvironment=XDG_STATE_HOME=%s/.local/state\nEnvironment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%%i/bus\n' \
+  "$task_home" "$task_home" "$task_home" "$task_home" | sudo tee "$task_dropin" >/dev/null
 sudo systemctl daemon-reload
 sudo loginctl enable-linger "$task_user"
 sudo systemctl start "user@$task_uid.service"
 task_runtime="/run/user/$task_uid"
 task_endpoint="unix://$task_runtime/docker.sock"
-task_as_user=(sudo -H -u "$task_user" env "XDG_RUNTIME_DIR=$task_runtime" "DBUS_SESSION_BUS_ADDRESS=unix:path=$task_runtime/bus" PATH=/usr/bin:/bin)
-for task_attempt in {1..30}; do [[ -S $task_runtime/bus ]] && break; sleep 1; done
-[[ -S $task_runtime/bus ]]
+task_as_user=(sudo -H -u "$task_user" env -u DOCKER_HOST -u DOCKER_CONTEXT "XDG_RUNTIME_DIR=$task_runtime" "DBUS_SESSION_BUS_ADDRESS=unix:path=$task_runtime/bus" "XDG_CONFIG_HOME=$task_home/.config" "XDG_DATA_HOME=$task_home/.local/share" "XDG_CACHE_HOME=$task_home/.cache" "XDG_STATE_HOME=$task_home/.local/state" PATH=/usr/bin:/bin)
+# /run/user/<uid> is deliberately mode0700. The CI runner account cannot stat
+# another user's bus; probe as its owner instead of misreporting safe isolation
+# as a missing socket. Bind XDG paths in the manager and caller independently.
+for task_attempt in {1..30}; do "${task_as_user[@]}" test -S "$task_runtime/bus" && break; sleep 1; done
+"${task_as_user[@]}" test -S "$task_runtime/bus"
 "${task_as_user[@]}" dockerd-rootless-setuptool.sh install --force
 sudo install -d -o "$task_user" -g "$task_user" -m 0755 "$task_home/matrix"
 sudo install -o "$task_user" -g "$task_user" -m 0755 "$task_binary" "$task_home/matrix/runner.test"
