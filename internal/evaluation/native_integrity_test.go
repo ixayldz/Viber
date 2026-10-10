@@ -22,14 +22,14 @@ func TestNativeBundleSourceClaimCannotBeRehashedAwayFromOwnerJournal(t *testing.
 	}
 	recipe := nativeRecipe("golang@sha256:"+strings.Repeat("a", 64), "hidden", []byte("private"), []byte("private"))
 	bundle := t.TempDir()
-	owner, err := agent.Open(ctx, filepath.Join(bundle, "owner"))
+	owner, err := original.OpenIndependentEvaluator(ctx, filepath.Join(bundle, "owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture, _ := evaluatorFixture(recipe)
 	plan, _ := c.CanonicalV1(recipe.Plan)
 	prompt, _ := evaluatorSourcePrompt(source)
-	if _, err = owner.CreateIndependentEvaluator(ctx, original, source, agent.StartOptions{TaskID: evaluatorTask, TaskKind: "ANALYSIS", Prompt: prompt, Budget: agent.DefaultBudget(), Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: plan, CheckRuntime: &recipe.Runtime}); err != nil {
+	if _, err = owner.CreateIndependentEvaluator(ctx, original, source, agent.StartOptions{TaskID: owner.EvaluationTaskID(), TaskKind: "ANALYSIS", Prompt: prompt, Budget: agent.DefaultBudget(), Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: plan, CheckRuntime: &recipe.Runtime}); err != nil {
 		owner.Close()
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestNativeBundleSourceClaimCannotBeRehashedAwayFromOwnerJournal(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	registration := NativeRegistration{1, sourceFile.Digest, result.RecipeDigest, result.EvaluatorCandidate, NativeMode}
+	registration := NativeRegistration{SchemaVersion: 2, Source: sourceFile.Digest, Recipe: result.RecipeDigest, Candidate: result.EvaluatorCandidate, Scope: NativeMode, Task: owner.EvaluationTaskID()}
 	registrationFile, err := publishNativeFile(root, "registration.json", registration)
 	if err != nil {
 		t.Fatal(err)

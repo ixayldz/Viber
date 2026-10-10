@@ -35,6 +35,9 @@ func validateEvaluationSource(source agent.EvaluationSource) error {
 	return nil
 }
 func deriveNativeResult(ctx context.Context, owner *agent.Session, source agent.EvaluationSource, recipe NativeRecipe) (NativeResult, error) {
+	return deriveNativeResultForTask(ctx, owner, owner.EvaluationTaskID(), source, recipe)
+}
+func deriveNativeResultForTask(ctx context.Context, owner *agent.Session, task string, source agent.EvaluationSource, recipe NativeRecipe) (NativeResult, error) {
 	var result NativeResult
 	if err := validateEvaluationSource(source); err != nil {
 		return result, err
@@ -42,11 +45,14 @@ func deriveNativeResult(ctx context.Context, owner *agent.Session, source agent.
 	if err := recipe.Validate(); err != nil {
 		return result, err
 	}
-	state, doc, runs, err := owner.EvaluationChecks(ctx, evaluatorTask)
+	state, doc, runs, err := owner.EvaluationChecks(ctx, task)
 	if err != nil {
 		return result, err
 	}
 	expectedFixture, err := evaluatorFixture(recipe)
+	if doc.EvaluationOrigin == nil {
+		expectedFixture, err = legacyEvaluatorFixture(recipe)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -75,6 +81,9 @@ func deriveNativeResult(ctx context.Context, owner *agent.Session, source agent.
 		return result, c.Fail(c.StoreIntegrityError, "independent evaluator source content changed")
 	}
 	result = NativeResult{SchemaVersion: 1, EvidenceMode: NativeMode, Scope: "EXACT_OPERATOR_STDIO_CASES_ON_FROZEN_CAPTURED_TREE; NO_GENERIC_SEMANTIC_OR_CAUSAL_HARNESS_CLAIM", Source: source, EvaluatorCandidate: doc.Candidate.SnapshotDigest, RecipeDigest: recipeDigest, OriginalClaim: sourceClaim(source), IndependentVerdict: c.Unknown, Checks: []NativeCheck{}, EvaluatorResources: state.Resources, EvaluatorBudget: doc.Budget, Measurement: "CONSERVATIVE_KERNEL_RESOURCE_LEDGER; FIXTURE_TOKENS_ARE_NOT_MODEL_USAGE; LOCAL_COMPUTE_MONEY_AND_HUMAN_REWORK_UNKNOWN", SafetyVerdict: c.Unknown}
+	if doc.EvaluationOrigin != nil {
+		result.EvaluatorTask = task
+	}
 	quiescent := state.Execution == c.Terminated && !state.InputBarrier && len(state.PendingInputIDs) == 0 && doc.Pending == nil && !doc.UnknownEffect && state.Resources != nil && state.Resources.Reserved == (c.ResourceVector{})
 	if state.Resources != nil {
 		for _, r := range state.Resources.Reservations {

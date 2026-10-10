@@ -10,6 +10,7 @@ import (
 )
 
 type NativeRegistration struct {
+	Task          string `json:"evaluator_task,omitempty"`
 	SchemaVersion int    `json:"schema_version"`
 	Source        string `json:"source_digest"`
 	Recipe        string `json:"recipe_digest"`
@@ -76,7 +77,7 @@ func ReadNativeResult(ctx context.Context, path string) (NativeResult, error) {
 	if err = c.DecodeStrict(files["registration.json"], &registration); err != nil {
 		return result, err
 	}
-	if registration.SchemaVersion != 1 || registration.Source != manifest.SourceDigest || registration.Recipe != manifest.RecipeDigest || registration.Scope != NativeMode || !c.ValidDigest(registration.Candidate) {
+	if (registration.SchemaVersion != 1 && registration.SchemaVersion != 2) || registration.Source != manifest.SourceDigest || registration.Recipe != manifest.RecipeDigest || registration.Scope != NativeMode || !c.ValidDigest(registration.Candidate) {
 		return result, c.Fail(c.StoreIntegrityError, "native registration binding changed")
 	}
 	owner, err := agent.OpenExisting(ctx, filepath.Join(root.Name(), "owner"))
@@ -84,15 +85,27 @@ func ReadNativeResult(ctx context.Context, path string) (NativeResult, error) {
 		return result, err
 	}
 	defer owner.Close()
-	_, doc, err := owner.Load(ctx, evaluatorTask)
+	task := evaluatorTask
+	if registration.SchemaVersion == 2 {
+		task = registration.Task
+		if task == "" {
+			return result, c.Fail(c.StoreIntegrityError, "missing evaluator task")
+		}
+	} else if registration.Task != "" {
+		return result, c.Fail(c.StoreIntegrityError, "legacy registration has unexpected task")
+	}
+	_, doc, err := owner.Load(ctx, task)
 	if err != nil {
 		return result, err
+	}
+	if registration.SchemaVersion == 2 && (doc.EvaluationOrigin == nil || doc.EvaluationOrigin.ParentTask != source.TaskID || doc.EvaluationOrigin.ParentSequence != source.TaskSequence || doc.EvaluationOrigin.ParentDocument != source.DocumentDigest) {
+		return result, c.Fail(c.StoreIntegrityError, "registered source differs from durable evaluator lineage")
 	}
 	if doc.Protection == nil || doc.CheckRuntime == nil {
 		return result, c.Fail(c.StoreIntegrityError, "independent owner recipe unavailable")
 	}
 	recipe := NativeRecipe{1, doc.Protection.Plan, *doc.CheckRuntime}
-	result, err = deriveNativeResult(ctx, owner, source, recipe)
+	result, err = deriveNativeResultForTask(ctx, owner, task, source, recipe)
 	if err != nil {
 		return result, err
 	}

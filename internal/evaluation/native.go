@@ -2,6 +2,7 @@ package evaluation
 
 import (
 	"context"
+	"fmt"
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
@@ -72,11 +73,11 @@ func evaluatorSourcePrompt(source agent.EvaluationSource) ([]byte, error) {
 }
 func evaluatorFixture(recipe NativeRecipe) ([]byte, error) {
 	turns := []agent.Turn{}
-	for _, check := range recipe.Plan.Checks {
+	for ordinal, check := range recipe.Plan.Checks {
 		args, _ := c.CanonicalV1(struct {
 			Check string `json:"check_id"`
 		}{check.ID})
-		turns = append(turns, agent.Turn{Calls: []model.Call{{ID: "evaluate-" + check.ID, Name: "check_run", Arguments: args}}, UsageKnown: true})
+		turns = append(turns, agent.Turn{Calls: []model.Call{{ID: fmt.Sprintf("evaluate-%02d", ordinal), Name: "check_run", Arguments: args}}, UsageKnown: true})
 	}
 	turns = append(turns, agent.Turn{Text: "Independent observation complete. No source edits.", UsageKnown: true})
 	return c.CanonicalV1(agent.Fixture{SchemaVersion: 1, Turns: turns})
@@ -93,6 +94,7 @@ type NativeCheck struct {
 	NativeOwnership          bool      `json:"native_ownership"`
 }
 type NativeResult struct {
+	EvaluatorTask        string                 `json:"evaluator_task,omitempty"`
 	SchemaVersion        int                    `json:"schema_version"`
 	EvidenceMode         string                 `json:"evidence_mode"`
 	Scope                string                 `json:"scope"`
@@ -160,14 +162,11 @@ func RunCandidate(ctx context.Context, original *agent.Session, task, recipeFile
 	if err = fileguard.Private(root); err != nil {
 		return result, err
 	}
-	sourceFile, err := publishNativeFile(root, "source.json", source)
+	owner, err := original.OpenIndependentEvaluator(ctx, filepath.Join(destination, "owner"))
 	if err != nil {
 		return result, err
 	}
-	owner, err := agent.Open(ctx, filepath.Join(destination, "owner"))
-	if err != nil {
-		return result, err
-	}
+	taskID := owner.EvaluationTaskID()
 	defer owner.Close()
 	fixture, err := evaluatorFixture(recipe)
 	if err != nil {
@@ -184,11 +183,18 @@ func RunCandidate(ctx context.Context, original *agent.Session, task, recipeFile
 	if err != nil {
 		return result, err
 	}
-	if _, err = owner.CreateIndependentEvaluator(ctx, original, source, agent.StartOptions{TaskID: evaluatorTask, TaskKind: "ANALYSIS", Prompt: boundPrompt, Budget: budget, Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: planRaw, CheckRuntime: &recipe.Runtime}); err != nil {
+	if _, err = owner.CreateIndependentEvaluator(ctx, original, source, agent.StartOptions{TaskID: taskID, TaskKind: "ANALYSIS", Prompt: boundPrompt, Budget: budget, Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: planRaw, CheckRuntime: &recipe.Runtime}); err != nil {
+		return result, err
+	}
+	if err = original.RegisterEvaluationReport(ctx, owner, root, source); err != nil {
+		return result, err
+	}
+	sourceFile, err := publishNativeFile(root, "source.json", source)
+	if err != nil {
 		return result, err
 	}
 	// Freeze all evaluator inputs before the first possible native dispatch.
-	_, doc, err := owner.Load(ctx, evaluatorTask)
+	_, doc, err := owner.Load(ctx, taskID)
 	if err != nil {
 		return result, err
 	}
@@ -204,26 +210,26 @@ func RunCandidate(ctx context.Context, original *agent.Session, task, recipeFile
 		return result, c.Fail(c.Conflict, "independent capture differs from frozen original candidate")
 	}
 	recipeDigest, _ := c.Digest(recipe)
-	registration := NativeRegistration{1, sourceFile.Digest, recipeDigest, doc.Candidate.SnapshotDigest, NativeMode}
+	registration := NativeRegistration{SchemaVersion: 2, Source: sourceFile.Digest, Recipe: recipeDigest, Candidate: doc.Candidate.SnapshotDigest, Scope: NativeMode, Task: taskID}
 	registrationFile, err := publishNativeFile(root, "registration.json", registration)
 	if err != nil {
 		return result, err
 	}
-	_, runErr := owner.Run(ctx, evaluatorTask)
+	_, runErr := owner.Run(ctx, taskID)
 	// A failing check may leave the generic coding loop waiting for repair.
 	// Independent evaluation never repairs or chooses another candidate.
 	closureCtx, closureCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer closureCancel()
-	ownerState, closureErr := owner.State(closureCtx, evaluatorTask)
+	ownerState, closureErr := owner.State(closureCtx, taskID)
 	if closureErr != nil {
 		return result, closureErr
 	}
 	if ownerState.Execution != c.Terminated {
-		if _, closureErr = owner.ControlsWithID(closureCtx, evaluatorTask, "cancel", "independent-finalize"); closureErr != nil {
+		if _, closureErr = owner.ControlsWithID(closureCtx, taskID, "cancel", "independent-finalize"); closureErr != nil {
 			return result, closureErr
 		}
 	}
-	result, err = deriveNativeResult(ctx, owner, source, recipe)
+	result, err = deriveNativeResultForTask(ctx, owner, taskID, source, recipe)
 	if err != nil {
 		return result, err
 	}
@@ -253,4 +259,21 @@ func RunCandidate(ctx context.Context, original *agent.Session, task, recipeFile
 		return result, runErr
 	}
 	return result, nil
+}
+
+// Schema-1 bundles retain their original call-ID recipe for durable inspection.
+// This compatibility path does not grant the old bundle a privacy lineage.
+func legacyEvaluatorFixture(recipe NativeRecipe) ([]byte, error) {
+	raw, err := evaluatorFixture(recipe)
+	if err != nil {
+		return nil, err
+	}
+	var fixture agent.Fixture
+	if err = c.DecodeStrict(raw, &fixture); err != nil {
+		return nil, err
+	}
+	for i, check := range recipe.Plan.Checks {
+		fixture.Turns[i].Calls[0].ID = "evaluate-" + check.ID
+	}
+	return c.CanonicalV1(fixture)
 }

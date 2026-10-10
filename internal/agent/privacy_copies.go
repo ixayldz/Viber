@@ -33,7 +33,7 @@ func (s *Session) registerManagedCopy(ctx context.Context, copy ManagedCopy) err
 	}
 	for _, existing := range view.Copies {
 		if existing.Directory == copy.Directory {
-			if len(existing.Files) != 0 || existing.Kind != copy.Kind || existing.PhysicalRoot != copy.PhysicalRoot || !sameManagedTasks(existing.Tasks, copy.Tasks) {
+			if len(existing.Files) != 0 || existing.Kind != copy.Kind || existing.PhysicalRoot != copy.PhysicalRoot || (!sameManagedTasks(existing.Tasks, copy.Tasks) || !sameExcludedStore(existing.ExcludedStore, copy.ExcludedStore)) {
 				return c.Fail(c.Conflict, "managed output path cannot be registered twice")
 			}
 		}

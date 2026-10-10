@@ -48,6 +48,10 @@ if args.retrieval:
 if args.privacy:
     required |= {
         "TestTaskContentDeletionPurgesCASMaterializationsAndManagedBackups",
+        "TestEvaluationPrivacyChildFirstPurgesReportsBackupsAndRestoredOwners",
+        "TestEvaluationPrivacyUnpublishedProcessCrashPurgesImportedCandidate",
+        "TestEvaluationPrivacyFreshOwnersHaveUniqueReservedTaskIdentities",
+        "TestEvaluationPrivacyForeignReportAndOwnerReplacementFailClosed",
         "TestTaskContentDeletionRefusesUnknownActiveAndRetainedDescendants",
         "TestDeletionIntentRecoversAfterProcessRestartAndPartialUnlink",
         "TestDeletionRejectsStalePlanAndChangedManagedCopyWithoutFalseReceipt",
@@ -79,6 +83,7 @@ if args.docker:
         "TestActualObserverBaselineFailCandidatePassAndForgedPASS",
         "TestActualNativeOwnerCrashRecoveryFencesOrphanAndKeepsVerificationUnknown",
         "TestActualIndependentHiddenFailureOverridesSelfVerifiedOnlyInEvaluation",
+        "TestActualIndependentEvaluationPrivacyPurgesNativeReceipts",
         "TestActualDockerMergedCandidateReverificationRunsFreshRegisteredChecks",
     }
 if args.migration:

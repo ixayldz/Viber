@@ -13,6 +13,7 @@ import (
 
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -68,6 +69,7 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
+	EvaluationOrigin      *privacyAttempt          `json:"evaluation_origin,omitempty"`
 	MergedDelivery        *MergedDeliveryOrigin    `json:"merged_delivery_origin,omitempty"`
 	NativeCleanupAttempts []string                 `json:"native_cleanup_receipts,omitempty"`
 	GoalCoverage          *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
@@ -128,6 +130,10 @@ type Session struct {
 }
 
 func Open(ctx context.Context, directory string) (*Session, error) {
+	return openSession(ctx, directory, nil)
+}
+
+func openSession(ctx context.Context, directory string, authority *PrivacyAuthority) (*Session, error) {
 	if err := preflightRuntimeInstance(directory); err != nil {
 		return nil, err
 	}
@@ -167,6 +173,16 @@ func Open(ctx context.Context, directory string) (*Session, error) {
 		archive.Close()
 		journal.Close()
 		return nil, err
+	}
+	if authority != nil {
+		raw, encodeErr := c.CanonicalV1(authority)
+		if encodeErr == nil {
+			encodeErr = journal.BindPrivacyAuthority(ctx, raw)
+		}
+		if encodeErr != nil {
+			session.Close()
+			return nil, encodeErr
+		}
 	}
 	if err = session.attachPrivacy(ctx); err != nil {
 		session.Close()
@@ -376,6 +392,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	evaluationOrigin  *privacyAttempt
 	mergedDelivery    *MergedDeliveryOrigin
 	evaluationCapture *workspace.Capture
 	GoalReview        *verify.GoalReview
@@ -421,7 +438,15 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if existing, exists := states[options.TaskID]; exists {
 		return existing, c.Fail(c.CommandIDConflict, "task identity already exists; new content cannot be published")
 	}
-	if err := s.validateAttemptAllocation(ctx, options.TaskID, options.AttemptOrigin); err != nil {
+	if strings.HasPrefix(options.TaskID, "eval-") && options.evaluationOrigin == nil {
+		return c.TaskState{}, c.Fail(c.PolicyDenied, "eval task namespace is reserved for separate evaluators")
+	}
+	allocationOrigin := options.AttemptOrigin
+	if options.evaluationOrigin != nil {
+		a := options.evaluationOrigin
+		allocationOrigin = &AttemptOrigin{ParentTask: a.ParentTask, ParentSequence: a.ParentSequence, ParentDocument: a.ParentDocument, RequestDigest: a.RequestDigest}
+	}
+	if err := s.validateAttemptAllocation(ctx, options.TaskID, allocationOrigin); err != nil {
 		return c.TaskState{}, err
 	}
 	resourcePolicy, err := s.creationResourcePolicy(ctx, options.ResourcePolicy)
@@ -489,6 +514,11 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err != nil {
 		return c.TaskState{}, err
 	}
+	if options.evaluationOrigin != nil && s.attemptStageFault != nil {
+		if err = s.attemptStageFault(1); err != nil {
+			return c.TaskState{}, err
+		}
+	}
 	rawDigest, err := s.Archive.PutBytes(options.TaskID, options.Prompt)
 	if err != nil {
 		return c.TaskState{}, err
@@ -525,6 +555,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	}
 	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	doc.MergedDelivery = options.mergedDelivery
+	doc.EvaluationOrigin = options.evaluationOrigin
 	if options.GoalReview != nil {
 		reviewed, reviewErr := verify.ReviewCoverage(doc.Spec, doc.Protection.Plan, checkSetDigest(doc), *options.GoalReview)
 		if reviewErr != nil {

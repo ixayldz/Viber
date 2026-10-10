@@ -43,11 +43,12 @@ func closePrivacyRoot(root *os.Root, err *error) *os.Root {
 }
 
 type ManagedCopy struct {
-	Kind         string       `json:"kind"`
-	Directory    string       `json:"directory"`
-	PhysicalRoot string       `json:"physical_root"`
-	Files        []BackupFile `json:"files"`
-	Tasks        []string     `json:"tasks"`
+	ExcludedStore *privacyScope `json:"excluded_owner_store,omitempty"`
+	Kind          string        `json:"kind"`
+	Directory     string        `json:"directory"`
+	PhysicalRoot  string        `json:"physical_root"`
+	Files         []BackupFile  `json:"files"`
+	Tasks         []string      `json:"tasks"`
 }
 type privacyRecord struct {
 	SchemaVersion int              `json:"schema_version"`
@@ -175,7 +176,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				if prior.Directory != record.Copy.Directory {
 					continue
 				}
-				if len(prior.Files) != 0 || prior.Kind != record.Copy.Kind || prior.PhysicalRoot != record.Copy.PhysicalRoot || !sameManagedTasks(prior.Tasks, record.Copy.Tasks) {
+				if len(prior.Files) != 0 || prior.Kind != record.Copy.Kind || prior.PhysicalRoot != record.Copy.PhysicalRoot || (!sameManagedTasks(prior.Tasks, record.Copy.Tasks) || !sameExcludedStore(prior.ExcludedStore, record.Copy.ExcludedStore)) {
 					return view, c.Fail(c.StoreIntegrityError, "managed allocation cannot be rebound")
 				}
 				view.Copies[i] = *record.Copy
@@ -251,8 +252,15 @@ func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error 
 	return fileguard.Publish(root, filepath.Join("records", fmt.Sprintf("%010d.json", record.Sequence)), raw)
 }
 func validateManagedCopy(copy ManagedCopy) error {
-	if (copy.Kind != "BACKUP" && copy.Kind != "RESTORE_STAGE" && copy.Kind != "EXPORT" && copy.Kind != "DELIVERY_PREVIEW" && copy.Kind != "SUPPORT") || !filepath.IsAbs(copy.Directory) || len(copy.Directory) > 2048 || !c.ValidDigest(copy.PhysicalRoot) || len(copy.Files) > backupMaxFiles+1 || len(copy.Tasks) > 4096 {
+	if (copy.Kind != "BACKUP" && copy.Kind != "RESTORE_STAGE" && copy.Kind != "EXPORT" && copy.Kind != "DELIVERY_PREVIEW" && copy.Kind != "SUPPORT" && copy.Kind != "EVALUATION_REPORT") || !filepath.IsAbs(copy.Directory) || len(copy.Directory) > 2048 || !c.ValidDigest(copy.PhysicalRoot) || len(copy.Files) > backupMaxFiles+1 || len(copy.Tasks) > 4096 {
 		return c.Fail(c.StoreIntegrityError, "invalid managed copy")
+	}
+	if copy.Kind == "EVALUATION_REPORT" {
+		if copy.ExcludedStore == nil || !validPrivacyScope(*copy.ExcludedStore) || copy.ExcludedStore.Directory != filepath.Join(copy.Directory, "owner") {
+			return c.Fail(c.StoreIntegrityError, "evaluator report requires an exact separately managed owner")
+		}
+	} else if copy.ExcludedStore != nil {
+		return c.Fail(c.StoreIntegrityError, "unexpected excluded store")
 	}
 	previous := ""
 	for _, task := range copy.Tasks {
@@ -280,6 +288,9 @@ func safeCopyPath(kind, name string) bool {
 			}
 		}
 		return true
+	}
+	if kind == "EVALUATION_REPORT" {
+		return name == "source.json" || name == "registration.json" || name == "result.json" || name == "manifest.json"
 	}
 	if kind == "SUPPORT" {
 		return name == "support.json"

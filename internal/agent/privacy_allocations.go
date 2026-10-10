@@ -13,6 +13,12 @@ import (
 )
 
 func safeManagedRelative(path string) bool { return policy.SafePath(path) }
+func sameExcludedStore(a, b *privacyScope) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
 func sameManagedTasks(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -75,6 +81,24 @@ func captureManagedAllocation(ctx context.Context, copy ManagedCopy) (ManagedCop
 			return c.Fail(c.BudgetLimitReached, "managed allocation tree quota exceeded")
 		}
 		if entry.IsDir() {
+			if copy.Kind == "EVALUATION_REPORT" && name == "owner" {
+				if copy.ExcludedStore == nil {
+					return c.Fail(c.StoreIntegrityError, "missing evaluator owner binding")
+				}
+				owned, openErr := os.OpenRoot(copy.ExcludedStore.Directory)
+				if openErr != nil {
+					return openErr
+				}
+				physical, identityErr := fileguard.DirectoryIdentity(owned)
+				closeErr := owned.Close()
+				if identityErr != nil || closeErr != nil {
+					return errors.Join(identityErr, closeErr)
+				}
+				if physical != copy.ExcludedStore.PhysicalRoot {
+					return c.Fail(c.StaleBase, "evaluator owner was replaced")
+				}
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !safeCopyPath(copy.Kind, name) {

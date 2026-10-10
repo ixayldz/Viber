@@ -10,7 +10,7 @@ import (
 // Recapturing a materialized directory would change original permission/Git
 // metadata and could silently omit files. No current live bytes are hydrated.
 func (s *Session) CreateIndependentEvaluator(ctx context.Context, original *Session, source EvaluationSource, options StartOptions) (c.TaskState, error) {
-	if original == nil || s == original || !fileguard.Disjoint(s.directory, original.directory) || options.Runtime != nil || options.TaskKind != "ANALYSIS" || options.Config != nil || options.GoalReview != nil || options.inheritedSpec != nil || options.evaluationCapture != nil || options.Git {
+	if original == nil || s == original || !fileguard.Disjoint(s.directory, original.directory) || options.Runtime != nil || options.TaskKind != "ANALYSIS" || options.Config != nil || options.GoalReview != nil || options.inheritedSpec != nil || options.evaluationCapture != nil || options.Git || options.AttemptOrigin != nil || !samePrivacyAuthority(s.privacy, original.privacy) || options.TaskID != s.EvaluationTaskID() {
 		return c.TaskState{}, c.Fail(c.PolicyDenied, "separate local immutable evaluator required")
 	}
 	original.mu.Lock()
@@ -41,6 +41,25 @@ func (s *Session) CreateIndependentEvaluator(ctx context.Context, original *Sess
 	if expectedDigest != suppliedDigest {
 		return c.TaskState{}, c.Fail(c.Conflict, "original frozen source metadata differs from journal")
 	}
+	directory, err := fileguard.ResolveProspective(s.directory)
+	if err != nil {
+		return c.TaskState{}, err
+	}
+	digest, err := c.Digest(struct {
+		Source  EvaluationSource
+		Options StartOptions
+	}{source, options})
+	if err != nil {
+		return c.TaskState{}, err
+	}
+	bound := privacyAttempt{Scope: privacyScope{s.instance.ID, directory, s.instance.PhysicalRoot}, ParentTask: source.TaskID, ParentSequence: source.TaskSequence, ParentDocument: source.DocumentDigest, ChildTask: options.TaskID, RequestDigest: digest}
+	if err = bound.validate(); err != nil {
+		return c.TaskState{}, err
+	}
+	if err = s.registerEvaluationLineage(ctx, bound); err != nil {
+		return c.TaskState{}, err
+	}
+	options.evaluationOrigin = &bound
 	options.Root = capture.Snapshot.Root
 	options.evaluationCapture = &capture
 	return s.Create(ctx, options)

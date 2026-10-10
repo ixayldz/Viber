@@ -24,7 +24,7 @@ func TestIndependentCaptureImportsExactArchiveMetadataAndNeverRecapturesLiveSour
 		t.Fatal(err)
 	}
 	recipe := nativeRecipe("golang@sha256:"+strings.Repeat("a", 64), "hidden", []byte("secret"), []byte("secret"))
-	owner, err := agent.Open(ctx, t.TempDir())
+	owner, err := original.OpenIndependentEvaluator(ctx, filepath.Join(t.TempDir(), "owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,11 +35,11 @@ func TestIndependentCaptureImportsExactArchiveMetadataAndNeverRecapturesLiveSour
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := agent.StartOptions{TaskID: evaluatorTask, TaskKind: "ANALYSIS", Prompt: boundPrompt, Budget: agent.DefaultBudget(), Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: plan, CheckRuntime: &recipe.Runtime}
+	options := agent.StartOptions{TaskID: owner.EvaluationTaskID(), TaskKind: "ANALYSIS", Prompt: boundPrompt, Budget: agent.DefaultBudget(), Autonomy: "guided", AllowUnverified: true, Fixture: fixture, CheckPlan: plan, CheckRuntime: &recipe.Runtime}
 	if _, err = owner.CreateIndependentEvaluator(ctx, original, source, options); err != nil {
 		t.Fatal(err)
 	}
-	_, doc, err := owner.Load(ctx, evaluatorTask)
+	_, doc, err := owner.Load(ctx, owner.EvaluationTaskID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestIndependentCaptureImportsExactArchiveMetadataAndNeverRecapturesLiveSour
 	if _, err = deriveNativeResult(ctx, owner, forged, recipe); err == nil {
 		t.Fatal("source claim rewrite accepted without bound journal input")
 	}
-	fresh, err := agent.Open(ctx, t.TempDir())
+	fresh, err := original.OpenIndependentEvaluator(ctx, filepath.Join(t.TempDir(), "owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
