@@ -257,10 +257,21 @@ func nullPayload(raw json.RawMessage) error {
 	return nil
 }
 func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
-	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" {
+	if request.TaskID == "" && request.Command != "store-gc" && request.Command != "store-gc-preview" && request.Command != "owner-status" && request.Command != "owner-stop" && request.Command != "support" && request.Command != "support-export" && request.Command != "privacy-capacity" && request.Command != "privacy-reserve-replenish" {
 		return nil, c.Fail(c.InvalidArgument, "task ID required")
 	}
 	switch request.Command {
+	case "privacy-capacity", "privacy-reserve-replenish":
+		if request.TaskID != "" {
+			return nil, c.Fail(c.InvalidArgument, "privacy capacity command is store scoped")
+		}
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		if request.Command == "privacy-reserve-replenish" {
+			return o.Session.ReplenishPrivacyControlReserve(ctx)
+		}
+		return o.Session.PrivacyMetadataCapacity(ctx)
 	case "support", "support-export":
 		if request.TaskID != "" {
 			return nil, c.Fail(c.InvalidArgument, "support command is store scoped")

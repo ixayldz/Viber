@@ -6,6 +6,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("evidence", type=Path)
 parser.add_argument("--docker", action="store_true")
+parser.add_argument("--disk-pressure", action="store_true")
 parser.add_argument("--migration", action="store_true")
 parser.add_argument("--vault", action="store_true")
 parser.add_argument("--vault-failure", action="store_true")
@@ -18,6 +19,10 @@ args = parser.parse_args()
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen": "github.com/ixayldz/Viber/internal/diskguard",
+    "TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks": "github.com/ixayldz/Viber/internal/cli",
+    "TestPrivacyCapacityMissingStoreAndInvalidFlagsHaveNoEffects": "github.com/ixayldz/Viber/internal/cli",
+    "TestPrivacyReserveRemediationReplenishesPhysicalBytesWithoutChangingAuthorityOrLedger": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyPhysicalMetadataBytePressureRejectsBeforeIntentPublication": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyFullJournalSaturationPreservesControlWatermarkOnTenReopens": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyPendingAllocationReopensAndBindingAtomicallyPromotesExactCAS": "github.com/ixayldz/Viber/internal/store",
@@ -125,8 +130,13 @@ if args.retrieval:
         "TestRankedPartitionArgumentsRejectNullUnboundedAndOtherToolUse",
         "TestPartitionCapacityFallbackExplicitlyLabelsFullLiteralScope",
     }
+if args.disk_pressure:
+    required.add("TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen")
 if args.privacy:
     required |= {
+        "TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks",
+        "TestPrivacyCapacityMissingStoreAndInvalidFlagsHaveNoEffects",
+        "TestPrivacyReserveRemediationReplenishesPhysicalBytesWithoutChangingAuthorityOrLedger",
         "TestPrivacyPhysicalMetadataBytePressureRejectsBeforeIntentPublication",
         "TestPrivacyFullJournalSaturationPreservesControlWatermarkOnTenReopens",
         "TestPrivacyPendingAllocationReopensAndBindingAtomicallyPromotesExactCAS",

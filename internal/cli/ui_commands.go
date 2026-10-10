@@ -33,7 +33,11 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 	case agent.ModelSwitch:
 		id = value.CommandID
 	}
-	raw, routed, err := ownerCall(ctx, u.directory, u.task, action, id, payload)
+	task := u.task
+	if action == "privacy-capacity" || action == "privacy-reserve-replenish" {
+		task = ""
+	}
+	raw, routed, err := ownerCall(ctx, u.directory, task, action, id, payload)
 	if err == nil && !routed {
 		err = c.Fail(c.StoreOwned, "UI requires its background owner; reconnect with serve-background")
 	}
@@ -127,10 +131,20 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	command, arg, _ := strings.Cut(text, " ")
 	arg = strings.TrimSpace(arg)
 	switch command {
+	case "/capacity":
+		if arg != "" && arg != "replenish" {
+			return "", false, c.Fail(c.InvalidArgument, "capacity accepts only optional replenish")
+		}
+		action := "privacy-capacity"
+		if arg == "replenish" {
+			action = "privacy-reserve-replenish"
+		}
+		raw, err := u.call(ctx, action, nil)
+		return string(raw), false, err
 	case "/quit", "/detach":
 		return "UI detached; background task continues.", true, nil
 	case "/help":
-		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
+		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve and never prunes metadata, owner identities or fences. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")

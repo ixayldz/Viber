@@ -87,6 +87,9 @@ jobs:
           set -o pipefail
           go test -p 1 -json -count=1 -timeout 15m ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation | tee evidence/docker.jsonl
           python3 scripts/verify-test-results.py evidence/docker.jsonl --docker --delivery
+      - name: Bounded physical filesystem pressure
+        shell: bash
+        run: bash scripts/disk-pressure-acceptance.sh evidence
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

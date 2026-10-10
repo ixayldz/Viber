@@ -543,6 +543,15 @@ Store, 32 MiB private `control.reserve` alanını random bytes + sync ile gerçe
 
 İlk privacy authority kurulurken dizinin fiziksel kimliği reserve/genesis yazılmadan önce owner journal'ına pending allocation olarak kaydedilir. Açılış yarıda kalırsa sonraki açılış aynı dizin ve rezervle devam eder; yeni 32 MiB kopyalar yaratmaz. Kayıp/değiştirilmiş dizin, farklı genesis veya yabancı dosya varsa işlem durur. Authority dizinini elle taşımak/silmek desteklenen recovery değildir. [ADR 0016](docs/adr/0016-privacy-authority-allocation.md) crash sınırlarını, [detaylı PRD planı](docs/KEYLESS_DELIVERY_PLAN.md) kalan işlerin kabul koşullarını açıklar.
 
+Privacy metadata kapasitesini bağımsız CLI'dan veya background owner üzerinden inceleyebilirsiniz:
+
+```powershell
+.\bin\viber.exe privacy-capacity --store C:\ViberData\review --json
+.\bin\viber.exe privacy-capacity --store C:\ViberData\review --replenish-control-reserve --json
+```
+
+TUI karşılığı `/capacity` ve `/capacity replenish`'tir. `work_blockers` sabit reason code'larıyla journal, metadata byte, owner katalog, düşük disk alanı ve eksik/tükenmiş kontrol reserve'ini ayırır. `supported_next_actions` yalnız çalışan refresh/replenish eylemlerini gösterir. Replenish en fazla 32 MiB reserve'i gerçek allocation/readback ile tamamlar; low watermark yetmiyorsa reddeder. Task içeriği, deletion watermark, ledger ve fence kimlikleri değişmez. Journal veya owner katalog doluluğu bu işlemle çözülmez: checkpoint/retirement uygulanana kadar work durur, dosyaları elle prune etmeyin. `observation_only:true` ve `work_probe_bytes:4096` anlık küçük work gözlemini ifade eder; gelecekteki büyük allocation/deletion izni değildir.
+
 0.8 ve önceki resource-untracked store'lara yeni accounted task karıştırılmaz. Yeni 0.9 görevleri için fresh store kullanın; mevcut tarihsel accounting'e sıfır kullanım eklenmez. SQLite format 2 korunur; yeni optional task alanlarını eski strict clients okuyamaz, downlevel resume desteklenmez.
 
 ## UNKNOWN model riskini hesapta kapatma (0.9)

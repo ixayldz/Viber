@@ -261,6 +261,10 @@ func TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete
 	if err != nil || capacity.WorkReady || capacity.CatalogEntries != privacyCatalogLimit {
 		t.Fatal("total catalog capacity observation", capacity, err)
 	}
+	capacity, err = s.ReplenishPrivacyControlReserve(ctx)
+	if err != nil || capacity.WorkReady || len(capacity.WorkBlockers) == 0 || capacity.WorkBlockers[0] != "OWNER_CATALOG_FULL_RETIREMENT_REQUIRED" {
+		t.Fatal("reserve maintenance disguised catalog exhaustion", capacity, err)
+	}
 	plan, err := s.DeletionPreview(ctx, options.TaskID)
 	if err != nil {
 		t.Fatal("registered owner cannot preview deletion at catalog pressure", err)

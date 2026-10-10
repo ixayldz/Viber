@@ -46,6 +46,10 @@ Eski schema 1 backup manifest'i normal `store-restore` tarafından reddedilir. M
 
 ## Sonuç ve açık kapsam
 
+`privacy-capacity --store STORE --json` ve TUI `/capacity`, numeric kapasiteyle birlikte sabit blocker/next-action kodlarını gösterir. `--replenish-control-reserve` veya `/capacity replenish` aynı current physical authority/family lock altında yalnız bounded control reserve'i doldurur; disk low watermark/physical readback doğrulanır. Missing store yaratılmaz, task/payload parametresi kabul edilmez. Fresh status işlem sonrasındaki durumu yeniden ölçer. Kernel snapshot, resource ledger, journal chain/watermark, owners ve process fence pin'leri değişmez.
+
+Bu eylem journal/catalog compaction veya silme değildir. `WORK_JOURNAL_FULL_CHECKPOINT_REQUIRED`, `WORK_METADATA_FULL_CHECKPOINT_REQUIRED` veya `OWNER_CATALOG_FULL_RETIREMENT_REQUIRED` kalıyorsa ordinary work yeniden açılmaz. `supported_next_actions` uygulanmamış pruning/compaction komutu önermez. Sayısal `work_ready` yalnız `work_probe_bytes:4096` boyutlu anlık gözlemdir; gelecekteki publication/deletion izni veya control yolunun sınırsız garantisi değildir.
+
 Authority ilk açılışta reserve/genesis yayınlanmadan önce exact directory/physical identity ile owner journal'ına kaydedilir. Kurulum kesintisinden sonra normal CLI/owner açılışı aynı pending allocation'ı tamamlar. Başka root veya farklı/foreign içerik benimsenmez; failed initialization sessiz yeni authority yaratmaz. Bind current pin'i ve pending marker'ının kaldırılmasını tek transaction'da yapar. Dizinleri prefix'e göre elle topluca silmek recovery değildir. Eski sürümlerden kalan kayıt dışı orphan'lar ve mkdir-before-allocation küçük directory artıkları otomatik cleanup kapsamına girmez; [ADR 0016](adr/0016-privacy-authority-allocation.md).
 
 `PURGED_MANAGED_LOCAL_CONTENT` yalnız plana bağlı local içerik, kayıtlı ordinary derivative ve restore scope'ları için verilir. Hata sırasında external intent erişimi kapalı tutar, tombstone `PENDING` kalır; aynı komutla devam edilir.

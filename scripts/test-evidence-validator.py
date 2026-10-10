@@ -9,6 +9,8 @@ validator = Path(__file__).with_name("verify-test-results.py")
 auth = "github.com/ixayldz/Viber/internal/auth"
 foreign = "example.invalid/foreign/acceptance"
 native = "TestActualOSVaultRoundTripAndEnvironmentIsolation"
+diskguard = "github.com/ixayldz/Viber/internal/diskguard"
+pressure = "TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen"
 failures = [
     "TestVaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey",
     "TestVaultExecutableTrustIncludesEveryResolvedAncestor",
@@ -30,6 +32,9 @@ def package_events(package, results, complete=True):
 
 
 samples = [
+    ("actual bounded pressure", package_events(diskguard, [(pressure, "pass")]), ["--disk-pressure"], True),
+    ("bounded pressure skipped", package_events(diskguard, [(pressure, "skip")]), ["--disk-pressure"], False),
+    ("bounded pressure foreign identity", package_events(foreign, [(pressure, "pass")]), ["--disk-pressure"], False),
     ("native identity", package_events(auth, [(native, "pass")]), ["--vault"], True),
     ("foreign name collision", package_events(foreign, [(native, "pass")]), ["--vault"], False),
     ("native skipped and foreign passed", package_events(auth, [(native, "skip")]) + package_events(foreign, [(native, "pass")]), ["--vault"], False),
@@ -51,4 +56,4 @@ with tempfile.TemporaryDirectory(prefix="viber-evidence-validator-") as director
         if not accepted and "FAIL:" not in result.stderr:
             raise SystemExit("FAIL: fixture was rejected without the expected validation failure: " + name)
 
-print("PASS: 9 evidence identity/failure/gap contracts; fixture evidence is not native acceptance")
+print("PASS: 12 evidence identity/failure/gap contracts; fixture evidence is not native acceptance")

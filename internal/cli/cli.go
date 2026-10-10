@@ -62,6 +62,7 @@ Usage:
   viber ui TASK --store PATH
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
+  viber privacy-capacity --store PATH [--replenish-control-reserve] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
   viber delivery-preview TASK --store PATH --output NEW_PATH [--json]
   viber delivery-reverify TASK --store PATH --command-file FILE [--json]
@@ -145,6 +146,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runUI(args[1:], out, errout)
 	case "support":
 		return runSupport(args[1:], out, errout)
+	case "privacy-capacity":
+		return runPrivacyCapacity(args[1:], out, errout)
 	case "serve-background", "owner-status", "owner-stop":
 		return runSupervisor(args[0], args[1:], out, errout)
 	case "detach", "attach":
