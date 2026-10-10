@@ -22,13 +22,13 @@ if(Test-Path -LiteralPath $taskOutput){throw 'Fresh output required'}
 $taskParent=[IO.Path]::GetDirectoryName($taskOutput)
 while($taskParent.Length-ge $taskWorkspace.TrimEnd([IO.Path]::DirectorySeparatorChar).Length){
  if(Test-Path -LiteralPath $taskParent){
-  if((Get-Item -LiteralPath $taskParent).Attributes-band [IO.FileAttributes]::ReparsePoint){throw 'Reparse output ancestor denied'}
+  if((Get-Item -LiteralPath $taskParent -Force).Attributes-band [IO.FileAttributes]::ReparsePoint){throw 'Reparse output ancestor denied'}
  }
  if($taskParent-eq $taskRoot){break}
  $taskParent=[IO.Path]::GetDirectoryName($taskParent)
 }
 $taskCache=Join-Path $taskRoot '.cache'
-if((Test-Path -LiteralPath $taskCache) -and ((Get-Item -LiteralPath $taskCache).Attributes-band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse staging ancestor denied'}
+if((Test-Path -LiteralPath $taskCache) -and ((Get-Item -LiteralPath $taskCache -Force).Attributes-band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse staging ancestor denied'}
 $taskStage=Join-Path $taskRoot ('.cache/package-stage-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskStage -Force | Out-Null
 $taskArchive=Join-Path $taskStage 'source.zip'
