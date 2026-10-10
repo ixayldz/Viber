@@ -1,6 +1,6 @@
 # Release kanıt kaydı
 
-PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Üst tablo güncel 0.9-dev kapsamını gösterir; aşağıdaki sürüm kayıtları tarihsel kanıttır.
+PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranış gözlenince PASS; unit/spike tüm family'yi kapatmaz. Aktif kullanıcı kapsamı [CAPABILITIES](CAPABILITIES.md) içinde tek tabloda tutulur. Aşağıdaki family tablosu tüm saldırı matrisinin kapanışını, sürüm kayıtları tarihsel kanıtı gösterir.
 
 | Family | Guard | Uygulanan kanıt / eksik taraf | Tam release |
 |---|---|---|---|
@@ -18,7 +18,7 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 20–21 | Corruption/two owners | Journal/projection/historical checkpoint/dedup receipt hash/replay + explicit restore-tested v1→v2 migration + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
 | 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; task-content delete var; workspace restore/stream reconnect açık | PARTIAL |
 | 25–28 | Guards/origin/integrity/delivery | Pure predicate + frozen artifact + scoped limited delivery; durable typed origin, tree/absence check weakening guard, revision/recovery/backup closure; full interval protected verifier eksik | PARTIAL |
-| 29 | Clock/lease | Monotonic clock domain, deadline, physical store/engine binding ve actual stale-name/container fencing var; rootless/gerçek restart ölçümü kullanıcı kararıyla bekliyor | PARTIAL |
+| 29 | Clock/lease | Monotonic clock domain, deadline, physical store/engine binding ve actual stale-name/container fencing var; rootful restart ve CE 28.0.4/rootless/cgroup2/systemd gerçek restart/enforcement kabulü geçti; diğer backend/profile kapsamı açık | PARTIAL |
 | 30–32 | Owner/children/pause/dedup | Lock/generation, Docker cleanup, native pause/cancel; bound one-shot approval ve active command dedup; Ctrl+C pause; tam supervisor/children fencing eksik | PARTIAL |
 | 33–34 | Reserve/delete/backup | Global model/native reserve/settle, UNKNOWN tutulması, physical control reserve, orphan GC, CAS+SQLite backup, migration/read-only recovery/lineage restore; durable task tombstone/external watermark/ordinary managed-copy purge var; pre-journal attempt ve ayrı-owner evaluator/report/restore lineage var; TTL/metadata/content-wide ve tam upgrade/power-loss matrisi açık | PARTIAL |
 | 35–36 | Sequence/replay/intent | Current/historical replay, task/global cursor ayrımı, raw input closure, event paging | PARTIAL |

@@ -1,6 +1,6 @@
 # PRD anahtarsız tamamlama çalışma planı
 
-10 Ekim 2026. Yetkili kapsam [prd.md](../prd.md); başlangıç revision `50176ff`. Bu plan 9 Ekim mimari/güvenlik incelemesini çalışan kod, kullanıcı akışı ve kabul kanıtıyla kapatır. Eski planlardaki tarihsel kanıt güncel capability gibi yorumlanmaz.
+10 Ekim 2026. Yetkili kapsam [prd.md](../prd.md); başlangıç revision `50176ff`. Bu plan 9 Ekim mimari/güvenlik incelemesini çalışan kod, kullanıcı akışı ve kabul kanıtıyla kapatır. Eski planlardaki tarihsel kanıt güncel capability gibi yorumlanmaz. Aktif kullanıcı kapsamı [CAPABILITIES](CAPABILITIES.md) içindedir.
 
 ## Tamamlanma ölçütü
 
@@ -14,7 +14,7 @@ Her paket gerçek CLI/owner akışına bağlı uygulama, saldırgan ve recovery 
 | K04 relevance/spans/ölçek | K03 | Body/path ayrımı; dosya başına üç örtüşmeyen span; truncation; real repo recall@5/correct span/stale tests; OS peak resident ölçümü; büyük repo partition/coverage | Bounded capture'da lazy partition/coverage kodlandı; exact revision kabulü tekrar ölçülür |
 | K05 delivery | K01/K02 | B/C/U üç yönlü merge preview; overlap conflict; merged candidate reverify; source-bound plan; güçlü backend admission; file intent/receipt/recovery/dedup; yalnız owned diff restore | Preview/portable merged export ve fresh fixed-check task akışı kodlandı; exclusive live backend/owned restore açık |
 | K06 privacy/retention | K01 | Task-content tombstone; minimal audit ve ledger korunumu; parent/derived task lineage; content purge; managed backup watermark/purge; eski restore reddi; crash recovery | Task deletion/ordinary derivative/restore scope ve pre-journal attempt ve ayrı-owner evaluator lineage/report/restore kapsamı kodlandı. Explicit managed task content expiry, revision/consent, bounded fair owner timer ve immutable crash retry [ADR 0019](adr/0019-managed-content-retention.md) ile uygulandı; metadata/audit retention, checkpoint/compaction/migration ve UNKNOWN altında explicit raw redaction açıktır |
-| K07 resources/fencing | K01/K06 | Managed copy/metadata fiziksel quota; atomic fence admission; lifetime/restart/rootless/backend acceptance; UNKNOWN doğru korunumu | Metadata reserve ve rootful restart/fencing kabulü var; managed payload toplam quota/lifetime ve desteklenen rootless native kabulü açık |
+| K07 resources/fencing | K01/K06 | Managed copy/metadata fiziksel quota; atomic fence admission; lifetime/restart/rootless/backend acceptance; UNKNOWN doğru korunumu | Metadata reserve ve rootful restart/fencing kabulü var; CE 28.0.4/rootless/cgroup2/systemd native restart ve hostile enforcement kabulü geçti; managed payload toplam quota/lifetime ve diğer backend/profile kabulü açık |
 | K08 verification | K01/K05 | Check revision/discovery/protected dependency closure; V0–V5/language boundaries; protected external oracle; negative forged report fixtures | STDIO observer var; genişleme açık |
 | K09 supervisor/TUI | K05/K06/K07 | Retention gap/resync; provider delta projection; recovery/restore UI; queue goal scheduling; native PTY/hostile child acceptance | Kısmen uygulandı |
 | K10 policy/extensions | K02/K06/K07 | Admin/current restriction revision; ayrı privacy axes; pinned isolated extension/MCP runtime; bounded message/egress/cancel/resource enforcement | Açık |
@@ -31,7 +31,7 @@ Normal filesystem advisory lock'u, hash kontrolü ile write arasındaki dış wr
 
 - **Fixture/unit:** Contract, stale policy, forged report, retry, lineage ve crash state için.
 - **Gerçek native kabul:** Kernel/filesystem/vault/backend/process davranışı için; mock yerine geçmez.
-- **Anahtar istemeyen dış kabul:** ChatGPT login/consent, local hardware/model, signing identity, kullanıcı pilotu; desteklenen rootless/cgroup delegation profili üzerinde native kabul.
+- **Anahtar istemeyen dış kabul:** ChatGPT login/consent, local hardware/model, signing identity, kullanıcı pilotu; ölçülen CE 28.0.4/rootless profilinden farklı backend/donanım kabulü.
 - **API anahtarı isteyen kabul:** OpenAI/Anthropic gerçek protocol/usage/quota/rate/cancel ve model kalitesi. Offline fixtures gerçek provider kabulü diye sayılmaz.
 
 İlk stable A–D ile E–G deneyleri ayrı gate taşır. Kullanıcının bütün PRD vizyonu talebi için FR-28..42 deneyleri de kendi bağımlılık/egress/eval guard'larıyla ele alınır; kapalı deney `DONE` olarak işaretlenmez. PRD yüzdesi test sayısından hesaplanmaz ve dış kabul olmadan `release_ready:true` üretilmez.

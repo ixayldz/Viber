@@ -63,6 +63,24 @@ type RetentionExpiry struct {
 	ObservedAt string          `json:"observed_at"`
 }
 
+// Scheduling priority only. It cannot consent to expiry or replace a policy.
+type RetentionCursor struct {
+	SchemaVersion   int    `json:"schema_version"`
+	Protocol        string `json:"protocol"`
+	AuthorityDigest string `json:"authority_digest"`
+	PhysicalRoot    string `json:"physical_root"`
+	TaskID          string `json:"task_id"`
+	Deadline        string `json:"deadline"`
+	PolicyDigest    string `json:"policy_digest"`
+}
+
+func (cursor RetentionCursor) Validate() error {
+	if _, err := RetentionTime(cursor.Deadline); err != nil || cursor.SchemaVersion != 1 || cursor.Protocol != "RETENTION_SCHEDULING_ONLY_V1" || !ValidDigest(cursor.AuthorityDigest) || !ValidDigest(cursor.PhysicalRoot) || !retentionTaskID.MatchString(cursor.TaskID) || !ValidDigest(cursor.PolicyDigest) {
+		return Fail(StoreIntegrityError, "bounded source-bound retention scheduling cursor required")
+	}
+	return nil
+}
+
 func (e RetentionExpiry) Validate() error {
 	if e.Policy.Validate() != nil || e.Policy.Mode != "EXPIRE" {
 		return Fail(PolicyDenied, "enabled retention policy required")

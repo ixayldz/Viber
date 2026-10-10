@@ -4,7 +4,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 **Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.
 
-[Ürün gereksinimleri](prd.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
+[Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [0.6 PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız yürütme planı](docs/KEYLESS_EXECUTION_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
 ## Bugün ne yapabilirsiniz?
 
@@ -23,7 +23,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 Fixture demosu kaynak dosyasını değiştirmez. Değişiklik ayrı candidate'da tutulur. Varsayılan fixture profili `VERIFIED` üretmez: beklenen demo sonucu `FINISHED / UNVERIFIED / SATISFIED` ve açık doğrulama yükümlülüğüdür.
 
-TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, tam retention/delete, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
+TUI, background owner, detach/attach, durable queue, compaction, kaynak hesapları ve orphan GC aşağıda anlatılır. Canlı workspace apply/restore, genel güçlü test-framework doğrulaması, metadata/audit retention ve checkpoint, semantic AST/LSP ve imzalı kurulum paketleri henüz hazır değildir. Güncel teslim ve açık işler [anahtarsız ilerleme kaydında](docs/KEYLESS_PROGRESS.md); ayrıntılı 0.6 değerlendirmesi [önceki durum analizinde](docs/PRD_STATUS_ANALYSIS.md).
 
 ## Gereksinimler ve platform durumu
 
@@ -36,7 +36,7 @@ TUI, background owner, detach/attach, durable queue, compaction, kaynak hesaplar
 | İzole process geliştirme testi | Önceden indirilmiş, digest ile sabitlenmiş Linux Docker image'ı ve Linux engine |
 | Store | Kaynak kökün dışında, yerel ve kullanıcı erişimiyle korunan dizin |
 
-Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir. Kullanıcının sonraki onayıyla geçici privileged engine üzerinde gerçek rootful restart/fencing geçti; bu hosttaki rootless profil gerekli kaynak controller'ları olmadığı için reddedildi. [Güncel kabul kaydı](docs/VALIDATION.md) ve [PRD teslim planı](docs/KEYLESS_DELIVERY_PLAN.md).
+Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir. Kullanıcının sonraki onayıyla geçici privileged engine üzerinde gerçek rootful restart/fencing geçti; bu hosttaki nested rootless profil gerekli kaynak controller'ları olmadığı için reddedildi. Ayrı disposable Linux CI'da Docker CE 28.0.4/rootless/cgroup2/systemd profilinde gerçek restart, enforcement ve beş düşmanca süreç senaryosu geçti. Bu sonuç yalnız ölçülen destek profilini kapsar. [Güncel kabul kaydı](docs/VALIDATION.md) ve [PRD teslim planı](docs/KEYLESS_DELIVERY_PLAN.md).
 
 ## Kurulum
 
@@ -261,7 +261,7 @@ $restored = Join-Path $demoBase 'restored'
 
 Backup SQLite snapshot + gerekli blob closure + digest/size manifest'i içerir. Restore **yeni dizine** yapılır; mevcut store'u overwrite etmez ve task effect'lerini çalıştırmaz. Yalnız sqlite dosyasını kopyalamak yeterli yedek değildir.
 
-Mevcut backup sınırları: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Current backup schema 2 bağımsız private silme authority'sini ve mevcut watermark'ı gerektirir. Eski watermark, eksik authority ve kayıt dışı kopya restore edilemez. Eski schema 1 backup manifest'i normal restore akışına kabul edilmez; migration mevcut legacy store üzerinde bound recovery doğrulaması yapar. Farklı makine/path rebinding ve imzalı backup kapsamı yoktur. [Görev içeriği silme kılavuzu](docs/PRIVACY_DELETION.md) kapsamı ve retry akışını açıklar; otomatik retention ayrı geliştirmedir.
+Mevcut backup sınırları: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Current backup schema 2 bağımsız private silme authority'sini ve mevcut watermark'ı gerektirir. Eski watermark, eksik authority ve kayıt dışı kopya restore edilemez. Eski schema 1 backup manifest'i normal restore akışına kabul edilmez; migration mevcut legacy store üzerinde bound recovery doğrulaması yapar. Farklı makine/path rebinding ve imzalı backup kapsamı yoktur. [Görev içeriği silme kılavuzu](docs/PRIVACY_DELETION.md) kapsamı ve retry akışını açıklar; açık rızaya bağlı otomatik managed-content retention aşağıda anlatılır. Metadata/audit retention ve checkpoint ayrı geliştirmedir.
 
 ## Eski store'u yükseltme
 
@@ -578,7 +578,7 @@ Görevler varsayılan olarak **KEEP** durumundadır; Viber kendiliğinden silme 
 
 Her politika değişikliğinde `revision` artar. Aynı `command-id` ve aynı girdiler, restart sonrasında da ilk sonucu döndürür; aynı ID ile farklı girdi reddedilir. Bir başka istemci politikayı değiştirdiyse önce status'u yenileyin. Süre canonical UTC biçimindedir (`Z`); saat dilimi offset'i ve gereksiz `.000` gibi alternatif biçimler kabul edilmez. Deadline sistem UTC saatine bağlıdır; işletim sistemi saatinin ileri alınması süreyi doldurabilir, geri alınması silmeyi geciktirebilir.
 
-Background owner başlangıçta ve her dakika süre dolumunu tarar. Aktif invocation varken bekler; bir tarama en fazla 16 görevi dener. Engellenmiş erken görevler sonraki uygun görevleri aç bırakmaz. Owner kapalıyken zamanlayıcı çalışmaz; yeniden başladığında kalıcı politikaları ve yarım kalmış expiry intent'lerini okur. `owner-status --json` son taramayı ve sabit hata kodunu gösterir. TUI komutları `/retention`, `/retention keep REV`, `/retention expires UTC REV CONSENT` ve `/retention run-due` biçimindedir; `CONSENT` yukarıdaki tam acknowledgement metnidir.
+Background owner başlangıçta ve her dakika süre dolumunu tarar. Aktif invocation varken bekler; bir tarama en fazla 16 görevi dener. Engellenmiş erken görevler sonraki uygun görevleri aç bırakmaz. Owner kapalıyken zamanlayıcı çalışmaz; yeniden başladığında kalıcı politikaları, yarım kalmış expiry intent'lerini ve tarama önceliğini okur. `--run-due` komutları arasında da öncelik korunur. Sonuçtaki `cursor_persistence:DURABLE` önceliğin kaydedildiğini; `VOLATILE` ve sabit `cursor_error` kodu ise bu taramada kaydedilemediğini gösterir. Bu durumda aynı process içindeki adalet korunur, yeniden açılışta öncelik daha eski olabilir; başarılı purge sonucu geri alınmış sayılmaz. Cursor silme yetkisi taşımaz, ordinary disk admission kullanır ve emergency control reserve tüketmez. `owner-status --json` son taramayı ve sabit hata kodunu gösterir. TUI komutları `/retention`, `/retention keep REV`, `/retention expires UTC REV CONSENT` ve `/retention run-due` biçimindedir; `CONSENT` yukarıdaki tam acknowledgement metnidir.
 
 `KEEP`, `NOT_DUE`, `DUE`, `BLOCKED`, `PENDING` ve `PURGED` durumları ayrı gösterilir. Aktif görev, UNKNOWN süreç/maliyet riski, tutulan alt görev veya başka aile owner'ı silmeyi engeller; zamanlayıcı bunları iptal etmez veya riski silmez. Başlayan kalıcı silme intent'i `--keep` ile geri alınamaz; otomatik retry aynı orijinal planı kullanır. Kullanıcının başlattığı manuel silme komutu zamanlayıcı tarafından yeniden yürütülmez.
 

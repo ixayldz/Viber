@@ -55,10 +55,12 @@ type RetentionStatus struct {
 	Deletion      *DeletionResult    `json:"deletion,omitempty"`
 }
 type RetentionRun struct {
-	SchemaVersion int               `json:"schema_version"`
-	Limit         int               `json:"limit"`
-	HasMore       bool              `json:"has_more"`
-	Items         []RetentionStatus `json:"items"`
+	SchemaVersion     int               `json:"schema_version"`
+	Limit             int               `json:"limit"`
+	HasMore           bool              `json:"has_more"`
+	Items             []RetentionStatus `json:"items"`
+	CursorPersistence string            `json:"cursor_persistence"`
+	CursorError       string            `json:"cursor_error,omitempty"`
 }
 
 func (s *Session) retentionView(ctx context.Context) (privacyView, error) {
@@ -225,7 +227,7 @@ func (s *Session) RunRetention(ctx context.Context) (RetentionRun, error) {
 	defer s.mu.Unlock()
 	s.publicationMu.Lock()
 	defer s.publicationMu.Unlock()
-	result := RetentionRun{SchemaVersion: 1, Limit: 16, Items: []RetentionStatus{}}
+	result := RetentionRun{SchemaVersion: 1, Limit: 16, Items: []RetentionStatus{}, CursorPersistence: "NONE_REQUIRED"}
 	view, err := s.retentionView(ctx)
 	if err != nil {
 		return result, err
@@ -233,6 +235,21 @@ func (s *Session) RunRetention(ctx context.Context) (RetentionRun, error) {
 	states, err := s.Journal.Replay(ctx, "")
 	if err != nil {
 		return result, err
+	}
+	cursor, cursorRaw, err := s.Journal.RetentionCursor(ctx)
+	if err != nil {
+		return result, err
+	}
+	if s.retentionCursorTask == "" && cursor != nil {
+		authority, _ := c.Digest(s.privacy)
+		policy, exists := view.Retentions[cursor.TaskID]
+		policyDigest, _ := c.Digest(policy.Policy)
+		// A backup restored at a fresh root must not adopt the old owner cursor.
+		// Changed policy priority is also ignored; current consent is always read.
+		if exists && cursor.AuthorityDigest == authority && cursor.PhysicalRoot == s.instance.PhysicalRoot && cursor.PolicyDigest == policyDigest {
+			s.retentionCursorTask = cursor.TaskID
+			s.retentionCursorDeadline, _ = c.RetentionTime(cursor.Deadline)
+		}
 	}
 	tasks := []string{}
 	for task, record := range view.Retentions {
@@ -257,7 +274,7 @@ func (s *Session) RunRetention(ctx context.Context) (RetentionRun, error) {
 	result.HasMore = len(tasks) > result.Limit
 	// Round-robin across due policies: permanently pinned early tasks cannot
 	// starve later eligible tasks. This cursor is scheduling, never authority;
-	// owner restart rescans the durable policies and immutable expiry intents.
+	// owner restart restores priority from a bounded store metadata CAS.
 	if len(tasks) > 0 && s.retentionCursorTask != "" {
 		start := 0
 		for i, task := range tasks {
@@ -304,6 +321,18 @@ func (s *Session) RunRetention(ctx context.Context) (RetentionRun, error) {
 			status.Reason = retentionReason(deleteErr)
 		}
 		result.Items = append(result.Items, status)
+	}
+	if len(result.Items) > 0 {
+		policy := view.Retentions[s.retentionCursorTask].Policy
+		digest, _ := c.Digest(policy)
+		authority, _ := c.Digest(s.privacy)
+		next := c.RetentionCursor{SchemaVersion: 1, Protocol: "RETENTION_SCHEDULING_ONLY_V1", AuthorityDigest: authority, PhysicalRoot: s.instance.PhysicalRoot, TaskID: s.retentionCursorTask, Deadline: s.retentionCursorDeadline.UTC().Format(time.RFC3339Nano), PolicyDigest: digest}
+		result.CursorPersistence = "DURABLE"
+		if err := s.Journal.SetRetentionCursor(ctx, cursorRaw, next); err != nil {
+			// Optional priority must not prevent an already admitted control purge.
+			// Make the durability loss visible; never replace a purge outcome.
+			result.CursorPersistence, result.CursorError = "VOLATILE", retentionReason(err)
+		}
 	}
 	return result, nil
 }

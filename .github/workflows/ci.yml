@@ -27,6 +27,12 @@ jobs:
         run: |
           test "$(go env GOVERSION)" = "go1.27.2"
           go mod verify
+      - name: Native Windows permission and shutdown regression
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p evidence
+          set -o pipefail
+          go test -json -count=10 -timeout 3m ./internal/cli -run '^TestSupervisorShutdownRetriesActualWindowsPermissionWithoutClaimingAbsence$' | tee evidence/windows-permission.jsonl
       - name: Formatting and vet
         run: |
           test -z "$(gofmt -l cmd internal)"

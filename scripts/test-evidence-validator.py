@@ -67,6 +67,7 @@ samples = [
 ]
 
 retention = {
+    "store": ["TestRetentionCursorCASIsBoundedAcrossReopenAndCannotChangeAuthorityOrLedger", "TestRetentionCursorActualChildDeathRetainsCommittedPriority"],
     "contracts": ["TestRetentionConsentRejectsImplicitScopeActorClockAndNoncanonicalDeadline"],
     "kernel": ["TestRetentionExpiryRequiresDistinctActorElapsedDeadlineAndNoUnknownRisk"],
     "agent": [

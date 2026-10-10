@@ -105,7 +105,7 @@ func runRetention(args []string, out, errout io.Writer) int {
 		if c.DecodeStrict(encoded, &run) != nil {
 			return 4
 		}
-		_, err = fmt.Fprintf(out, "Retention maintenance: %d/%d attempts · more %t\n", len(run.Items), run.Limit, run.HasMore)
+		_, err = fmt.Fprintf(out, "Retention maintenance: %d/%d attempts · more %t · cursor %s · %s\n", len(run.Items), run.Limit, run.HasMore, run.CursorPersistence, run.CursorError)
 		for _, item := range run.Items {
 			if err != nil {
 				break

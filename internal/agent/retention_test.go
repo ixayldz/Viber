@@ -249,11 +249,23 @@ func TestRetentionBoundedPassDoesNotStarveEligibleTasksBehindActiveTasks(t *test
 			t.Fatal("active task was expired", item)
 		}
 	}
-	second, err := s.RunRetention(ctx)
+	if first.CursorPersistence != "DURABLE" {
+		t.Fatal("bounded pass lost reopen priority", first)
+	}
+	directory := s.directory
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	second, err := reopened.RunRetention(ctx)
 	if err != nil || len(second.Items) != 16 || second.Items[0].TaskID != options.TaskID || second.Items[0].Status != "PURGED_MANAGED_LOCAL_CONTENT" {
 		t.Fatal("eligible task was starved", second, err)
 	}
-	view, err := s.retentionView(ctx)
+	view, err := reopened.retentionView(ctx)
 	if err != nil || len(view.Deletions) != 1 || view.Watermark != 1 {
 		t.Fatal("blocked tasks published deletion intents", view.Watermark, err)
 	}
