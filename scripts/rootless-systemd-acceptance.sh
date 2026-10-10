@@ -17,6 +17,10 @@ task_uid=''
 task_created=false
 task_dropin=''
 task_dropin_owned=false
+task_apt_source="/etc/apt/sources.list.d/$task_user.sources"
+task_apt_key="/etc/apt/keyrings/$task_user.asc"
+task_apt_source_owned=false
+task_apt_key_owned=false
 task_image='public.ecr.aws/docker/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61'
 task_binary="$task_evidence/rootless-runner.test"
 CGO_ENABLED=0 go test -c -o "$task_binary" ./internal/runner
@@ -47,16 +51,38 @@ cleanup() {
     sudo rmdir -- "$(dirname "$task_dropin")" || task_cleanup=false
     sudo systemctl daemon-reload || task_cleanup=false
   fi
+  if [[ $task_apt_source_owned == true ]]; then sudo rm -- "$task_apt_source" || task_cleanup=false; fi
+  if [[ $task_apt_key_owned == true ]]; then sudo rm -- "$task_apt_key" || task_cleanup=false; fi
+  if [[ $task_apt_source_owned == true && -e $task_apt_source || $task_apt_key_owned == true && -e $task_apt_key ]]; then task_cleanup=false; fi
   printf '{"schema_version":1,"cleanup_verified":%s,"measurement_exit_code":%s}\n' "$task_cleanup" "$task_exit" > "$task_evidence/rootless-cleanup.json"
   if [[ $task_cleanup != true ]]; then echo 'Exact rootless fixture cleanup failed.' >&2; exit 1; fi
   exit "$task_exit"
 }
 trap cleanup EXIT
 
-# Official distribution packages include Ubuntu's rootlesskit AppArmor profile;
-# do not disable AppArmor/seccomp or unprivileged namespace restrictions.
+# runner-images removes its Docker apt source after building the image. Restore
+# a job-owned signed source, without replacing any existing repository/key or
+# changing the installed engine. Rootless extras must match that exact engine.
+# See https://docs.docker.com/engine/install/ubuntu/#install-using-the-apt-repository
+# Official packages include Ubuntu's rootlesskit AppArmor profile; never disable
+# AppArmor/seccomp or unprivileged namespace restrictions.
+task_engine_version=$(dpkg-query -W -f='${Version}' docker-ce)
+[[ -n $task_engine_version && ! -e $task_apt_source && ! -e $task_apt_key ]]
+task_codename=$(. /etc/os-release; printf '%s' "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+task_arch=$(dpkg --print-architecture)
+[[ $task_codename =~ ^[a-z]+$ && $task_arch =~ ^[a-z0-9]+$ ]]
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  https://download.docker.com/linux/ubuntu/gpg -o "$task_evidence/docker-repository.asc"
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo install -m 0644 "$task_evidence/docker-repository.asc" "$task_apt_key"
+task_apt_key_owned=true
+printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: %s\n' \
+  "$task_codename" "$task_arch" "$task_apt_key" | sudo tee "$task_apt_source" >/dev/null
+task_apt_source_owned=true
 sudo apt-get update
-sudo apt-get install --yes docker-ce-rootless-extras uidmap dbus-user-session slirp4netns
+sudo apt-get install --yes --no-install-recommends "docker-ce-rootless-extras=$task_engine_version" uidmap dbus-user-session slirp4netns
+[[ $(dpkg-query -W -f='${Version}' docker-ce) == "$task_engine_version" ]]
+dpkg-query -W docker-ce docker-ce-rootless-extras uidmap dbus-user-session slirp4netns > "$task_evidence/rootless-packages.txt"
 sudo useradd --create-home --user-group --shell /bin/bash "$task_user"
 task_created=true
 task_uid=$(id -u "$task_user")
