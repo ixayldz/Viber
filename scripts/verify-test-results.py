@@ -105,6 +105,16 @@ EXPECTED_TEST_PACKAGES = {
     "TestVaultRotationFailureKeepsExistingCiphertextAndAccountIdentity": "github.com/ixayldz/Viber/internal/auth"
 }
 
+# Parent PASS cannot waive a skipped native resource-bound scenario.
+HOSTILE_SCENARIOS = {
+    "TestActualDockerHostileProcessMatrix/descendants-ignore-term",
+    "TestActualDockerHostileProcessMatrix/output-flood",
+    "TestActualDockerHostileProcessMatrix/scratch-exhaustion",
+    "TestActualDockerHostileProcessMatrix/pid-exhaustion",
+    "TestActualDockerHostileProcessMatrix/memory-exhaustion",
+}
+EXPECTED_TEST_PACKAGES.update({name: "github.com/ixayldz/Viber/internal/runner" for name in HOSTILE_SCENARIOS})
+
 events = [json.loads(line) for line in args.evidence.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
 started = {(e["Package"], e["Test"]) for e in events if e.get("Action") == "run" and e.get("Test")}
 passed = {(e["Package"], e["Test"]) for e in events if e.get("Action") == "pass" and e.get("Test")}
@@ -115,6 +125,8 @@ finished = {e["Package"] for e in events if e.get("Action") in {"pass", "skip"} 
 if failed or not passed or packages != finished or started != passed | skipped:
     raise SystemExit("FAIL: incomplete or failing Go test evidence")
 required = set()
+if args.docker or args.rootless:
+    required |= HOSTILE_SCENARIOS
 if args.delivery:
     required |= {
         "TestMergedReverificationImportsFreshImmutableCandidateWithoutOldAuthority",

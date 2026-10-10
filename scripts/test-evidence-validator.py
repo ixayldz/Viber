@@ -17,6 +17,11 @@ rootless = [
     "TestActualDockerPersistentFenceInventoryAndReopen",
     "TestDockerOfflineReadOnlyQuiescenceAndTimeout",
     "TestActualDockerNativeOrphanFencingPreventsLateCreateAndStart",
+    "TestActualDockerHostileProcessMatrix/descendants-ignore-term",
+    "TestActualDockerHostileProcessMatrix/output-flood",
+    "TestActualDockerHostileProcessMatrix/scratch-exhaustion",
+    "TestActualDockerHostileProcessMatrix/pid-exhaustion",
+    "TestActualDockerHostileProcessMatrix/memory-exhaustion",
 ]
 failures = [
     "TestVaultResponseFailureMatrixNeverAdoptsNoisyOrNoncanonicalKey",
@@ -39,6 +44,10 @@ def package_events(package, results, complete=True):
 
 
 samples = [
+    ("native OOM skipped despite parent PASS", package_events(runner, [(test, "skip" if test.endswith("/memory-exhaustion") else "pass") for test in rootless]), ["--rootless"], False),
+    ("native OOM missing despite parent PASS", package_events(runner, [(test, "pass") for test in rootless if not test.endswith("/memory-exhaustion")]), ["--rootless"], False),
+    ("resource bounds only foreign PASS", package_events(runner, [(test, "pass") for test in rootless[:4]]) + package_events(foreign, [(test, "pass") for test in rootless[4:]]), ["--rootless"], False),
+    ("native scenarios cannot replace hostile parent", package_events(runner, [(test, "pass") for test in rootless[1:]]), ["--rootless"], False),
     ("rootless required native parents", package_events(runner, [(test, "pass") for test in rootless]), ["--rootless"], True),
     ("rootless parent skipped", package_events(runner, [(test, "skip" if index == 0 else "pass") for index, test in enumerate(rootless)]), ["--rootless"], False),
     ("rootless missing required parent", package_events(runner, [(test, "pass") for test in rootless[:-1]]), ["--rootless"], False),
@@ -67,4 +76,4 @@ with tempfile.TemporaryDirectory(prefix="viber-evidence-validator-") as director
         if not accepted and "FAIL:" not in result.stderr:
             raise SystemExit("FAIL: fixture was rejected without the expected validation failure: " + name)
 
-print("PASS: 16 evidence identity/failure/gap contracts; fixture evidence is not native acceptance")
+print(f"PASS: {len(samples)} evidence identity/failure/gap contracts; fixture evidence is not native acceptance")
