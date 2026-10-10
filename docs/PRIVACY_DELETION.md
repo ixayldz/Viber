@@ -46,6 +46,8 @@ Eski schema 1 backup manifest'i normal `store-restore` tarafından reddedilir. M
 
 ## Sonuç ve açık kapsam
 
+Authority ilk açılışta reserve/genesis yayınlanmadan önce exact directory/physical identity ile owner journal'ına kaydedilir. Kurulum kesintisinden sonra normal CLI/owner açılışı aynı pending allocation'ı tamamlar. Başka root veya farklı/foreign içerik benimsenmez; failed initialization sessiz yeni authority yaratmaz. Bind current pin'i ve pending marker'ının kaldırılmasını tek transaction'da yapar. Dizinleri prefix'e göre elle topluca silmek recovery değildir. Eski sürümlerden kalan kayıt dışı orphan'lar ve mkdir-before-allocation küçük directory artıkları otomatik cleanup kapsamına girmez; [ADR 0016](adr/0016-privacy-authority-allocation.md).
+
 `PURGED_MANAGED_LOCAL_CONTENT` yalnız plana bağlı local içerik, kayıtlı ordinary derivative ve restore scope'ları için verilir. Hata sırasında external intent erişimi kapalı tutar, tombstone `PENDING` kalır; aynı komutla devam edilir.
 
 Yeni native evaluator aynı external authority altında ayrı owner ve benzersiz `eval-…` task ID alır. İlk candidate CAS yazımından önce parent/cursor/document/request/physical owner lineage kaydedilir. Aktif original/evaluator/restore owner silmeyi engeller; published evaluator önce silinir. TaskCreated öncesi çöken evaluator kopyaları parent manifest'ine girer. `source.json`, `registration.json`, `result.json`, `manifest.json` raporları ilk yazımdan önce kayıtlı allocation kapsamındadır; nested owner ayrıca task-scope inventory ve minimal journal ile yönetilir. Yabancı rapor dosyası veya owner root replacement temizleme sonucunu engeller. Evaluator backup/restore aynı watermark ve family silme kontrolüne bağlıdır.

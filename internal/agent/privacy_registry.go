@@ -384,38 +384,7 @@ func (s *Session) ensurePrivacy(ctx context.Context) error {
 	if !c.ValidDigest(info.FormatDigest) {
 		return c.Fail(c.UnsupportedCapability, "privacy requires migrated store format")
 	}
-	directory, err := fileguard.ResolveProspective(filepath.Join(filepath.Dir(s.directory), ".viber-privacy-"+newID("")))
-	if err != nil {
-		return err
-	}
-	// An unbound pre-existing directory is never adopted as current authority.
-	root, err := freshPrivate(directory)
-	if err != nil {
-		return c.Fail(c.PolicyDenied, "privacy authority initialization requires a fresh external directory")
-	}
-	defer root.Close()
-	id, err := fileguard.DirectoryIdentity(root)
-	if err != nil {
-		return err
-	}
-	authority := PrivacyAuthority{1, newID(""), directory, id}
-	if err = root.Mkdir("records", 0700); err != nil {
-		return err
-	}
-	if err = admitPrivacyDisk(root, 4096, false); err != nil {
-		return err
-	}
-	raw, err := c.CanonicalV1(authority)
-	if err != nil {
-		return err
-	}
-	if err = fileguard.Publish(root, "authority.json", raw); err != nil {
-		return err
-	}
-	if err = s.Journal.BindPrivacyAuthority(ctx, raw); err != nil {
-		return err
-	}
-	return s.attachPrivacy(ctx)
+	return s.initializePrivacyAuthority(ctx)
 }
 func (s *Session) contentAvailable(task string) error {
 	if s.privacy == nil {

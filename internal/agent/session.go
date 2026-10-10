@@ -114,6 +114,7 @@ type Document struct {
 	LastResponseBlob      string                   `json:"last_response_blob"`
 }
 type Session struct {
+	privacyInitFault  func(string) error
 	publicationMu     sync.RWMutex
 	privacy           *PrivacyAuthority
 	privacyOwner      *privacyOwner
@@ -134,6 +135,10 @@ func Open(ctx context.Context, directory string) (*Session, error) {
 }
 
 func openSession(ctx context.Context, directory string, authority *PrivacyAuthority) (*Session, error) {
+	return openSessionWithPrivacyFault(ctx, directory, authority, nil)
+}
+
+func openSessionWithPrivacyFault(ctx context.Context, directory string, authority *PrivacyAuthority, fault func(string) error) (*Session, error) {
 	if err := preflightRuntimeInstance(directory); err != nil {
 		return nil, err
 	}
@@ -161,7 +166,7 @@ func openSession(ctx context.Context, directory string, authority *PrivacyAuthor
 		journal.Close()
 		return nil, err
 	}
-	session := &Session{directory: directory, Journal: journal, Archive: archive, clockOrigin: time.Now(), clockDomain: newID("")}
+	session := &Session{directory: directory, Journal: journal, Archive: archive, clockOrigin: time.Now(), clockDomain: newID(""), privacyInitFault: fault}
 	session.instance, err = openRuntimeInstance(ctx, session)
 	if err != nil {
 		archive.Close()

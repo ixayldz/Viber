@@ -36,7 +36,7 @@ TUI, background owner, detach/attach, durable queue, compaction, kaynak hesaplar
 | İzole process geliştirme testi | Önceden indirilmiş, digest ile sabitlenmiş Linux Docker image'ı ve Linux engine |
 | Store | Kaynak kökün dışında, yerel ve kullanıcı erişimiyle korunan dizin |
 
-Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir; rootless ve gerçek engine restart ölçümleri kullanıcı kararıyla beklemektedir. [Çalışma planı ve ölçümler](docs/FOUNDATION_AND_RETRIEVAL_PLAN.md).
+Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. Go 1.27.2 foundation commit'i üç native CI platformunda (Windows/Linux/macOS) test, migration ve güvenlik kapılarını geçti; Linux race/fuzz ve gerçek Docker işi de yeşildir. [Foundation CI](https://github.com/ixayldz/Viber/actions/runs/37955831284). Bu sonuç Windows native untrusted process sandbox kabulü değildir. Docker broker sınırlı bir geliştirme profilidir. Kullanıcının sonraki onayıyla geçici privileged engine üzerinde gerçek rootful restart/fencing geçti; bu hosttaki rootless profil gerekli kaynak controller'ları olmadığı için reddedildi. [Güncel kabul kaydı](docs/VALIDATION.md) ve [PRD teslim planı](docs/KEYLESS_DELIVERY_PLAN.md).
 
 ## Kurulum
 
@@ -540,6 +540,8 @@ Yeni store'un ilk görevi immutable `--resource-policy policy.json` ile para, CP
 Böyle bir task'a `--resource-policy policy.json` ekleyin. Rate alanları bir milyon token için micro currency miktarıdır; sonuç yukarı yuvarlanır. Catalog'da bulunmayan paid model başlatılmaz; model switch de catalog ve kalan bütçeyi kontrol eder.
 
 Store, 32 MiB private `control.reserve` alanını random bytes + sync ile gerçekten ayırır ve OS allocation bilgisini doğrular. 64 MiB free-space low watermark altında yeni work yazısı engellenir. Sınırlı control/receipt/checkpoint yazıları rezervi tüketebilir; kapasite tükenirse son durable checkpoint korunarak yazı reddedilir. Work tekrar başlamadan rezerv doldurulur. Bu mekanizma network filesystem veya bütün güç kesintisi senaryoları için conformance iddiası değildir.
+
+İlk privacy authority kurulurken dizinin fiziksel kimliği reserve/genesis yazılmadan önce owner journal'ına pending allocation olarak kaydedilir. Açılış yarıda kalırsa sonraki açılış aynı dizin ve rezervle devam eder; yeni 32 MiB kopyalar yaratmaz. Kayıp/değiştirilmiş dizin, farklı genesis veya yabancı dosya varsa işlem durur. Authority dizinini elle taşımak/silmek desteklenen recovery değildir. [ADR 0016](docs/adr/0016-privacy-authority-allocation.md) crash sınırlarını, [detaylı PRD planı](docs/KEYLESS_DELIVERY_PLAN.md) kalan işlerin kabul koşullarını açıklar.
 
 0.8 ve önceki resource-untracked store'lara yeni accounted task karıştırılmaz. Yeni 0.9 görevleri için fresh store kullanın; mevcut tarihsel accounting'e sıfır kullanım eklenmez. SQLite format 2 korunur; yeni optional task alanlarını eski strict clients okuyamaz, downlevel resume desteklenmez.
 

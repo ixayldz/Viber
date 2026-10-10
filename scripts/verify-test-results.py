@@ -18,6 +18,12 @@ args = parser.parse_args()
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestPrivacyPhysicalMetadataBytePressureRejectsBeforeIntentPublication": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyFullJournalSaturationPreservesControlWatermarkOnTenReopens": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyPendingAllocationReopensAndBindingAtomicallyPromotesExactCAS": "github.com/ixayldz/Viber/internal/store",
+    "TestPrivacyPendingAllocationCorruptionCannotPublishCurrentAuthority": "github.com/ixayldz/Viber/internal/store",
+    "TestPrivacyInitializationCrashRecoveryReusesPinnedPhysicalAllocation": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyInitializationRetryRejectsForeignRootAndRecoversOnlyGenesisTemps": "github.com/ixayldz/Viber/internal/agent",
     "TestActualDockerAgentCheckRetainsEvidenceWithoutFalseVerification": "github.com/ixayldz/Viber/internal/agent",
     "TestActualDockerHostileProcessMatrix": "github.com/ixayldz/Viber/internal/runner",
     "TestActualDockerIndependentObserverCandidateFinal": "github.com/ixayldz/Viber/internal/agent",
@@ -121,6 +127,12 @@ if args.retrieval:
     }
 if args.privacy:
     required |= {
+        "TestPrivacyPhysicalMetadataBytePressureRejectsBeforeIntentPublication",
+        "TestPrivacyFullJournalSaturationPreservesControlWatermarkOnTenReopens",
+        "TestPrivacyPendingAllocationReopensAndBindingAtomicallyPromotesExactCAS",
+        "TestPrivacyPendingAllocationCorruptionCannotPublishCurrentAuthority",
+        "TestPrivacyInitializationCrashRecoveryReusesPinnedPhysicalAllocation",
+        "TestPrivacyInitializationRetryRejectsForeignRootAndRecoversOnlyGenesisTemps",
         "TestTaskContentDeletionPurgesCASMaterializationsAndManagedBackups",
         "TestPrivacyMetadataPressurePreservesDeletionClassAndBoundsTemporaryBytes",
         "TestPrivacyWorkJournalSaturationStillPublishesRealDeletionIntent",

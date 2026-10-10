@@ -229,6 +229,38 @@ func TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete
 	if err != nil || capacity.WorkReady || capacity.CatalogEntries != privacyWorkCatalogLimit {
 		t.Fatal(capacity, err)
 	}
+	// Historical/foreign pressure can reach the total limit even though current
+	// ordinary admission stops at 7680. It must not lock out a known owner.
+	lock, err = privacyLock(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := privacyWorkCatalogLimit + 1; count < privacyCatalogLimit; i++ {
+		f, createErr := root.OpenFile(filepath.Join("owners", fmt.Sprintf("%032x.lock", i)), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if createErr != nil {
+			lock.Close()
+			t.Fatal(createErr)
+		}
+		if createErr = f.Close(); createErr != nil {
+			lock.Close()
+			t.Fatal(createErr)
+		}
+		count++
+	}
+	if err = fileguard.SyncDirectory(root, "owners"); err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	lock.Close()
+	s.Close()
+	s, err = OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal("known owner cannot reopen at total catalog limit", err)
+	}
+	capacity, err = s.PrivacyMetadataCapacity(ctx)
+	if err != nil || capacity.WorkReady || capacity.CatalogEntries != privacyCatalogLimit {
+		t.Fatal("total catalog capacity observation", capacity, err)
+	}
 	plan, err := s.DeletionPreview(ctx, options.TaskID)
 	if err != nil {
 		t.Fatal("registered owner cannot preview deletion at catalog pressure", err)

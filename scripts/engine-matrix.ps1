@@ -1,6 +1,6 @@
 # Explicit opt-in: two disposable privileged daemons. No host socket, bind mount
 # or published port. Every created container is reclaimed in finally.
-param([switch]$AllowPrivilegedDisposableEngines)
+param([switch]$AllowPrivilegedDisposableEngines,[switch]$RequireRootlessSupported)
 $ErrorActionPreference='Stop'
 if (!$AllowPrivilegedDisposableEngines) {throw 'Explicit -AllowPrivilegedDisposableEngines opt-in required.'}
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -11,19 +11,22 @@ $taskEvidence=Join-Path $taskRoot ('.cache/engine-matrix-'+[guid]::NewGuid().ToS
 $taskBinary=Join-Path $taskEvidence 'runner.test'
 $taskOriginalGOOS=$env:GOOS;$taskOriginalGOARCH=$env:GOARCH;$taskOriginalCGO=$env:CGO_ENABLED
 $taskOriginalToolchain=$env:GOTOOLCHAIN
+$taskResults=[Collections.Generic.List[object]]::new()
+$taskRootlessSupported=$false
 function Invoke-MatrixDocker {
  param([string[]]$Arguments)
  $text=(& docker @Arguments 2>&1 | Out-String).Trim()
  if ($LASTEXITCODE -ne 0) {throw ('Disposable engine operation failed: '+$text)}
  return $text
 }
-$taskImage='golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61'
+$taskImage='public.ecr.aws/docker/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61'
 try {
  $env:GOOS='linux';$env:GOARCH='amd64';$env:CGO_ENABLED='0';$env:GOTOOLCHAIN='local'
  Push-Location -LiteralPath $taskRoot
  try {& $taskGo test -c -o $taskBinary ./internal/runner;if($LASTEXITCODE){throw 'Acceptance binary compile failed'}} finally {Pop-Location}
  foreach($mode in @('rootful','rootless')) {
   $taskContainer=''
+  $taskResult=[ordered]@{mode=$mode;classification='NOT_COMPLETED';restart_fenced=$false;cleanup_verified=$false;backend=$null}
   try {
    $daemon='docker:29.8.2-dind@sha256:1e08cdb63405ca788aea94ef35b792d1e299607c667d33d7bcbcae1fd2611ced'
    $endpoint='unix:///var/run/docker.sock'
@@ -40,6 +43,8 @@ try {
    }
    if(!$ready){throw 'Disposable engine did not become ready within 30 seconds.'}
    $info=Invoke-MatrixDocker @('exec',$taskContainer,'docker','--host',$endpoint,'info','--format','{{json .}}')
+   $taskBackend=$info | ConvertFrom-Json
+   $taskResult.backend=[ordered]@{engine_id=$taskBackend.ID;version=$taskBackend.ServerVersion;cgroup_version=$taskBackend.CgroupVersion;cgroup_driver=$taskBackend.CgroupDriver;security_options=$taskBackend.SecurityOptions}
    [IO.File]::WriteAllText((Join-Path $taskEvidence ($mode+'-info.json')),$info)
    $null=Invoke-MatrixDocker @('exec','--user','0',$taskContainer,'mkdir','/matrix')
    $null=Invoke-MatrixDocker @('cp',$taskBinary,($taskContainer+':/runner.test'))
@@ -50,7 +55,8 @@ try {
     $probe=Invoke-MatrixDocker ($base+@('--env','VIBER_ENGINE_MATRIX_PHASE=rootless-probe',$taskContainer,'/runner.test','-test.v','-test.run=^TestDisposableRootlessCapability$'))
     [IO.File]::WriteAllText((Join-Path $taskEvidence 'rootless-probe.txt'),$probe)
     if($probe -notmatch 'ROOTLESS_SUPPORTED|ROOTLESS_DENIED_UNSUPPORTED_RESOURCE_CONTROLLERS'){throw 'No measured rootless classification.'}
-    if($probe -match 'ROOTLESS_DENIED_UNSUPPORTED_RESOURCE_CONTROLLERS'){continue}
+    if($probe -match 'ROOTLESS_DENIED_UNSUPPORTED_RESOURCE_CONTROLLERS'){$taskResult.classification='UNSUPPORTED_RESOURCE_CONTROLLERS';continue}
+    $taskRootlessSupported=$true
    }
    $null=Invoke-MatrixDocker @('exec',$taskContainer,'docker','--host',$endpoint,'pull',$taskImage)
    $before=Invoke-MatrixDocker ($base+@('--env','VIBER_ENGINE_MATRIX_PHASE=before',$taskContainer,'/runner.test','-test.v','-test.run=^TestDisposableEnginePhase$'))
@@ -63,15 +69,24 @@ try {
    $after=Invoke-MatrixDocker ($base+@('--env','VIBER_ENGINE_MATRIX_PHASE=after',$taskContainer,'/runner.test','-test.v','-test.run=^TestDisposableEnginePhase$'))
    [IO.File]::WriteAllText((Join-Path $taskEvidence ($mode+'-after.txt')),$after)
    if($after -notmatch 'AFTER_RESTART_FENCED'){throw 'Restart fencing proof missing.'}
+   $taskResult.classification='PASS'
+   $taskResult.restart_fenced=$true
   } finally {
    if($taskContainer -match '^[a-f0-9]{64}$') {
     & docker logs $taskContainer *> (Join-Path $taskEvidence ($mode+'-daemon.log'))
     & docker rm --force --volumes $taskContainer | Out-Null
     if($LASTEXITCODE){throw ('Cleanup failed for exact disposable container '+$taskContainer)}
+    $remaining=Invoke-MatrixDocker @('ps','-a','--filter',('id='+$taskContainer),'--format','{{.ID}}')
+    if($remaining){throw ('Disposable container still present after cleanup '+$taskContainer)}
+    $taskResult.cleanup_verified=$true
    }
+   $taskResults.Add([pscustomobject]$taskResult)
+   $taskSummary=[ordered]@{schema_version=1;task_image=$taskImage;rootless_required=[bool]$RequireRootlessSupported;measurements=@($taskResults.ToArray())}
+   [IO.File]::WriteAllText((Join-Path $taskEvidence 'summary.json'),($taskSummary | ConvertTo-Json -Depth 8))
   }
  }
  Write-Output ('Acceptance evidence: '+$taskEvidence)
+ if($RequireRootlessSupported -and !$taskRootlessSupported){throw 'Rootless support required but resource controllers are unsupported; see summary.json. Cleanup completed.'}
 } finally {
  $env:GOOS=$taskOriginalGOOS;$env:GOARCH=$taskOriginalGOARCH;$env:CGO_ENABLED=$taskOriginalCGO;$env:GOTOOLCHAIN=$taskOriginalToolchain
 }
