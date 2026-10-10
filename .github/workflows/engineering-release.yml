@@ -1,0 +1,38 @@
+name: engineering-release
+on:
+  push:
+    tags: ['engineering-*']
+permissions:
+  contents: read
+concurrency:
+  group: engineering-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'ixayldz/Viber'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Require exact native main acceptance, verify, draft/readback/publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REVISION: ${{ github.sha }}
+          ENGINEERING_TAG: ${{ github.ref_name }}
+        run: python scripts/engineering-release.py --revision "$SOURCE_REVISION" --tag "$ENGINEERING_TAG" --output .cache/engineering-publication
+      - name: Preserve public manifest or partial draft diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: engineering-publication-${{ github.sha }}
+          path: |
+            .cache/engineering-publication/assets/release.json
+            .cache/engineering-publication/assets/SHA256SUMS
+            .cache/engineering-publication/notes.md
+          if-no-files-found: warn

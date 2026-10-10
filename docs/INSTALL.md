@@ -4,9 +4,11 @@ Mevcut kanal **engineering snapshot**; `doctor.release_ready=false`. Kararlı ü
 
 ## İndirme ve doğrulama
 
+Public engineering kanalında [GitHub Releases](https://github.com/ixayldz/Viber/releases) içindeki `engineering-FULL_SHA` prerelease'inin Windows ZIP veya Linux/macOS tar.gz asset'ini seçebilirsiniz; public release asset indirmek GitHub oturumu istemez. Henüz ilk public engineering yayınının native/provenance/publish kabulü tamamlanmamıştır. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. Release notes içindeki exact source/native CI bağlantısını kontrol edin; archive için aşağıdaki provenance doğrulaması aynıdır.
+
 [GitHub Actions](https://github.com/ixayldz/Viber/actions/workflows/ci.yml) içinde exact commit'e ait başarılı `core` run'ını açın. Foundation'ın yanında üç `packages` işi ve `attest-packages` da SUCCESS olmalıdır. Bu akış yalnız bu repo'nun `main` push'unda signing yapar; PR/fork paketleri bu güven zincirine girmez.
 
-Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Henüz public stable GitHub Release yayımlanmamıştır; bu belge Actions download yoludur.
+Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Public engineering release hazır olduğunda Assets bölümü bu aynı arşivleri, birleşik checksum ve `release.json` taşır. Public stable release kapısı kapalıdır.
 
 Portable archive'ı **çalıştırmadan/açmadan önce** resmi GitHub CLI ile repo, signer workflow, source ref ve seçtiğiniz tam SHA'yı doğrulayın:
 

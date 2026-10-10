@@ -1,6 +1,7 @@
 name: core
 on:
   push:
+    tags-ignore: ['engineering-*']
   pull_request:
 permissions:
   contents: read
@@ -43,6 +44,7 @@ jobs:
         run: |
           python scripts/test-evidence-validator.py
           python scripts/test-portable-package.py
+          python scripts/test-engineering-release.py
       - name: Full tests
         run: |
           mkdir -p evidence
