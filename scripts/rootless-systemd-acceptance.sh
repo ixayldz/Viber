@@ -91,11 +91,31 @@ task_dropin="/etc/systemd/system/user@$task_uid.service.d/viber-acceptance.conf"
 [[ ! -e $(dirname "$task_dropin") ]]
 sudo mkdir -- "$(dirname "$task_dropin")"
 task_dropin_owned=true
-printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\nEnvironment=XDG_RUNTIME_DIR=/run/user/%%i\nEnvironment=XDG_CONFIG_HOME=%s/.config\nEnvironment=XDG_DATA_HOME=%s/.local/share\nEnvironment=XDG_CACHE_HOME=%s/.cache\nEnvironment=XDG_STATE_HOME=%s/.local/state\nEnvironment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%%i/bus\n' \
+[[ -x /usr/lib/systemd/systemd ]]
+# runner-images puts runner-specific XDG paths in /etc/environment. PAM applies
+# those after unit Environment=, so override only this fresh UID's ExecStart
+# environment after PAM. Keep the original systemd --user manager and sandbox;
+# do not edit the host's global PAM/environment configuration.
+printf '[Service]\nDelegate=cpu cpuset io memory pids\nMemoryMax=3G\nCPUQuota=200%%\nTasksMax=512\nExecStart=\nExecStart=/usr/bin/env XDG_RUNTIME_DIR=/run/user/%%i XDG_CONFIG_HOME=%s/.config XDG_DATA_HOME=%s/.local/share XDG_CACHE_HOME=%s/.cache XDG_STATE_HOME=%s/.local/state DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%%i/bus /usr/lib/systemd/systemd --user\n' \
   "$task_home" "$task_home" "$task_home" "$task_home" | sudo tee "$task_dropin" >/dev/null
 sudo systemctl daemon-reload
 sudo loginctl enable-linger "$task_user"
 sudo systemctl start "user@$task_uid.service"
+task_manager_pid=$(sudo systemctl show "user@$task_uid.service" --property MainPID --value)
+[[ $task_manager_pid =~ ^[0-9]+$ && $task_manager_pid != 0 ]]
+sudo python3 - "$task_uid" "$task_home" "$task_manager_pid" > "$task_evidence/rootless-manager-profile.json" <<'PY'
+import json, os, stat, sys
+uid, home, pid = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+runtime = '/run/user/' + str(uid)
+assert os.stat('/proc/' + str(pid)).st_uid == uid
+environment = dict(item.split(b'=', 1) for item in open('/proc/' + str(pid) + '/environ', 'rb').read().split(b'\0') if b'=' in item)
+expected = {'XDG_RUNTIME_DIR': runtime, 'XDG_CONFIG_HOME': home + '/.config', 'XDG_DATA_HOME': home + '/.local/share', 'XDG_CACHE_HOME': home + '/.cache', 'XDG_STATE_HOME': home + '/.local/state', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=' + runtime + '/bus'}
+for key, value in expected.items():
+    assert environment.get(key.encode()) == value.encode(), key
+info = os.stat(runtime)
+assert info.st_uid == uid and stat.S_IMODE(info.st_mode) == 0o700
+print(json.dumps({'schema_version': 1, 'uid': uid, 'manager_pid': pid, 'runtime_mode': '0700', 'paths': expected}))
+PY
 task_runtime="/run/user/$task_uid"
 task_endpoint="unix://$task_runtime/docker.sock"
 task_as_user=(sudo -H -u "$task_user" env -u DOCKER_HOST -u DOCKER_CONTEXT "XDG_RUNTIME_DIR=$task_runtime" "DBUS_SESSION_BUS_ADDRESS=unix:path=$task_runtime/bus" "XDG_CONFIG_HOME=$task_home/.config" "XDG_DATA_HOME=$task_home/.local/share" "XDG_CACHE_HOME=$task_home/.cache" "XDG_STATE_HOME=$task_home/.local/state" PATH=/usr/bin:/bin)
