@@ -129,7 +129,8 @@ jobs:
           path: evidence/
           if-no-files-found: error
   rootless:
-    needs: test
+    # Diagnose host/package/delegation failures alongside the core suites.
+    # Foundation still requires both rootless and every core/native job.
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:

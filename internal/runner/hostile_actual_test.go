@@ -27,13 +27,16 @@ func TestActualDockerHostileProcessMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	scenarios := []struct {
-		name, script                string
-		timeout, truncated, nonzero bool
+		name, script                     string
+		timeout, truncated, nonzero, oom bool
 	}{
-		{"descendants-ignore-term", `trap '' TERM; sh -c 'trap "" TERM; sleep 300 & wait' & wait`, true, false, true},
-		{"output-flood", `while :; do printf 'hostile-output-012345678901234567890123456789\n'; done`, false, true, true},
-		{"scratch-exhaustion", `dd if=/dev/zero of=/tmp/fill bs=1M count=16; code=$?; rm -f /tmp/fill; exit "$code"`, false, false, true},
-		{"pid-exhaustion", `i=0; while [ "$i" -lt 64 ]; do sleep 2 & i=$((i+1)); done; wait`, false, false, true},
+		{"descendants-ignore-term", `trap '' TERM; sh -c 'trap "" TERM; sleep 300 & wait' & wait`, true, false, true, false},
+		{"output-flood", `while :; do printf 'hostile-output-012345678901234567890123456789\n'; done`, false, true, true, false},
+		{"scratch-exhaustion", `dd if=/dev/zero of=/tmp/fill bs=1M count=16; code=$?; rm -f /tmp/fill; exit "$code"`, false, false, true, false},
+		{"pid-exhaustion", `i=0; while [ "$i" -lt 64 ]; do sleep 2 & i=$((i+1)); done; wait`, false, false, true, false},
+		// Actual cgroup OOM must be observed by the broker's engine inspection.
+		// A timeout/nonzero exit or a program's own report is not memory proof.
+		{"memory-exhaustion", `exec awk 'BEGIN { for (i=0;;i++) a[i]=sprintf("%01024d",i) }'`, false, false, true, true},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -42,6 +45,10 @@ func TestActualDockerHostileProcessMatrix(t *testing.T) {
 			p.MaxOutputBytes = 2048
 			p.ScratchBytes = 1 << 20
 			p.Pids = 16
+			if scenario.oom {
+				p.MemoryBytes = 128 << 20
+				p.TimeoutSeconds = 15
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
 			result, err := broker.Run(ctx, source, p, Invocation{CandidateDigest: c.HashBytes([]byte(scenario.name)), Argv: []string{"/bin/sh", "-c", scenario.script}})
@@ -51,15 +58,19 @@ func TestActualDockerHostileProcessMatrix(t *testing.T) {
 			if scenario.timeout && !result.TimedOut || scenario.truncated && !result.OutputTruncated || scenario.nonzero && result.ExitCode == 0 {
 				t.Fatal("hostile bound not observed", result)
 			}
+			if scenario.oom && (!result.OOMKilled || result.TimedOut || result.Cancelled || result.ExitCode != 137) {
+				t.Fatal("native cgroup OOM was not observed", result)
+			}
 			if len(result.Stdout) > 2048 || len(result.Stderr) > 2048 {
 				t.Fatal("output quota escaped")
 			}
 			raw, _ := json.Marshal(struct {
-				Name                           string
-				DurationMillis                 int64
-				TimedOut, Truncated, Quiescent bool
-				Exit                           int
-			}{scenario.name, result.DurationMillis, result.TimedOut, result.OutputTruncated, result.ProcessTreeQuiescent, result.ExitCode})
+				Name                                      string
+				DurationMillis                            int64
+				TimedOut, Truncated, Quiescent, OOMKilled bool
+				MemoryLimitBytes                          int64
+				Exit                                      int
+			}{scenario.name, result.DurationMillis, result.TimedOut, result.OutputTruncated, result.ProcessTreeQuiescent, result.OOMKilled, p.MemoryBytes, result.ExitCode})
 			t.Log(string(raw))
 		})
 	}
