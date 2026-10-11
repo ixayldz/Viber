@@ -21,6 +21,9 @@ args = parser.parse_args()
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority": "github.com/ixayldz/Viber/internal/agent",
     "TestRetentionCursorCASIsBoundedAcrossReopenAndCannotChangeAuthorityOrLedger": "github.com/ixayldz/Viber/internal/store",
     "TestRetentionCursorActualChildDeathRetainsCommittedPriority": "github.com/ixayldz/Viber/internal/store",
     "TestSupervisorShutdownCannotCompleteWhileStoreLockRemainsHeld": "github.com/ixayldz/Viber/internal/cli",
@@ -194,6 +197,9 @@ if args.disk_pressure:
     required.add("TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen")
 if args.privacy:
     required |= {
+        "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask",
+        "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision",
+        "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority",
         "TestSupervisorShutdownCannotCompleteWhileStoreLockRemainsHeld",
         "TestUnlinkedOpenMetadataIsAbsentWhileHardlinkRemainsDenied",
         "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory",

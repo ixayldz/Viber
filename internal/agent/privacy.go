@@ -395,6 +395,9 @@ func (s *Session) deleteContentLocked(ctx context.Context, command DeletionComma
 			err = c.Fail(c.CommandIDConflict, "deletion retry must preserve original command and plan")
 		}
 	}
+	if err == nil && !retry && deletionIntentCollision(view, command) {
+		err = c.Fail(c.CommandIDConflict, "deletion namespace is reserved by an existing family intent")
+	}
 	err = errors.Join(err, lock.Close(), root.Close())
 	if err != nil {
 		return result, err

@@ -4,7 +4,7 @@ Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate
 
 **Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.
 
-**İndirilebilir paketler:** [GitHub engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) — Windows amd64, Linux amd64, macOS arm64. GitHub hesabı veya Go derleyicisi olmadan indirilebilir; ilk offline görev model anahtarı istemez. Çalıştırmadan önce [paket doğrulama ve kurulum kılavuzunu](docs/INSTALL.md) izleyin. Bu exact revision'ın 12 native CI/paket/provenance işi başarılıdır; stable PRD kapıları açık değildir.
+**İndirilebilir paketler:** [GitHub engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9) — Windows amd64, Linux amd64, macOS arm64. GitHub hesabı veya Go derleyicisi olmadan indirilebilir; ilk offline görev model anahtarı istemez. Çalıştırmadan önce [paket doğrulama ve kurulum kılavuzunu](docs/INSTALL.md) izleyin. Bu exact revision'ın 12 native CI/paket/provenance işi başarılıdır; stable PRD kapıları açık değildir.
 
 [Ürün gereksinimleri](prd.md) · [Güncel yetenekler](docs/CAPABILITIES.md) · [PRD durum analizi](docs/PRD_STATUS_ANALYSIS.md) · [Anahtarsız teslim planı](docs/KEYLESS_DELIVERY_PLAN.md) · [Tamamlama planı](docs/IMPLEMENTATION_PLAN.md) · [Kabul kapıları](docs/RELEASE_GATES.md) · [Doğrulama kaydı](docs/VALIDATION.md)
 
@@ -42,7 +42,7 @@ Windows native CLI ve Linux CLI/Unix IPC üzerinde yerel test kanıtı vardır. 
 
 ## Kurulum
 
-Go derleyicisi kullanmadan [yayımlanmış portable engineering paketini](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) kullanabilirsiniz. İndirme/doğrulama/kurulum ve ilk görev akışı [GitHub paket kılavuzunda](docs/INSTALL.md) anlatılır. Üç platform native smoke ve ayrı OIDC provenance kabulü geçti; public stable release kapıları henüz kapalıdır. Aşağıdaki yol kaynak derlemesidir.
+Go derleyicisi kullanmadan [yayımlanmış portable engineering paketini](https://github.com/ixayldz/Viber/releases/tag/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9) kullanabilirsiniz. İndirme/doğrulama/kurulum ve ilk görev akışı [GitHub paket kılavuzunda](docs/INSTALL.md) anlatılır. Üç platform native smoke ve ayrı OIDC provenance kabulü geçti; public stable release kapıları henüz kapalıdır. Aşağıdaki yol kaynak derlemesidir.
 
 Otomatik installer veya paket yöneticisi dağıtımı yoktur. Kaynaktan derlemek için:
 

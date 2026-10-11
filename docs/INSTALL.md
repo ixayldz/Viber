@@ -4,19 +4,19 @@ Mevcut kanal **engineering snapshot**; `doctor.release_ready=false`. Kararlı ü
 
 ## İndirme ve doğrulama
 
-İlk [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416) yayımlandı. Exact source `1f145f6d1062129a3b2506b1a7ab570ad0739416`; [12 native CI/paket/provenance işi](https://github.com/ixayldz/Viber/actions/runs/38087257996) SUCCESS. Aşağıdaki hedefi seçin; GitHub oturumu olmadan indirme ve beş asset'in exact byte readback'i ayrıca doğrulandı.
+Güncel [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9) yayımlandı. Exact source `9f089972af6ffd5c4ae153bcd6d288c6e90894d9`; [12 native CI/paket/provenance işi](https://github.com/ixayldz/Viber/actions/runs/38122778794) SUCCESS. Aşağıdaki hedefi seçin; sekiz asset'in GitHub oturumu olmadan indirme/checksum readback'i ve altı OIDC subject'in exact source provenance doğrulaması geçti. Üç native rapor taze archive kurulumu, ilk görev ve manuel kaldırma sırasında dış store'un korunmasını ölçer.
 
 | Sistem | İndirilecek asset |
 |---|---|
-| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416/viber-1f145f6d1062-windows-amd64.zip) |
-| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416/viber-1f145f6d1062-linux-amd64.tar.gz) |
-| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-1f145f6d1062129a3b2506b1a7ab570ad0739416/viber-1f145f6d1062-darwin-arm64.tar.gz) |
+| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-windows-amd64.zip) |
+| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-linux-amd64.tar.gz) |
+| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-darwin-arm64.tar.gz) |
 
-Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. İlk workflow'un draft/tag lookup hatası ve doğrulanan explicit-ID recovery kaydı [VALIDATION](VALIDATION.md) içindedir; sonraki publisher düzeltmesi kendi exact revision kabulünü ister.
+Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. Bu yayının [normal tag workflow'u](https://github.com/ixayldz/Viber/actions/runs/38124117014) create/upload/readback/publication kabulünü geçti. Önceki sürümlerin başarısızlık ve recovery kayıtları [VALIDATION](VALIDATION.md) içinde korunur.
 
 [GitHub Actions](https://github.com/ixayldz/Viber/actions/workflows/ci.yml) içinde exact commit'e ait başarılı `core` run'ını açın. Foundation'ın yanında üç `packages` işi ve `attest-packages` da SUCCESS olmalıdır. Bu akış yalnız bu repo'nun `main` push'unda signing yapar; PR/fork paketleri bu güven zincirine girmez.
 
-Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Public release Assets bölümü aynı arşivleri, birleşik checksum ve `release.json` taşır. Public stable release kapısı kapalıdır.
+Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Public release Assets bölümü üç arşiv, üç platforma ait `*-distribution.json` kurulum raporu, birleşik checksum ve `release.json` taşır. Public stable release kapısı kapalıdır.
 
 Portable archive'ı **çalıştırmadan/açmadan önce** resmi GitHub CLI ile repo, signer workflow, source ref ve seçtiğiniz tam SHA'yı doğrulayın:
 
@@ -25,6 +25,8 @@ gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.
 ```
 
 SHA'yı indirdiğiniz JSON içinden körlemesine güvenerek seçmeyin; GitHub'da incelemeyi seçtiğiniz commit ile karşılaştırın. Checksum taşıma hasarını gösterir; tek başına yayımlayanın kimliğini doğrulamaz. GitHub CLI authentication/model API credential farklıdır; paket kullanmak OpenAI/Anthropic anahtarı istemez. [Resmi verification sözleşmesi](https://cli.github.com/manual/gh_attestation_verify).
+
+Platformunuzun `*-distribution.json` dosyasını da aynı komutta ARCHIVE yerine vererek doğrulayın. İmzalı raporun source revision/platform/archive SHA-256/byte sayısı indirdiğiniz arşivle aynı olmalıdır. `archive_install_smoke.scope=FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY` kabulü PATH boşken ve Git bulunmazken ilk görevi çalıştırır; kaynak ve dış store korunur. Otomatik güncelleme veya farklı store formatına rollback bu raporun kapsamına girmez.
 
 GitHub OIDC build provenance, archive byte'larının bu workflow/commit'ten çıktığını bağlar. Windows Authenticode veya macOS Developer ID/notarization değildir; OS bunları unsigned uygulama olarak gösterebilir. Provenance ürün kalitesi veya PRD evaluator verdict'i değildir.
 

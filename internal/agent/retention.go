@@ -388,3 +388,23 @@ func retentionDeletionCollision(view privacyView, command DeletionCommand) bool 
 	}
 	return false
 }
+
+// A durable intent reserves its eventual receipt names before any owner store
+// has written a receipt. Check the family registry as well as the kernel DB.
+func deletionIntentCollision(view privacyView, command DeletionCommand) bool {
+	ids := map[string]bool{}
+	for _, id := range deletionCommandIDs(command) {
+		if ids[id] {
+			return true
+		}
+		ids[id] = true
+	}
+	for _, prior := range view.Deletions {
+		for _, id := range deletionCommandIDs(prior) {
+			if ids[id] {
+				return true
+			}
+		}
+	}
+	return false
+}

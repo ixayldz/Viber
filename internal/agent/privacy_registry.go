@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +170,14 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 	}
 	sort.Strings(names)
 	total := int64(0)
+	// Replay-local indexes only: retain every record and dedup fact. No state or
+	// authority digest can be reused by a later read/reopen. Schema bounds cap
+	// these indexes (2048 records; at most 128 restored scopes per intent).
+	copies := map[string]int{}
+	attempts := map[struct{ Root, Task string }]bool{}
+	reservedDeletionIDs := map[[32]byte]bool{}
+	var retentionGenesis []byte
+	retentionAuthority := ""
 	for _, name := range names {
 		if name != fmt.Sprintf("%010d.json", view.Sequence+1) {
 			return view, c.Fail(c.StoreIntegrityError, "privacy journal gap or foreign record")
@@ -189,19 +199,14 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			if record.Copy == nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || validateManagedCopy(*record.Copy) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "managed copy record invalid")
 			}
-			replaced := false
-			for i, prior := range view.Copies {
-				if prior.Directory != record.Copy.Directory {
-					continue
-				}
+			if i, replaced := copies[record.Copy.Directory]; replaced {
+				prior := view.Copies[i]
 				if len(prior.Files) != 0 || prior.Kind != record.Copy.Kind || prior.PhysicalRoot != record.Copy.PhysicalRoot || (!sameManagedTasks(prior.Tasks, record.Copy.Tasks) || !sameExcludedStore(prior.ExcludedStore, record.Copy.ExcludedStore)) {
 					return view, c.Fail(c.StoreIntegrityError, "managed allocation cannot be rebound")
 				}
 				view.Copies[i] = *record.Copy
-				replaced = true
-				break
-			}
-			if !replaced {
+			} else {
+				copies[record.Copy.Directory] = len(view.Copies)
 				view.Copies = append(view.Copies, *record.Copy)
 			}
 		case "DELETE_INTENT":
@@ -211,6 +216,13 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			command := *record.Command
 			if retentionDeletionCollision(view, command) {
 				return view, c.Fail(c.StoreIntegrityError, "retention and deletion command identity collision")
+			}
+			for _, id := range deletionCommandIDs(command) {
+				key := sha256.Sum256([]byte(id))
+				if reservedDeletionIDs[key] {
+					return view, c.Fail(c.StoreIntegrityError, "deletion command namespace was reserved twice")
+				}
+				reservedDeletionIDs[key] = true
 			}
 			if command.Expiry != nil {
 				policy, exists := view.Retentions[command.Plan.TaskID]
@@ -229,11 +241,11 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Retention != nil || record.Attempt.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid durable attempt lineage")
 			}
-			for _, prior := range view.Attempts {
-				if prior.Scope.PhysicalRoot == record.Attempt.Scope.PhysicalRoot && prior.ChildTask == record.Attempt.ChildTask {
-					return view, c.Fail(c.StoreIntegrityError, "attempt lineage identity was registered twice")
-				}
+			key := struct{ Root, Task string }{record.Attempt.Scope.PhysicalRoot, record.Attempt.ChildTask}
+			if attempts[key] {
+				return view, c.Fail(c.StoreIntegrityError, "attempt lineage identity was registered twice")
 			}
+			attempts[key] = true
 			if _, deleted := view.Deletions[record.Attempt.ParentTask]; deleted {
 				return view, c.Fail(c.StoreIntegrityError, "attempt was allocated after parent deletion")
 			}
@@ -246,13 +258,16 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				return view, c.Fail(c.StoreIntegrityError, "invalid retention record")
 			}
 			retention := *record.Retention
-			genesis, err := fileguard.ReadRegular(root, "authority.json", 4096)
-			var authority PrivacyAuthority
-			authorityDigest := ""
-			if err == nil && c.DecodeStrict(genesis, &authority) == nil {
-				authorityDigest, _ = c.Digest(authority)
+			if retentionGenesis == nil {
+				genesis, err := fileguard.ReadRegular(root, "authority.json", 4096)
+				var authority PrivacyAuthority
+				if err != nil || c.DecodeStrict(genesis, &authority) != nil || authority.validate() != nil {
+					return view, c.Fail(c.StoreIntegrityError, "retention authority unavailable or invalid")
+				}
+				retentionGenesis = genesis
+				retentionAuthority, _ = c.Digest(authority)
 			}
-			if err != nil || authorityDigest != retention.Policy.AuthorityDigest {
+			if retentionAuthority != retention.Policy.AuthorityDigest {
 				return view, c.Fail(c.StoreIntegrityError, "retention authority mismatch")
 			}
 			if _, exists := view.Deletions[retention.Policy.TaskID]; exists {
@@ -261,12 +276,8 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			if _, exists := view.RetentionCommands[retention.CommandID]; exists || retention.Policy.Revision != view.Retentions[retention.Policy.TaskID].Policy.Revision+1 {
 				return view, c.Fail(c.StoreIntegrityError, "retention command duplicate or revision gap")
 			}
-			for _, deletion := range view.Deletions {
-				for _, id := range deletionCommandIDs(deletion) {
-					if id == retention.CommandID {
-						return view, c.Fail(c.StoreIntegrityError, "retention command collides with deletion")
-					}
-				}
+			if reservedDeletionIDs[sha256.Sum256([]byte(retention.CommandID))] {
+				return view, c.Fail(c.StoreIntegrityError, "retention command collides with deletion")
 			}
 			view.Retentions[retention.Policy.TaskID] = retention
 			view.RetentionCommands[retention.CommandID] = retention
@@ -275,6 +286,12 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 		}
 		view.Sequence = record.Sequence
 		view.Tail = c.HashBytes(raw)
+	}
+	if retentionGenesis != nil {
+		current, err := fileguard.ReadRegular(root, "authority.json", 4096)
+		if err != nil || !bytes.Equal(current, retentionGenesis) {
+			return view, c.Fail(c.StoreIntegrityError, "retention authority changed during replay")
+		}
 	}
 	return view, nil
 }
