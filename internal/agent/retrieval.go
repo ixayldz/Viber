@@ -66,7 +66,11 @@ func rankedReadPageWithRanking(ctx context.Context, candidate workspace.Capture,
 	var release func()
 	if cache != nil {
 		var measured retrieval.CacheEvidence
-		index, measured, release, err = cache.Acquire(buildCtx, scope, binding, documents)
+		if partition != nil {
+			index, measured, release, err = cache.AcquirePartition(buildCtx, scope, binding, documents, partition.PlanDigest)
+		} else {
+			index, measured, release, err = cache.Acquire(buildCtx, scope, binding, documents)
+		}
 		evidence = &measured
 	} else {
 		index, err = retrieval.New(buildCtx, binding, documents)

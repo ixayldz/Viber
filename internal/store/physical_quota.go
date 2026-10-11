@@ -176,6 +176,11 @@ func (s *Store) AttachPhysicalQuota(ledger *resource.Ledger) error {
 	if binding == nil || binding.AuthorityID != ledger.Authority.ID || binding.Directory != ledger.Authority.Directory || binding.PhysicalRoot != ledger.Authority.PhysicalRoot || binding.LedgerID != ledger.LedgerID {
 		return c.Fail(c.StaleAuthority, "attached physical quota ledger differs from owner-store pin")
 	}
+	if err = s.attachMutableSQLite(ledger); err != nil {
+		s.mutable = nil
+		_ = s.disk.SetAdmissionHook(nil)
+		return err
+	}
 	s.physical = ledger
 	return nil
 }

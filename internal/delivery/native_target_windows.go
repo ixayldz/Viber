@@ -27,9 +27,16 @@ type nativeLeaseFile struct {
 	seal   NativeFileSeal
 }
 
+type nativeLeaseDirectory struct {
+	handle *os.File
+	seal   NativeDirectorySeal
+}
+
 type windowsNativeLease struct {
-	files       map[string]nativeLeaseFile
-	directories []*os.File
+	files          map[string]nativeLeaseFile
+	directories    []nativeLeaseDirectory
+	root           string
+	volumeIdentity string
 }
 
 func inspectNativeTarget(root string, intents []NativeFileIntent) (NativeTargetSeal, error) {
@@ -163,7 +170,12 @@ func acquireNativeTarget(ctx context.Context, seal NativeTargetSeal, expected ma
 	if !isDrivePath(seal.Root) {
 		return nil, c.Fail(c.UnsupportedCapability, "restricted NTFS apply requires a local drive path")
 	}
-	lease := &windowsNativeLease{files: map[string]nativeLeaseFile{}, directories: []*os.File{}}
+	lease := &windowsNativeLease{
+		files:          map[string]nativeLeaseFile{},
+		directories:    []nativeLeaseDirectory{},
+		root:           seal.Root,
+		volumeIdentity: seal.VolumeIdentity,
+	}
 	fail := func(err error) (NativeTargetLease, error) { return nil, errors.Join(err, lease.Close()) }
 	volumeRoot, err := windowsVolumePath(seal.Root)
 	if err != nil || windows.GetDriveType(windows.StringToUTF16Ptr(volumeRoot)) != windows.DRIVE_FIXED {
@@ -182,10 +194,9 @@ func acquireNativeTarget(ctx context.Context, seal NativeTargetSeal, expected ma
 		if err = ctx.Err(); err != nil {
 			return fail(err)
 		}
-		// Directories pin the namespace by denying DELETE sharing. Sharing
-		// read/write allows ordinary directory enumeration and unrelated file
-		// activity; the changed files themselves are held with share mode zero.
-		handle, openErr := openNativeHandle(directory.Path, nativeDirectoryAccess(), windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, windows.FILE_DIRECTORY_FILE)
+		// Directory handles deny concurrent write and delete opens while the
+		// lease is live. Read sharing still permits ordinary enumeration.
+		handle, openErr := openNativeHandle(directory.Path, nativeDirectoryAccess(), windows.FILE_SHARE_READ, windows.FILE_DIRECTORY_FILE)
 		if openErr != nil {
 			return fail(nativeProfileError(fmt.Errorf("directory handle: %w", openErr)))
 		}
@@ -195,8 +206,11 @@ func acquireNativeTarget(ctx context.Context, seal NativeTargetSeal, expected ma
 			handle.Close()
 			return fail(err)
 		}
-		finalPath, pathErr := finalNativePath(handle)
-		if pathErr != nil || !windowsPathEqual(finalPath, directory.Path) || identity != directory.Identity || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		// A short 8.3 component may be returned by the filesystem even when the
+		// caller sealed the same directory through its long name. The handle's
+		// volume/file identity plus OBJ_DONT_REPARSE pins the exact object; a
+		// textual final-path comparison would reject that valid alias.
+		if identity != directory.Identity || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 			handle.Close()
 			return fail(c.Fail(c.StaleBase, "target directory identity, path or type changed"))
 		}
@@ -213,7 +227,7 @@ func acquireNativeTarget(ctx context.Context, seal NativeTargetSeal, expected ma
 				return fail(c.Fail(c.StaleBase, "target volume is no longer NTFS"))
 			}
 		}
-		lease.directories = append(lease.directories, handle)
+		lease.directories = append(lease.directories, nativeLeaseDirectory{handle: handle, seal: directory})
 	}
 	if !rootFound {
 		return fail(c.Fail(c.StoreIntegrityError, "target root is missing from exclusive directory seal"))
@@ -238,16 +252,16 @@ func acquireNativeTarget(ctx context.Context, seal NativeTargetSeal, expected ma
 		stat, statErr := handle.Stat()
 		identity, identityErr := fileguard.FileIdentity(handle)
 		linkErr := fileguard.SingleLink(handle)
-		contents, readErr := readHandle(handle, 1<<30)
-		if err = errors.Join(infoErr, statErr, identityErr, linkErr, readErr); err != nil {
-			handle.Close()
-			return fail(err)
-		}
 		expectedSize := file.Size
 		if digest == file.AfterDigest {
 			expectedSize = file.AfterSize
 		}
-		if !stat.Mode().IsRegular() || identity != file.Identity || stat.Size() != expectedSize || stat.Size() > 1<<30 || uint32(stat.Mode().Perm()) != file.Mode || info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE|windows.FILE_ATTRIBUTE_READONLY) != 0 || c.HashBytes(contents) != digest {
+		contents, readErr := readHandle(handle, expectedSize)
+		if err = errors.Join(infoErr, statErr, identityErr, linkErr, readErr); err != nil {
+			handle.Close()
+			return fail(err)
+		}
+		if !stat.Mode().IsRegular() || identity != file.Identity || stat.Size() != expectedSize || uint32(stat.Mode().Perm()) != file.Mode || info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE|windows.FILE_ATTRIBUTE_READONLY) != 0 || c.HashBytes(contents) != digest {
 			handle.Close()
 			return fail(c.Fail(c.StaleBase, "target file identity, permissions or content changed"))
 		}
@@ -264,7 +278,16 @@ func (l *windowsNativeLease) WriteFile(ctx context.Context, path, expectedDigest
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	current, err := readHandle(file.handle, 1<<30)
+	if err := l.validateDirectories(); err != nil {
+		return err
+	}
+	if err := validateNativeFileHandle(file); err != nil {
+		return err
+	}
+	if int64(len(contents)) > nativeMaxFileBytes {
+		return c.Fail(c.UnsupportedCapability, "native target write exceeds the bounded profile")
+	}
+	current, err := readHandle(file.handle, nativeMaxFileBytes)
 	if err != nil {
 		return err
 	}
@@ -297,20 +320,18 @@ func (l *windowsNativeLease) WriteFile(ctx context.Context, path, expectedDigest
 	if err = file.handle.Sync(); err != nil {
 		return err
 	}
-	readback, err := readHandle(file.handle, 1<<30)
+	if err = l.validateDirectories(); err != nil {
+		return err
+	}
+	readback, err := readHandle(file.handle, nativeMaxFileBytes)
 	if err != nil {
 		return err
 	}
 	if c.HashBytes(readback) != newDigest {
 		return c.Fail(c.StoreIntegrityError, "synced target bytes do not match the requested sealed result")
 	}
-	info, err := fileInfo(file.handle)
-	if err != nil {
+	if err = validateNativeFileHandle(file); err != nil {
 		return err
-	}
-	identity, err := fileguard.FileIdentity(file.handle)
-	if err != nil || identity != file.seal.Identity || info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE|windows.FILE_ATTRIBUTE_READONLY) != 0 {
-		return c.Fail(c.StaleBase, "target identity or writable file attributes changed during write")
 	}
 	return nil
 }
@@ -319,6 +340,15 @@ func (l *windowsNativeLease) ReadFile(path string, limit int64) ([]byte, error) 
 	file, ok := l.files[path]
 	if !ok || limit < 0 {
 		return nil, c.Fail(c.PolicyDenied, "read is outside the sealed target files")
+	}
+	if err := l.validateDirectories(); err != nil {
+		return nil, err
+	}
+	if err := validateNativeFileHandle(file); err != nil {
+		return nil, err
+	}
+	if limit > nativeMaxFileBytes {
+		limit = nativeMaxFileBytes
 	}
 	return readHandle(file.handle, limit)
 }
@@ -330,11 +360,56 @@ func (l *windowsNativeLease) Close() error {
 		delete(l.files, path)
 	}
 	for i, directory := range l.directories {
-		err = errors.Join(err, directory.Close())
-		l.directories[i] = nil
+		err = errors.Join(err, directory.handle.Close())
+		l.directories[i].handle = nil
 	}
 	l.directories = nil
 	return err
+}
+
+func (l *windowsNativeLease) validateDirectories() error {
+	for _, directory := range l.directories {
+		info, err := fileInfo(directory.handle)
+		if err != nil {
+			return err
+		}
+		identity, err := fileguard.FileIdentity(directory.handle)
+		if err != nil {
+			return err
+		}
+		if identity != directory.seal.Identity || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			return c.Fail(c.StaleBase, "target directory identity or type changed during the operation")
+		}
+		if windowsPathEqual(directory.seal.Path, l.root) {
+			volumeID, volumeErr := volumeIdentity(directory.handle)
+			if volumeErr != nil || volumeID != l.volumeIdentity {
+				return c.Fail(c.StaleBase, "target volume identity changed during the operation")
+			}
+		}
+	}
+	return nil
+}
+
+func validateNativeFileHandle(file nativeLeaseFile) error {
+	info, err := fileInfo(file.handle)
+	if err != nil {
+		return err
+	}
+	stat, err := file.handle.Stat()
+	if err != nil {
+		return err
+	}
+	identity, err := fileguard.FileIdentity(file.handle)
+	if err != nil {
+		return err
+	}
+	if err = fileguard.SingleLink(file.handle); err != nil {
+		return err
+	}
+	if !stat.Mode().IsRegular() || identity != file.seal.Identity || uint32(stat.Mode().Perm()) != file.seal.Mode || info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE|windows.FILE_ATTRIBUTE_READONLY) != 0 {
+		return c.Fail(c.StaleBase, "target file identity, permissions or type changed during the operation")
+	}
+	return nil
 }
 
 func nativeDirectoryAccess() uint32 {

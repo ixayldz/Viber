@@ -36,6 +36,10 @@ type Store struct {
 	migrationFault func(string) error
 	migrationSpace func() uint64
 	physical       *resource.Ledger
+	mutable        *resource.MutableSQLite
+	physicalCtx    context.Context
+	physicalUpper  uint64
+	physicalDigest string
 }
 type Command struct {
 	ID              string         `json:"command_id"`
@@ -124,7 +128,40 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if version < 0 || version > storeVersion {
 		return nil, c.Fail(c.UnsupportedCapability, "newer store schema; downgrade forbidden")
 	}
-	for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL"} {
+	s := &Store{disk: disk, db: db, lock: lock, directory: root, schema: version}
+	var preflightLedger *resource.Ledger
+	defer func() {
+		if resultErr != nil && preflightLedger != nil {
+			_ = disk.SetAdmissionHook(nil)
+			_ = preflightLedger.Close()
+		}
+	}()
+	if version == storeVersion {
+		preflightLedger, err = s.preparePinnedQuotaForOpen(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if preflightLedger != nil {
+			if err = disk.Admit(2<<20, true); err != nil {
+				return nil, err
+			}
+		}
+	}
+	finishPreflight := func() error {
+		if preflightLedger == nil {
+			return nil
+		}
+		var finishErr error
+		if s.mutable != nil {
+			finishErr = s.mutable.Refresh(ctx)
+		}
+		_ = disk.SetAdmissionHook(nil)
+		finishErr = errors.Join(finishErr, preflightLedger.Close())
+		preflightLedger = nil
+		s.mutable = nil
+		return finishErr
+	}
+	for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA wal_autocheckpoint=1", "PRAGMA journal_size_limit=16777216", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
 		if _, err = db.ExecContext(ctx, pragma); err != nil {
 			return nil, err
 		}
@@ -171,7 +208,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	s := &Store{disk: disk, db: db, lock: lock, directory: root, schema: version}
+	s.schema = version
 	if err = s.verifyProjectionsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -180,6 +217,9 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	}
 	if s.readOnlyReason != "" {
 		if err = db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='generation'").Scan(&s.generation); err != nil {
+			return nil, err
+		}
+		if err = finishPreflight(); err != nil {
 			return nil, err
 		}
 		return s, nil
@@ -200,6 +240,9 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 		return nil, err
 	}
 	s.generation = generation
+	if err = finishPreflight(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Store) Generation() int64 { return s.generation }
@@ -209,7 +252,11 @@ func (s *Store) Close() error {
 	if s.db == nil {
 		return nil
 	}
-	err := s.db.Close()
+	var err error
+	if s.mutable != nil {
+		err = errors.Join(err, s.mutable.Refresh(context.Background()))
+	}
+	err = errors.Join(err, s.db.Close())
 	lockErr := s.lock.Close()
 	s.db = nil
 	return errors.Join(err, lockErr, s.disk.Close())
@@ -320,10 +367,6 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 			return c.TaskState{}, err
 		}
 	}
-	control := command.Type != "TaskCreated" && !(command.Payload.Resources != nil && command.Payload.Resources.Action == "RESERVE") && !(command.Payload.Tokens != nil && command.Payload.Tokens.Action == "RESERVE")
-	if err := s.disk.Admit(2<<20, control); err != nil {
-		return c.TaskState{}, err
-	}
 	envelope, err := c.CanonicalV1(event)
 	if err != nil {
 		return state, err
@@ -341,6 +384,21 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 	if err != nil {
 		return state, err
 	}
+	control := command.Type != "TaskCreated" && !(command.Payload.Resources != nil && command.Payload.Resources.Action == "RESERVE") && !(command.Payload.Tokens != nil && command.Payload.Tokens.Action == "RESERVE")
+	if s.mutable != nil {
+		transactionBytes := uint64(len(payload) + len(envelope) + 2*len(stateRaw) + 64<<10)
+		s.physicalUpper, err = resource.MutableSQLiteUpper(transactionBytes)
+		if err != nil {
+			return c.TaskState{}, err
+		}
+		s.physicalDigest = c.HashBytes([]byte("store-command-mutable-sqlite:" + digest))
+		s.physicalCtx = ctx
+	}
+	if err := s.disk.Admit(2<<20, control); err != nil {
+		s.physicalUpper, s.physicalDigest, s.physicalCtx = 0, "", nil
+		return c.TaskState{}, err
+	}
+	s.physicalUpper, s.physicalDigest, s.physicalCtx = 0, "", nil
 	statements := []struct {
 		query string
 		args  []any

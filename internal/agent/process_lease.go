@@ -93,12 +93,24 @@ func pendingCheck(doc Document) (model.Call, error) {
 		return model.Call{}, c.Fail(c.StoreIntegrityError, "native call cursor invalid")
 	}
 	call := message.Calls[doc.ToolCursor]
-	if call.Name != "check_run" || call.ID != doc.Pending.ID || c.HashBytes(call.Arguments) != doc.Pending.ArgumentsDigest {
+	if call.ID != doc.Pending.ID || c.HashBytes(call.Arguments) != doc.Pending.ArgumentsDigest {
 		return model.Call{}, c.Fail(c.StoreIntegrityError, "owned native call differs from durable intent")
+	}
+	if doc.Pending.ExtensionIntent != nil {
+		if call.Name != extensionModelToolName(doc.Pending.ExtensionIntent.Manifest.Digest, doc.Pending.ExtensionIntent.ToolName) || validateExtensionIntentBinding(doc, call, *doc.Pending.ExtensionIntent) != nil {
+			return model.Call{}, c.Fail(c.StoreIntegrityError, "owned extension call differs from durable intent")
+		}
+		return call, nil
+	}
+	if call.Name != "check_run" {
+		return model.Call{}, c.Fail(c.StoreIntegrityError, "owned native tool has no recovery handler")
 	}
 	return call, nil
 }
 func ownedCheckTargets(s *Session, doc Document, call model.Call, lease runner.Lease) ([]runner.Target, []runner.Capsule, error) {
+	if doc.Pending != nil && doc.Pending.ExtensionIntent != nil {
+		return ownedExtensionTargets(s, doc, call, lease)
+	}
 	var query struct {
 		CheckID string `json:"check_id"`
 	}
@@ -185,6 +197,22 @@ func validateNativeLease(doc Document) error {
 	if err != nil {
 		return err
 	}
+	if p.ExtensionIntent != nil {
+		intent := p.ExtensionIntent
+		tool, ok := intent.Manifest.Manifest.Tool(intent.ToolName)
+		if !ok || validateExtensionIntentBinding(doc, call, *intent) != nil || intent.Admission.Validate(intent.Manifest, tool) != nil {
+			return c.Fail(c.StoreIntegrityError, "owned extension admission binding invalid")
+		}
+		var empty []byte
+		invocation := runner.Invocation{CandidateDigest: doc.Candidate.SnapshotDigest, Argv: append([]string(nil), intent.Manifest.Manifest.Command...), RequestDigest: intent.OperationDigest, Stdin: &empty}
+		profileDigest, _ := c.Digest(intent.Manifest.Manifest.Profile)
+		invocationDigest, _ := c.Digest(invocation)
+		capsule := p.NativeSubjects[0]
+		if len(p.NativeSubjects) != 1 || capsule.SchemaVersion != 1 || capsule.Owner != (runner.Ownership{Lease: l, Phase: "CHECK", Ordinal: 1}) || capsule.CandidateDigest != doc.Candidate.SnapshotDigest || capsule.ProfileDigest != profileDigest || capsule.InvocationDigest != invocationDigest || !c.ValidDigest(capsule.SourceDigest) {
+			return c.Fail(c.StoreIntegrityError, "owned extension process capsule changed")
+		}
+		return nil
+	}
 	var query struct {
 		CheckID string `json:"check_id"`
 	}
@@ -253,6 +281,31 @@ func validateNativeLease(doc Document) error {
 	return nil
 }
 
+func ownedExtensionTargets(s *Session, doc Document, call model.Call, lease runner.Lease) ([]runner.Target, []runner.Capsule, error) {
+	if doc.Pending == nil || doc.Pending.ExtensionIntent == nil {
+		return nil, nil, c.Fail(c.StoreIntegrityError, "extension process intent missing")
+	}
+	intent := doc.Pending.ExtensionIntent
+	tool, ok := intent.Manifest.Manifest.Tool(intent.ToolName)
+	if !ok || validateExtensionIntentBinding(doc, call, *intent) != nil || intent.Admission.Validate(intent.Manifest, tool) != nil {
+		return nil, nil, c.Fail(c.StoreIntegrityError, "extension process admission invalid")
+	}
+	materialized, err := s.Archive.Materialize(doc.Candidate)
+	if err != nil {
+		return nil, nil, err
+	}
+	if doc.Extension == nil || !fileguard.Disjoint(s.directory, doc.Extension.ManifestPath) || !fileguard.Disjoint(doc.Extension.ManifestPath, materialized.SourceDirectory) {
+		return nil, nil, c.Fail(c.StoreIntegrityError, "extension manifest path overlaps recovery source or task store")
+	}
+	var empty []byte
+	invocation := runner.Invocation{CandidateDigest: doc.Candidate.SnapshotDigest, Argv: append([]string(nil), intent.Manifest.Manifest.Command...), RequestDigest: intent.OperationDigest, Stdin: &empty}
+	target, capsule, err := runner.PrepareTarget(runner.Target{Owner: runner.Ownership{Lease: lease, Phase: "CHECK", Ordinal: 1}, Source: materialized.SourceDirectory, Profile: intent.Manifest.Manifest.Profile, Invocation: invocation})
+	if err != nil {
+		return nil, nil, err
+	}
+	return []runner.Target{target}, []runner.Capsule{capsule}, nil
+}
+
 type leasedSubjectRunner struct {
 	broker  *runner.Docker
 	session *Session
@@ -304,6 +357,32 @@ func (r *leasedSubjectRunner) Run(ctx context.Context, source string, p runner.P
 		return runner.Result{}, &runner.DispatchFailure{Cause: err, EffectPossible: false}
 	}
 	return r.broker.Run(owned, source, p, inv)
+}
+func (r *leasedSubjectRunner) RunDuplex(ctx context.Context, source string, p runner.Profile, inv runner.Invocation, driver runner.DuplexDriver) (runner.Result, error) {
+	if inv.Stdin != nil {
+		return runner.Result{}, &runner.DispatchFailure{Cause: c.Fail(c.InvalidArgument, "extension process cannot preload stdin"), EffectPossible: false}
+	}
+	r.ordinal++
+	owner := runner.Ownership{Lease: *r.pending.NativeLease, Phase: r.phase, Ordinal: r.ordinal}
+	empty := []byte{}
+	bound := inv
+	bound.Stdin = &empty
+	_, capsule, err := runner.PrepareTarget(runner.Target{Owner: owner, Source: source, Profile: p, Invocation: bound})
+	if err != nil {
+		return runner.Result{}, &runner.DispatchFailure{Cause: err, EffectPossible: false}
+	}
+	found := false
+	for _, expected := range r.pending.NativeSubjects {
+		found = found || expected == capsule
+	}
+	if !found || r.session.Journal.Generation() != owner.Lease.Generation {
+		return runner.Result{}, &runner.DispatchFailure{Cause: c.Fail(c.StaleAuthority, "extension subject differs from durable process capsule"), EffectPossible: false}
+	}
+	owned, err := runner.WithOwnership(ctx, owner, r.expires)
+	if err != nil {
+		return runner.Result{}, &runner.DispatchFailure{Cause: err, EffectPossible: false}
+	}
+	return r.broker.RunDuplex(owned, source, p, inv, driver)
 }
 func validateOwnedResult(result runner.Result, doc Document, record CheckRun, phase string, ordinal int) error {
 	if record.NativeLease != nil {

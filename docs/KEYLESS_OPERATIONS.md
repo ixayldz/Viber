@@ -38,9 +38,9 @@ viber privacy-checkpoint --store /private/store --json
 
 Checkpoint bakımı için family owner'larını durdurun. Lossless projection; dedup, pending deletion, UNKNOWN, managed-copy, attempt, consent ve watermark kayıtlarını taşır. Tüm kayıtlı owner SQLite pin'leri PREPARED→ACTIVE geçer; current anchor yayımlanmadan kaynak journal silinmez. Sonra exact kaynak aralığı için immutable retirement receipt yayımlanır ve bound inode/byte silmesi yapılır. Eksik kaynak, yalnız current anchor ve receipt doğrulanırsa kabul edilir. Checkpoint/catalog geçmişi bounded olarak tutulur; bütün metadata'nın sınırsız kullanımını veya otomatik owner katalog temizliğini vaat etmez.
 
-Yeni owner ve fresh restore, current checkpoint pin'ine bağlanır. Restore, kaynak anchor soyunu ve exact registered staging kimliğini doğrulayarak destination SQLite pin'ini rebase eder; işlem kesilirse aynı owned staging kaydından devam eder. Bir task silinirken sibling task'ların export kopyaları korunur. Live operation lease veya yarım restore stage varken checkpoint engellenir. Kayıp family owner'ı hâlâ checkpoint/catalog geçişini engelleyebilir; metadata/owner dosyalarını elle silmek recovery değildir. Eski checkpoint/catalog retirement ayrı kalan iştir.
+Yeni owner ve fresh restore, current checkpoint pin'ine bağlanır. Restore, kaynak anchor soyunu ve exact registered staging kimliğini doğrulayarak destination SQLite pin'ini rebase eder; işlem kesilirse aynı owned staging kaydından devam eder. Bir task silinirken sibling task'ların export kopyaları korunur. Live backup/restore operation lease veya yarım restore stage varken checkpoint engellenir. Checkpoint sonunda complete bounded scan ile current-watermark backup pin'leri korunur; kullanılmayan eski checkpoint projection ve retirement receipt'leri identity/digest bağıyla silinir. Scan belirsiz veya limit dışıysa `historical_retirement_pending` ve reason döner. Anchor soyu ve owner catalog kayıtları korunur; catalog/legacy owner retirement ayrı kalan iştir. Kayıp family owner'ı checkpoint/catalog geçişini engelleyebilir; metadata/owner dosyalarını elle silmek recovery değildir.
 
-Ortak fiziksel ledger, authority/DB kimliğine bağlıdır. Yazıcı reserve→WRITING→measured RETAINED akışını kullanır; kesilmiş yazı üst sınırı charged kalır. Snapshot, CAS/materialization, backup/export ve evaluator bundle bu yola bağlanır. Üst evaluator allocation alt yazıcıları kapsar. Dosyanın silinmesi, byte'ların gerçekten serbest kalmasıyla aynı olay değildir: open mapping veya NTFS resident stream nedeniyle free-space kanıtı yetersizse FREE_PENDING charged kalır. Mutable bütün metadata/fence lifecycle ve tüm writer profillerinin toplam kabulü yalnız bu broker'ın varlığıyla kapanmaz.
+Ortak fiziksel ledger, authority/DB kimliğine bağlıdır. Yazıcı reserve→WRITING→measured RETAINED akışını kullanır; kesilmiş yazı üst sınırı charged kalır. Snapshot, CAS/materialization, backup/export ve evaluator bundle bu yola bağlanır. Owner SQLite/lock/bounded WAL/SHM için retained metric receipt ve durably charged standby kullanılır; mutation öncesi standby WRITING olur, exact inode/physical ölçüm upper içinde kalırsa rearm edilir. Shrink high-water charge'i düşürmez. Bu namespace başka task dosyalarını kapsıyor sayılmaz; nested compound output kendi reservation'ını kullanır. Üst evaluator allocation alt yazıcıları kapsar. Dosyanın silinmesi, byte'ların gerçekten serbest kalmasıyla aynı olay değildir: open mapping veya NTFS resident stream nedeniyle free-space kanıtı yetersizse FREE_PENDING charged kalır. Bütün mutable metadata/fence lifecycle ve tüm writer profillerinin toplam kabulü yalnız bu broker'ın varlığıyla kapanmaz.
 
 FREE_PENDING için exact member ve free-space tabanı durable intent olarak saklanır; yeniden açılışta ve kapasite kabulünde tekrar ölçülür. Silme ve yeterli fiziksel alan dönüşü birlikte kanıtlanmadan charge düşmez. Retained seed, fiziksel kimliğin yanında canonical root yoluna bağlanır; Linux'ta silinmiş başka bir dizinin inode'u tekrar kullanıldığında eski receipt yeni dizine uygulanmaz. Receipt/WAL/checkpoint kontrol alanı için ayrı metadata admission vardır.
 
@@ -51,14 +51,17 @@ viber goal-queue TASK --store /private/store --json
 viber goal-queue TASK --store /private/store --command-file goal.json --json
 viber attach TASK --store /private/store --provider-deltas --follow --json
 viber check-discover --root /source/project --json
+viber repo-graph --root /source/go-project --goos linux --goarch amd64 --cgo DISABLED --tags-complete --changed internal/app.go --json
 viber repo-history --root /source/project --allow-local-history --cutoff 2026-10-10T00:00:00Z --target src/app.go --json
 ```
 
 Goal queue prompt steering'den ayrıdır; sabit child kimliği, parent document/source binding ve durable activation intent tutar. Child ayrı görevdir; parent içeriğinden türeyen kopyalar privacy lineage'a yazılır. Ayrıntılar: [goal/stream sözleşmesi](SUPERVISOR_QUEUE_STREAM.md).
 
+`repo-graph`, yakalanmış Go dosyalarını parser/type checker ile analiz eder; host import, derleyici veya Git çalıştırmaz. Dosya/package/declaration ve çözümlenebilen çağrı/referans ilişkileri source hash'lerine bağlıdır. Build hedefi, tag'ler ve cgo analizin açık girdileridir; gerçek test ortamı ölçümü değildir. Yakalanmamış import veya belirsiz build koşulunda kapsam PARTIAL kalır ve test seçimi genişletilir. Generic deklarasyonları olan package ve bunları import eden captured package'lar type check'i atlar; parse/import bilgisi korunur. Source/token/AST/output sınırları uygulanır; type checker için genel hard CPU/RSS izolasyonu kabul edilmiş değildir. `--changed` test önerisi çıkarır; zorunlu check'leri kaldırmaz. Model aynı bilgiyi policy read scope içindeki `fs_graph` aracıyla bounded sayfalar halinde okuyabilir.
+
 Provider delta cursor'u task event cursor'u değildir. Geçici ring'de kayıp varsa explicit gap/current state bildirilir; `--resync` bilinçli ilerletir. Delta, kalite/completion kanıtı değildir.
 
-Check discovery framework/config/test/import ipuçları çıkarır, dependency closure'u yetkili protected scopes ile karşılaştırır. Repository kodunu çalıştırmaz ve yeni doğrulama yetkisi vermez. History yalnız cutoff'tan sonraki commitleri dışlayan bounded first-parent path metadata'sıdır; commit mesajı/kimliği çıkarılmaz. Packed/alternate/shallow/graft/replace veya eksik nesne PARTIAL/UNKNOWN kalır. Local embedding için `--semantic-query`, `--allow-local-embedding`, `--embedding-model`, `--embedding-revision` açıkça seçilir. Loopback endpoint'in cloud proxy olmadığı bağımsız attestation ile kanıtlanmış sayılmaz.
+Check discovery framework/config/test/import ipuçları çıkarır, dependency closure'u yetkili protected scopes ile karşılaştırır. Repository kodunu çalıştırmaz ve yeni doğrulama yetkisi vermez. History cutoff'tan sonraki commitleri dışlayan bounded first-parent path metadata'sıdır; commit mesajı/kimliği çıkarılmaz. Loose objects ve bounded v2 index'li v2/v3 pack dosyaları native okunur; REF/OFS delta, object hash, pack/index checksum, CRC, boundary ve derinlik/byte sınırları kontrol edilir. Pack inventory değişirse eski rapor reddedilir. Desteklenmeyen format, alternate/shallow/graft/replace, limit aşımı veya eksik nesne PARTIAL/UNKNOWN kalır. Local embedding için `--semantic-query`, `--allow-local-embedding`, `--embedding-model`, `--embedding-revision` açıkça seçilir. Loopback endpoint'in cloud proxy olmadığı bağımsız attestation ile kanıtlanmış sayılmaz.
 
 ## Operatör kısıtlamaları ve deney kaydı
 
@@ -74,7 +77,19 @@ Dataset asset inventory, condition/build/source/recipe ve single-use STARTED kay
 
 ## Güvenli teslim
 
-`apply TASK --store PATH --output NEW_PATH` güncel üç yönlü merge ve per-file preflight paketi üretir. Bu backend mevcut/mmap writer'ları teknik olarak dışlayamadığı için live source yazmaz; `target_written=false`, `UNSUPPORTED_STRONG_EXCLUSIVITY` veya conflict bildirir. `restore` applied receipt olmayan görevde sahiplikli undo iddia etmez. Bu fallback canlı apply özelliğinin tam kabulü değildir.
+`apply TASK --store PATH --output NEW_PATH` güncel üç yönlü merge ve per-file preflight paketi üretir. Varsayılan yol live source yazmaz; `target_written=false`, `UNSUPPORTED_STRONG_EXCLUSIVITY` veya conflict bildirir.
+
+Main'de Windows için açık opt-in profili eklenmiştir; yeni exact-source paketin kabulü ayrıca gerekir:
+
+```powershell
+.\viber.exe apply TASK --store STORE --output NEW_REVIEW_DIRECTORY --exclusive-ntfs --json
+.\viber.exe restore TASK --store STORE --checkpoint APPLIED_OPERATION_ID --json
+.\viber.exe delivery-reconcile TASK --store STORE --checkpoint UNKNOWN_OPERATION_ID --json
+```
+
+Bu profil yalnız yerel fixed NTFS üzerinde önceden var olan, tek linkli regular dosyaların içerik değişimini kapsar. Yeni/silinen dosya, izin değişimi, symlink/reparse, açık writer veya exclusive acquisition hatası kabul edilmez. Current operator effect allowlist'i kullanılıyorsa apply için `workspace.apply`, restore için `workspace.restore` izni gerekir; `export` tek başına kaynak yazı yetkisi vermez. Kayıtlı plan ve before/after bytes yazıdan önce tutulur; per-file synced readback ve aggregate receipt tamamlanmadan başarı verilmez. Restore exact APPLIED operation kimliğini ister; sonradan düzenlenmiş veya kimliği değişmiş dosyayı reddeder. İlgisiz dosyaları geri almaz.
+
+Kesintide UNKNOWN kaydı kalır. `delivery-reconcile` hedefe yazmaz; bütün touched dosyalar exact postimage ve kimlikleriyle yeniden exclusively alınabiliyorsa receipt'i tamamlar. Mixed/preimage/user-edit durumu UNKNOWN kalır; otomatik retry veya force restore yapılmaz. Touched-file receipt bütün workspace'i VERIFIED yapmaz. Linux/macOS'ta genel live apply/restore backend hâlâ açıktır; review/export yolu kullanılır.
 
 ## Ayrı izinli yerel eğitim export'u
 
@@ -111,4 +126,8 @@ Train, DEV etiketlerinde 16 bounded BM25/trigram ağırlık çiftini gerçekten 
 
 `repo-blueprint` exact source capture ve incelenmiş blueprint'ten immutable plan üretir. `repo-generate` bu planın digest'ine ve exact dosya bytes JSON'una bağlanarak yalnız yeni ve kaynak/store ile ayrık dizine yayımlar. Path alias, symlink, existing target ve değişmiş source reddedilir. Hook, generated code veya dependency kurulumunu host'ta çalıştırmaz. Protected check config verilirse check origin bağlanır; check çalıştırılmadan PASS üretilmez. Publication sonrası validation binding hatası oluşursa yayımlanan dizinin receipt'i ve `validation_error` birlikte gösterilir.
 
-MCP stdio package ve duplex Docker broker initialize→exact tools/list→tek tools/call görüşmesini, output bounds ve transcript provenance'ını uygular. Bu commit'te Session/CLI entegrasyonu henüz tamamlanmadığı için hazır bir son kullanıcı extension özelliği olarak sunulmaz. Windows native delivery helper da tek başına live apply kabulü değildir.
+## Onaylı MCP extension
+
+`run --extension-manifest ABSOLUTE_PATH` operatörün kaynak/store dışında tuttuğu canonical manifest'e bağlanır. Manifest digest'i görevde sabitlenir; değişmiş dosya aynı göreve sessizce yüklenmez. Manifest, exact server/tool/schema, image digest ve process sınırlarını içerir. Model `mcp_…` araçlarını görebilir; her çağrı `EXTENSION_CALL` isteğiyle ayrıca kullanıcı onayı bekler. `/requests`, `/respond REQUEST_ID approve`, `/resume` akışı kullanılır.
+
+Server pinned Docker profiliyle read-only kaynak ve network-none izolasyonunda başlatılır. Initialize, exact tools/list ve tek tools/call kontrol edilir; sınırlı cevap ve transcript provenance tutulur. Cevap test/geçerlik kanıtı değildir. Kaynak kapsamı, güncel policy, operation digest ve process lease çağrıdan önce doğrulanır. Kesilen dispatch UNKNOWN ve charged kalır; dış manifest sonradan değişse bile retained intent cleanup için yeterlidir. Bu profil ağ erişimi veya yazı yapan extension yetkisi vermez. Actual Docker kabulü yalnız CI engine gerçekten çalıştırdığında PASS sayılır.

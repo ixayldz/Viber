@@ -91,7 +91,11 @@ func (s *Session) compactDocument(doc Document, keep int) (Document, CompactionP
 		return doc, proof, c.Fail(c.Conflict, "compaction requires a complete settled protocol boundary and sufficient history")
 	}
 	provider, _, _ := contextProfile(doc)
-	probe := model.Request{SchemaVersion: 1, ID: "compact-validation", Model: "offline-fixture-v1", Messages: doc.Messages, Tools: Tools(), MaxOutputTokens: 512}
+	tools, err := toolsForDocument(doc)
+	if err != nil {
+		return doc, proof, err
+	}
+	probe := model.Request{SchemaVersion: 1, ID: "compact-validation", Model: "offline-fixture-v1", Messages: doc.Messages, Tools: tools, MaxOutputTokens: 512}
 	if doc.Runtime != nil {
 		probe.Model = doc.Runtime.Model
 		probe.Stream = doc.Runtime.Stream

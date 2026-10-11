@@ -57,6 +57,15 @@ func unresolvedResource(state c.TaskState) *c.ResourceReservation {
 	return nil
 }
 func resourceProfile(doc Document) string {
+	if doc.Extension != nil {
+		digest, _ := c.Digest(struct {
+			Runtime      *Runtime      `json:"runtime,omitempty"`
+			Checks       *CheckRuntime `json:"checks,omitempty"`
+			Protocol     string        `json:"protocol"`
+			ExtensionPin string        `json:"extension_manifest_digest"`
+		}{doc.Runtime, doc.CheckRuntime, "NATIVE_TOOL_RESOURCE_V1", doc.Extension.ManifestDigest})
+		return digest
+	}
 	digest, _ := c.Digest(struct {
 		Runtime  *Runtime      `json:"runtime,omitempty"`
 		Checks   *CheckRuntime `json:"checks,omitempty"`
@@ -74,7 +83,14 @@ func resourceUpper(doc Document, modelOperation bool) c.ResourceVector {
 	upper := c.ResourceVector{CPUMillis: remaining * int64(runtime.NumCPU()), WallMillis: remaining, DiskBytes: 8 << 20}
 	if !modelOperation {
 		upper.DiskBytes = 64 << 20
-		if doc.CheckRuntime != nil {
+		if doc.Pending != nil && doc.Pending.ExtensionIntent != nil {
+			p := doc.Pending.ExtensionIntent.Manifest.Manifest.Profile
+			upper.WallMillis += 60000
+			upper.CPUMillis += 60000 * int64(runtime.NumCPU())
+			upper.Children = p.Pids
+			upper.CPUMillis += min(remaining, p.TimeoutSeconds*1000) * p.CPUs
+			upper.DiskBytes += p.ScratchBytes
+		} else if doc.CheckRuntime != nil {
 			p := doc.CheckRuntime.Profile
 			// Broker reconciliation/removal has bounded independent cleanup contexts.
 			upper.WallMillis += 60000

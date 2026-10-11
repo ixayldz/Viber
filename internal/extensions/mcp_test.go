@@ -29,15 +29,15 @@ func fixturePin(t *testing.T) PinnedManifest {
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("fixture manifest invalid: %v", err)
 	}
-	digest, err := c.Digest(manifest)
+	canonical, err := c.CanonicalV1(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return PinnedManifest{Manifest: manifest, Digest: digest}
+	return PinnedManifest{Manifest: manifest, Digest: c.HashBytes(canonical)}
 }
 
 func fixtureAdmission(pin PinnedManifest) Admission {
-	return Admission{ManifestDigest: pin.Digest, AuthorityDigest: c.HashBytes([]byte("authority")), GrantedEffects: []Effect{EffectReadOnly}, UserApproved: true}
+	return Admission{ManifestDigest: pin.Digest, AuthorityDigest: c.HashBytes([]byte("authority")), OperationDigest: c.HashBytes([]byte("operation")), GrantedEffects: []Effect{EffectReadOnly}, UserApproved: true}
 }
 
 func TestExecuteNegotiatesPinnedMCPAndReturnsUntrustedProvenance(t *testing.T) {
@@ -121,9 +121,13 @@ func (b *fixtureDuplexBroker) RunDuplex(ctx context.Context, source string, prof
 	if driverErr != nil {
 		serverErr = nil // The protocol error is the authoritative failure.
 	}
+	boundInvocation := invocation
+	empty := []byte{}
+	boundInvocation.Stdin = &empty
+	invocationDigest, _ := c.Digest(boundInvocation)
 	runResult := runner.Result{
 		SchemaVersion: c.SchemaVersion, CandidateDigest: invocation.CandidateDigest,
-		ProfileDigest: c.HashBytes([]byte("profile")), InvocationDigest: c.HashBytes([]byte("invocation")),
+		ProfileDigest: c.HashBytes([]byte("profile")), InvocationDigest: invocationDigest,
 		ExitCode: 0, Stdout: stdout, SourceReadOnly: true, ProtectedResultChannel: true,
 		ProcessTreeQuiescent: true, DuplexTranscriptDigest: c.HashBytes(append(bytes.Clone(stdout), []byte("transcript")...)),
 		DuplexStdinBytes: serverInput.count, DuplexStdoutBytes: int64(len(stdout)),

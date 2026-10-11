@@ -212,9 +212,46 @@ func validateSourceCheckpointPin(ctx context.Context, root *os.Root, authority P
 	if c.DecodeStrict(checkpointRaw, &checkpoint) != nil || validatePrivacyCheckpoint(checkpoint, authority) != nil {
 		return c.Fail(c.StoreIntegrityError, "restore source checkpoint projection is invalid")
 	}
+	if checkpoint.Generation != anchor.Generation || checkpoint.Sequence != anchor.Sequence || checkpoint.Tail != anchor.Tail ||
+		checkpoint.Watermark != anchor.Watermark || checkpoint.ScopeDigest != anchor.ScopeDigest || len(checkpoint.Scopes) != anchor.ScopeCount {
+		return c.Fail(c.StoreIntegrityError, "restore source checkpoint projection differs from its anchor")
+	}
+	if anchor.Generation == 1 {
+		if checkpoint.BaseSequence != 0 || checkpoint.BaseTail != "" || anchor.PreviousAnchor != "" {
+			return c.Fail(c.StoreIntegrityError, "restore source checkpoint genesis has an invalid base")
+		}
+	} else {
+		previous, previousErr := readRestoreAnchor(root, anchor.PreviousAnchor)
+		if previousErr != nil || previous.Generation+1 != anchor.Generation || previous.AuthorityDigest != anchor.AuthorityDigest ||
+			previous.Sequence > anchor.Sequence || previous.Watermark > anchor.Watermark ||
+			checkpoint.BaseSequence != previous.Sequence || checkpoint.BaseTail != previous.Tail {
+			return c.Fail(c.StoreIntegrityError, "restore source checkpoint projection has an invalid prior-anchor base")
+		}
+	}
 	for _, scope := range checkpoint.Scopes {
-		if scope.InstanceID != pin.InstanceID || scope.PhysicalRoot != pin.PhysicalRoot || scope.CheckpointAnchor != pin.AnchorDigest || scope.RestoreBinding != pin.RestoreBinding {
+		// The checkpoint projection is captured before its new anchor is
+		// published, so its owner witness necessarily names an earlier anchor.
+		// For a restored owner, prove that the recorded binding anchor is in
+		// this checkpoint's prior lineage instead of comparing it to the new
+		// pin's anchor digest (which would be a self-reference).
+		if !validPrivacyScope(scope) || scope.InstanceID != pin.InstanceID || scope.PhysicalRoot != pin.PhysicalRoot || scope.RestoreBinding != pin.RestoreBinding {
 			continue
+		}
+		if scope.CheckpointAnchor != "" {
+			if anchor.Generation <= 1 {
+				continue
+			}
+			previous, previousErr := readRestoreAnchor(root, anchor.PreviousAnchor)
+			if previousErr != nil {
+				return c.Fail(c.StoreIntegrityError, "restore source checkpoint lost its prior owner anchor")
+			}
+			_, priorBinding, lineageErr := restoreAnchorIsAncestor(root, previous, anchor.PreviousAnchor, scope.CheckpointAnchor)
+			if lineageErr != nil {
+				return lineageErr
+			}
+			if !priorBinding {
+				continue
+			}
 		}
 		if expected := expectedPrivacyCheckpointPin(anchor, pin.AnchorDigest, authorityDigest, scope, "ACTIVE"); expected == *pin {
 			return nil

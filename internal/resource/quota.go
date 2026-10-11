@@ -316,6 +316,9 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = ensureFreeIntentSchema(db); err != nil {
 		return nil, err
 	}
+	if err = ensureMutableReplacementSchema(db); err != nil {
+		return nil, err
+	}
 	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
 	if _, err = ledger.reconcileFreePendingLocked(context.Background()); err != nil {
 		return nil, err
@@ -514,6 +517,7 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 		"CREATE TABLE quota_allocations (id TEXT PRIMARY KEY,writer TEXT NOT NULL,family TEXT NOT NULL,request_digest TEXT NOT NULL,target_root TEXT NOT NULL,volume_identity TEXT NOT NULL,parent_path TEXT NOT NULL,parent_identity TEXT NOT NULL,target_identity TEXT NOT NULL,target_existed INTEGER NOT NULL,class TEXT NOT NULL,status TEXT NOT NULL,upper_bytes INTEGER NOT NULL,upper_entries INTEGER NOT NULL,retained_bytes INTEGER NOT NULL,retained_entries INTEGER NOT NULL,receipt BLOB,free_before INTEGER NOT NULL DEFAULT 0,free_after INTEGER NOT NULL DEFAULT 0)",
 		"CREATE INDEX quota_allocations_status ON quota_allocations(status)",
 		freeIntentsDDL,
+		mutableReplacementDDL,
 		"PRAGMA user_version=1",
 	}
 	for _, statement := range statements {
@@ -1074,7 +1078,7 @@ func (l *Ledger) EnclosingReservation(ctx context.Context, target string) (Alloc
 	var found Allocation
 	count := 0
 	err = l.withReadLock(ctx, func() error {
-		rows, err := l.db.QueryContext(ctx, "SELECT id,target_root,parent_path,parent_identity,volume_identity FROM quota_allocations WHERE status='WRITING'")
+		rows, err := l.db.QueryContext(ctx, "SELECT id,target_root,parent_path,parent_identity,volume_identity FROM quota_allocations WHERE status='WRITING' AND id NOT IN (SELECT standby_id FROM quota_mutable_replacements)")
 		if err != nil {
 			return err
 		}
@@ -1216,7 +1220,7 @@ func retainedSeedID(authority, rootPath, rootIdentity string) string {
 }
 
 func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory) error {
-	rows, err := tx.QueryContext(ctx, "SELECT status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root FROM quota_allocations")
+	rows, err := tx.QueryContext(ctx, "SELECT status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements)")
 	if err != nil {
 		return err
 	}
@@ -1765,8 +1769,10 @@ func capacityTx(tx *sql.Tx, limits Limits) (capacityParts, error) {
 			return result, c.Fail(c.StoreIntegrityError, "physical quota allocation ledger is corrupt")
 		}
 		result.Allocations++
-		if status == "RESERVED" || status == "WRITING" {
-			result.Unknown++
+		if status == "RESERVED" || status == "WRITING" || status == "STANDBY" {
+			if status != "STANDBY" {
+				result.Unknown++
+			}
 			result.OutstandingBytes, err = add(result.OutstandingBytes, uint64(upperBytes))
 			if err == nil {
 				result.OutstandingItems, err = add(result.OutstandingItems, uint64(upperEntries))
@@ -1998,7 +2004,7 @@ func (l *Ledger) beginFreeIntent(ctx context.Context, id string, intent freeInte
 }
 
 func outstandingForVolumeTx(tx *sql.Tx, volume string) (uint64, error) {
-	rows, err := tx.Query("SELECT upper_bytes FROM quota_allocations WHERE volume_identity=? AND status IN ('RESERVED','WRITING')", volume)
+	rows, err := tx.Query("SELECT upper_bytes FROM quota_allocations WHERE volume_identity=? AND status IN ('RESERVED','WRITING','STANDBY')", volume)
 	if err != nil {
 		return 0, err
 	}

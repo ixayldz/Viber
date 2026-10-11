@@ -37,7 +37,7 @@ func (a Authority) Validate() error {
 		seen := map[string]bool{}
 		for _, effect := range *a.AllowedEffects {
 			switch effect {
-			case "snapshot.read", "model.infer", "plan.update", "candidate.write", "check.run", "export", "context.read":
+			case "snapshot.read", "model.infer", "plan.update", "candidate.write", "check.run", "export", "context.read", "workspace.apply", "workspace.restore":
 			default:
 				return c.Fail(c.InvalidArgument, "unknown operator effect")
 			}

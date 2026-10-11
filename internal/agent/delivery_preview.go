@@ -35,6 +35,9 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 	if err != nil {
 		return result, err
 	}
+	if err = currentOperatorEffect(doc, "export"); err != nil {
+		return result, err
+	}
 	if state.Execution != c.Terminated || doc.Pending != nil || doc.UnknownEffect {
 		return result, c.Fail(c.PolicyDenied, "delivery preview requires a terminal quiescent candidate")
 	}

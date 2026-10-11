@@ -49,6 +49,16 @@ Yerel yeni binary: `go vet` ve build geçti; mevcut offline demo ilk görev, exp
 
 ## Bu uygulama turunun teslimi
 
+### Birleşik takip teslimi
+
+Session/CLI MCP extension artık exact manifest ve tool-call onayıyla, read-only/network-none Docker capsule içinde çalışır. `repo-graph` ve `fs_graph` captured Go cross-file sembol ilişkilerini kullanır; generic type-check kaynakları PARTIAL/broad selection kalır. Packed Git v2 index/pack v2–v3 ve bounded delta okuyucusu bağlandı. Bunlar runtime coverage veya bağımsız kalite kabulü değildir.
+
+Windows `apply --exclusive-ntfs`, owned `restore --checkpoint` ve read-only `delivery-reconcile` aynı terminal görev yeniden açıldığında da çalışır. Yerel fixed NTFS, mevcut single-link regular dosyalar ve içerik değişikliği sınırı vardır. Current operator `workspace.apply`/`workspace.restore` yetkisi ve exclusive handle readback zorunludur; Linux/macOS genel live backend kapalıdır.
+
+Mutable SQLite standby/high-water kotası, pinned backup checkpoint projection temizliği ve çoklu retrieval partition cache entegrasyonu tamamlandı. Catalog/anchor history, aggregate control reserve, shared parent work-budget ve genel process-isolated semantic CPU sınırı ayrı açıklar olarak korunur. İki farklı managed revision için gerçek upgrade/rollback kabul yolu hazır; uygun ilk managed public baseline henüz yoktur.
+
+Birleşik kaynak `go vet -p 1 ./...` ve CLI build PASS. İlgili native NTFS/restart/reconcile, checkpoint/backups, quota/crash, source graph/packed history ve cache kontrolleri PASS; gereksiz full yerel tekrar yapılmadı. Önceki `e342766` exact-source CI FAILURE kaydı silinmez; düzeltmeler yeni SHA'nın 16 job kabulünü bekler.
+
 | Teslim | Çalışan yüzey | Kabul sınırı |
 |---|---|---|
 | Gizlilik checkpoint | `privacy-checkpoint`; owner SQLite PREPARED/ACTIVE witness, lossless projection, exact receipt ile kaynak journal retirement, ikinci checkpoint/reopen | Yeni owner ve restore/move rebase, eski checkpoint/catalog retirement tamamlanmadı |

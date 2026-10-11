@@ -122,7 +122,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && !deletionAllowed(next, event, p) && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && !deletionAllowed(next, event, p) && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) && !((event.Type == "DeliveryAuthorityRebound" || event.Type == "DeliveryEffectReconciled") && event.Actor == "kernel" && deliveryGenerationRebindAllowed(next, p, event)) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		if next.Deletion != nil && event.Type != "TaskDeletionPurged" && event.Type != "ControlAcknowledged" {
@@ -196,6 +196,58 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			}
 			next.DeliveryEffects = updated
 			next.DocumentDigest = p.DocumentDigest
+		case "DeliveryEffectReconciled":
+			effect := p.DeliveryEffect
+			if event.Actor != "kernel" || effect == nil || effect.Status == c.DeliveryUnknown || next.Execution != c.Terminated || next.InputBarrier || len(next.PendingInputIDs) > 0 || next.Deletion != nil || !c.ValidDigest(p.DocumentDigest) || p.DocumentDigest != next.DocumentDigest || p.SnapshotDigest != next.CandidateDigest || effect.SourceTaskSeq+1 != next.TaskSeq || effect.SourceDocument != next.DocumentDigest || effect.SpecVersion != next.SpecVersion || effect.PolicyEpoch != next.PolicyEpoch || effect.CandidateDigest != next.CandidateDigest || effect.Generation != next.KernelGeneration || event.KernelGeneration <= next.KernelGeneration || !deliveryStateQuiescent(next) {
+				return next, c.Fail(c.PolicyDenied, "delivery reconciliation requires an exact crash-left UNKNOWN terminal effect and a newer session generation")
+			}
+			if p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.State != "" || p.Outcome != "" || p.Quality != "" || p.Fulfillment != "" || p.RequiredObligations != 0 || p.InputID != "" || p.InputDigest != "" || p.InputBytes != 0 || p.QueueID != "" || p.Goal != nil || p.Deletion != nil || p.Verification != nil || p.Tokens != nil || p.Resources != nil {
+				return next, c.Fail(c.InvalidArgument, "delivery reconciliation event contains unrelated authority")
+			}
+			prior, found := findDeliveryEffect(next.DeliveryEffects, effect.OperationID)
+			if !found || prior.Status != c.DeliveryUnknown || prior.Phase != effect.Phase || prior.Generation != effect.Generation {
+				return next, c.Fail(c.StaleAuthority, "delivery reconciliation does not bind its exact UNKNOWN intent")
+			}
+			digest, err := c.Digest(*effect)
+			if err != nil || p.Reason != digest {
+				return next, c.Fail(c.StoreIntegrityError, "delivery reconciliation effect digest mismatch")
+			}
+			updated, err := applyDeliveryEffect(next.DeliveryEffects, *effect)
+			if err != nil {
+				return next, err
+			}
+			next.DeliveryEffects = updated
+			next.DocumentDigest = p.DocumentDigest
+		case "DeliveryAuthorityRebound":
+			if event.Actor != "kernel" || next.Execution != c.Terminated || next.InputBarrier || len(next.PendingInputIDs) > 0 || next.Deletion != nil || !deliveryStateQuiescent(next) || event.KernelGeneration <= next.KernelGeneration || !c.ValidDigest(p.DocumentDigest) || p.DocumentDigest != next.DocumentDigest || p.SnapshotDigest != next.CandidateDigest {
+				return next, c.Fail(c.PolicyDenied, "delivery authority rebind requires unchanged quiescent terminal authority and a newer session generation")
+			}
+			for _, prior := range next.DeliveryEffects {
+				if prior.Status == c.DeliveryUnknown {
+					return next, c.Fail(c.Conflict, "UNKNOWN delivery effect must be reconciled before authority rebind")
+				}
+			}
+			if p.DeliveryEffect == nil {
+				if len(next.DeliveryEffects) != 0 {
+					return next, c.Fail(c.PolicyDenied, "delivery authority rebind requires exact completed receipt provenance")
+				}
+			} else {
+				reference := *p.DeliveryEffect
+				if err := reference.Validate(); err != nil || (reference.Status != c.DeliveryApplied && reference.Status != c.DeliveryRestored) {
+					return next, c.Fail(c.InvalidArgument, "delivery authority rebind receipt reference is invalid")
+				}
+				prior, found := findDeliveryEffect(next.DeliveryEffects, reference.OperationID)
+				if !found || prior != reference {
+					return next, c.Fail(c.StoreIntegrityError, "delivery authority rebind does not reference an exact completed receipt")
+				}
+			}
+			if p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.State != "" || p.Outcome != "" || p.Quality != "" || p.Fulfillment != "" || p.RequiredObligations != 0 || p.InputID != "" || p.InputDigest != "" || p.InputBytes != 0 || p.QueueID != "" || p.Goal != nil || p.Deletion != nil || p.Verification != nil || p.Tokens != nil || p.Resources != nil {
+				return next, c.Fail(c.InvalidArgument, "delivery authority rebind contains unrelated authority")
+			}
+			digest, err := c.DeliveryAuthorityRebindDigest(next, event.KernelGeneration, p.DeliveryEffect)
+			if err != nil || p.Reason != digest {
+				return next, c.Fail(c.StoreIntegrityError, "delivery authority rebind cursor digest mismatch")
+			}
 		case "CandidateRecorded":
 			if event.Actor != "kernel" || next.Execution != c.Running || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.SnapshotDigest) {
 				return next, c.Fail(c.PolicyDenied, "candidate publication requires active authority")
@@ -454,7 +506,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 	if p.Deletion != nil && event.Type != "TaskContentDeleted" && event.Type != "TaskDeletionPurged" {
 		return next, c.Fail(c.PolicyDenied, "content deletion only allowed in explicit deletion events")
 	}
-	if p.DeliveryEffect != nil && event.Type != "DeliveryEffectRecorded" {
+	if p.DeliveryEffect != nil && event.Type != "DeliveryEffectRecorded" && event.Type != "DeliveryEffectReconciled" && event.Type != "DeliveryAuthorityRebound" {
 		return next, c.Fail(c.PolicyDenied, "delivery effect only allowed in its explicit durable event")
 	}
 	if p.Verification != nil && event.Type != "VerifiedResultFinalized" && event.Type != "VerificationAssessed" {

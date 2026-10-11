@@ -106,18 +106,56 @@ func validateNativeTargetSeal(seal NativeTargetSeal) error {
 	}
 	seenDirectories := map[string]bool{}
 	for _, directory := range seal.Directories {
-		key := strings.ToLower(filepath.Clean(directory.Path))
+		clean := filepath.Clean(directory.Path)
+		key := strings.ToLower(clean)
 		if !filepath.IsAbs(directory.Path) || filepath.Clean(directory.Path) != directory.Path || !c.ValidDigest(directory.Identity) || seenDirectories[key] {
 			return c.Fail(c.StoreIntegrityError, "invalid native directory seal")
 		}
+		if !nativePathContains(seal.Root, clean) && !nativePathContains(clean, seal.Root) {
+			return c.Fail(c.StoreIntegrityError, "native directory seal escapes the target ancestry")
+		}
 		seenDirectories[key] = true
+	}
+	rootKey := strings.ToLower(filepath.Clean(seal.Root))
+	if !seenDirectories[rootKey] {
+		return c.Fail(c.StoreIntegrityError, "native directory seal omits its target root")
+	}
+	volumeRoot := filepath.VolumeName(seal.Root) + string(filepath.Separator)
+	for current := filepath.Clean(seal.Root); ; current = filepath.Dir(current) {
+		if !seenDirectories[strings.ToLower(current)] {
+			return c.Fail(c.StoreIntegrityError, "native directory seal omits a target-root ancestor")
+		}
+		if strings.EqualFold(current, volumeRoot) {
+			break
+		}
+		parent := filepath.Dir(current)
+		if parent == current || !nativePathContains(volumeRoot, parent) {
+			return c.Fail(c.StoreIntegrityError, "native target root is outside its sealed local volume")
+		}
 	}
 	seenFiles := map[string]bool{}
 	lastFile := ""
+	var totalBytes int64
 	for _, file := range seal.Files {
 		key := strings.ToLower(file.Path)
-		if !policy.SafePath(file.Path) || strings.ContainsAny(file.Path, `\\:`) || !c.ValidDigest(file.Identity) || !c.ValidDigest(file.BeforeDigest) || !c.ValidDigest(file.AfterDigest) || file.BeforeDigest == file.AfterDigest || file.Size < 0 || file.AfterSize < 0 || file.Mode == 0 || seenFiles[key] || key < lastFile {
+		if !policy.SafePath(file.Path) || strings.ContainsAny(file.Path, `\\:`) || !c.ValidDigest(file.Identity) || !c.ValidDigest(file.BeforeDigest) || !c.ValidDigest(file.AfterDigest) || file.BeforeDigest == file.AfterDigest || file.Size < 0 || file.AfterSize < 0 || file.Size > 64<<20 || file.AfterSize > 64<<20 || file.Mode == 0 || seenFiles[key] || key < lastFile {
 			return c.Fail(c.StoreIntegrityError, "invalid native file seal")
+		}
+		parent := filepath.Dir(filepath.Join(seal.Root, filepath.FromSlash(file.Path)))
+		for current := parent; ; current = filepath.Dir(current) {
+			if !seenDirectories[strings.ToLower(filepath.Clean(current))] {
+				return c.Fail(c.StoreIntegrityError, "native directory seal omits a changed file parent")
+			}
+			if strings.EqualFold(current, seal.Root) {
+				break
+			}
+			if !nativePathContains(seal.Root, current) || filepath.Dir(current) == current {
+				return c.Fail(c.StoreIntegrityError, "native changed file escapes its target root")
+			}
+		}
+		totalBytes += file.Size + file.AfterSize
+		if totalBytes > 256<<20 {
+			return c.Fail(c.UnsupportedCapability, "native target seal exceeds aggregate byte bounds")
 		}
 		seenFiles[key] = true
 		lastFile = key
@@ -131,4 +169,9 @@ func validateNativeTargetSeal(seal NativeTargetSeal) error {
 		return c.Fail(c.StoreIntegrityError, "native result seal digest mismatch")
 	}
 	return nil
+}
+
+func nativePathContains(root, candidate string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }

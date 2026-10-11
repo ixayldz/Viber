@@ -224,6 +224,29 @@ gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.
 From the extracted directory:
 {command} version
 {command} doctor --json
+
+To use your ChatGPT plan (no model API key/client secret required):
+{command} auth login
+{command} auth status
+{command} auth models --json
+The browser opens the official Sign in with ChatGPT flow. Choose the workspace
+and grant plan usage. A connected identity without plan usage permission cannot
+run the model. Eligible account/model availability is controlled by OpenAI;
+actual account acceptance is not part of this package's offline smoke proof.
+Linux needs a running Secret Service; macOS needs an accessible Keychain.
+
+Run a reviewed task against YOUR existing project, with a store outside it:
+{command} run "Review the README and propose clearer installation steps" --provider chatgpt --allow-remote --root /YOUR/PROJECT --store ../viber-private-project --task first-task --autonomy review --allow-unverified
+Use an absolute native project path on Windows. --allow-remote permits sending
+selected project context to the model. For an approval request, open the task UI:
+{command} ui first-task --store ../viber-private-project
+Use /requests, /respond REQUEST_ID approve, and /resume as appropriate.
+{command} diff first-task --store ../viber-private-project
+{command} export first-task --store ../viber-private-project --output ../viber-first-task-review
+The output must be a fresh directory. Candidate changes require review; a
+model summary or UNVERIFIED result does not prove the code works.
+
+Try the included offline sample without signing in:
 {command} run "Update hello.txt to the fixture greeting" --offline --fixture examples/offline/greeting.json --root examples/offline/source --store ../viber-private-demo-{revision[:12]} --task greeting --allow-unverified --json
 Expected task exit: 2 (FINISHED / UNVERIFIED / SATISFIED), not VERIFIED.
 {command} diff greeting --store ../viber-private-demo-{revision[:12]} --json

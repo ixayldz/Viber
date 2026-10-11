@@ -267,8 +267,22 @@ def publish(args):
                 or managed.get("external_store_preserved") is not True or managed.get("owned_uninstall") is not True
                 or managed.get("release_ready") is not False
                 or managed.get("installed_first_task") != "OFFLINE_FIXTURE_UNVERIFIED_EXIT_2"
-                or managed.get("scope") != "EXACT_SOURCE_INSTALL_REINSTALL_SAME_REVISION_ROLLBACK_UNINSTALL; NO_CROSS_VERSION_UPGRADE_OR_SIGNING_CLAIM"):
+                or managed.get("scope") not in {"EXACT_SOURCE_INSTALL_REINSTALL_SAME_REVISION_ROLLBACK_UNINSTALL; NO_CROSS_VERSION_UPGRADE_OR_SIGNING_CLAIM",
+                                                "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM"}):
             portable.fail("managed installation source/archive/scope binding mismatch")
+        cross = managed.get("cross_version")
+        if managed["scope"] == "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM":
+            if (not isinstance(cross, dict) or cross.get("status") != "PASS"
+                    or not portable.REVISION.fullmatch(str(cross.get("baseline_revision", "")))
+                    or cross["baseline_revision"] == revision
+                    or not portable.DIGEST.fullmatch(str(cross.get("baseline_archive_sha256", "")))
+                    or cross.get("actual_oidc_verification") is not True
+                    or cross.get("existing_task_projection_preserved") is not True
+                    or cross.get("upgrade_rollback_upgrade") is not True
+                    or cross.get("scope") != "COMPATIBLE_FORMAT_NO_IMPLICIT_STORE_MIGRATION"):
+                portable.fail("cross-version installation proof is incomplete")
+        elif cross is not None:
+            portable.fail("cross-version evidence contradicts declared installation scope")
         installation_asset = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-installation.json"
         (assets / installation_asset).write_bytes(installation_raw)
         proof_name = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-distribution.json"

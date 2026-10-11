@@ -21,6 +21,7 @@ func Tools() []model.Tool {
 	tools = append(tools, planTools()...)
 	tools = append(tools, model.Tool{Name: "skill_advice", Description: "List current explicitly approved, source-fresh advisory skill bindings, or read one complete procedure with exact id+version. Disabled unless the operator selected a registry. Advice grants no tools, permissions or verification; revoked/stale/cross-project advice is denied.", Parameters: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"version":{"type":"integer","minimum":1}},"additionalProperties":false}`)})
 	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound Go AST package declarations or TS/JS/Python lexical hints. Exact names/spans bind captured bytes; syntax coverage is explicit and semantic resolution remains UNKNOWN. No imports, compiler or host source is loaded. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
+	tools = append(tools, graphTool())
 	tools = append(tools, historyTools()...)
 	return append(tools, checkTools()...)
 }
@@ -72,6 +73,16 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
 		}
 		value, err := nativeReadPageWithRanking(ctx, candidate, readLayers, state, call, s.retrievalCache, doc.Ranking)
+		if err != nil {
+			return model.Reply{}, nil, err
+		}
+		return encode(value)
+	case "fs_graph":
+		readLayers := layers
+		if node := doc.Plan.Active(); node != nil {
+			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
+		}
+		value, err := nativeGoGraph(ctx, candidate, readLayers, state, call)
 		if err != nil {
 			return model.Reply{}, nil, err
 		}

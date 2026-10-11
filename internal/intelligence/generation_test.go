@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/verify"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
@@ -160,11 +161,15 @@ func TestPublishGenerationWritesExactCandidateAndNeverReplacesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := filepath.Join(parent, "generated")
+	canonicalOutput, err := fileguard.ResolveProspective(output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	receipt, err := PublishGeneration(source, blueprint, plan, output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.PublicationState != "PUBLISHED_PENDING_INDEPENDENT_VALIDATION" || receipt.OutputDirectory != output || receipt.PublishedSnapshotDigest == "" {
+	if receipt.PublicationState != "PUBLISHED_PENDING_INDEPENDENT_VALIDATION" || receipt.OutputDirectory != canonicalOutput || receipt.PublishedSnapshotDigest == "" {
 		t.Fatalf("unexpected publication receipt: %#v", receipt)
 	}
 	for _, file := range files {

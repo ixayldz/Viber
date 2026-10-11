@@ -3,10 +3,12 @@
 package delivery
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	c "github.com/ixayldz/Viber/internal/contracts"
 	"golang.org/x/sys/windows"
 )
 
@@ -17,6 +19,18 @@ func TestExclusiveOpenRefusesMappedViewAfterSourceHandlesClose(t *testing.T) {
 	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(path)
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	intent := NativeFileIntent{Path: filepath.Base(path), Before: []byte("before"), After: []byte("candidate"), Mode: uint32(info.Mode().Perm())}
+	seal, err := InspectNativeTarget(root, []NativeFileIntent{intent})
+	if err != nil {
+		file.Close()
 		t.Fatal(err)
 	}
 	mapping, err := windows.CreateFileMapping(windows.Handle(file.Fd()), nil, windows.PAGE_READWRITE, 0, 0, nil)
@@ -35,10 +49,10 @@ func TestExclusiveOpenRefusesMappedViewAfterSourceHandlesClose(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	locked, openErr := windows.CreateFile(windows.StringToUTF16Ptr(path), windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	openedExclusively := openErr == nil
-	if openErr == nil {
-		_ = windows.CloseHandle(locked)
+	lease, acquireErr := AcquireNativeTarget(context.Background(), seal, map[string]string{intent.Path: c.HashBytes(intent.Before)})
+	openedExclusively := acquireErr == nil
+	if acquireErr == nil {
+		_ = lease.Close()
 	}
 	value := byte('X')
 	var written uintptr
@@ -57,6 +71,6 @@ func TestExclusiveOpenRefusesMappedViewAfterSourceHandlesClose(t *testing.T) {
 		t.Fatalf("mapped view did not remain writable across closed source handles: %q", raw)
 	}
 	if openedExclusively {
-		t.Fatal("exclusive open admitted a live mapped writer after its file and mapping handles closed")
+		t.Fatal("native exclusive acquisition admitted a live mapped writer after its file and mapping handles closed")
 	}
 }

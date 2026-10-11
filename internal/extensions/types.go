@@ -112,6 +112,7 @@ type PinnedManifest struct {
 type Admission struct {
 	ManifestDigest  string   `json:"manifest_digest"`
 	AuthorityDigest string   `json:"authority_digest"`
+	OperationDigest string   `json:"operation_digest"`
 	GrantedEffects  []Effect `json:"granted_effects"`
 	EgressOrigins   []string `json:"egress_origins"`
 	UserApproved    bool     `json:"user_approved"`
@@ -145,6 +146,7 @@ type ToolResult struct {
 	ToolName             string          `json:"tool_name"`
 	ToolSchemaDigest     string          `json:"tool_schema_digest"`
 	ArgumentsDigest      string          `json:"arguments_digest"`
+	OperationDigest      string          `json:"operation_digest"`
 	RequestDigest        string          `json:"request_digest"`
 	ResponseDigest       string          `json:"response_digest"`
 	AuthorityDigest      string          `json:"authority_digest"`
@@ -159,6 +161,7 @@ type ToolResult struct {
 	Content              []TextContent   `json:"content"`
 	StructuredContent    json.RawMessage `json:"structured_content,omitempty"`
 	SandboxResultDigest  string          `json:"sandbox_result_digest"`
+	SandboxOwnership     *runner.Capsule `json:"sandbox_ownership,omitempty"`
 	TranscriptDigest     string          `json:"transcript_digest"`
 	ProcessTreeQuiescent bool            `json:"process_tree_quiescent"`
 }
@@ -288,11 +291,44 @@ func (pin PinnedManifest) Validate() error {
 	if err := pin.Manifest.Validate(); err != nil {
 		return err
 	}
-	digest, err := c.Digest(pin.Manifest)
-	if err != nil || digest != pin.Digest {
+	canonical, err := c.CanonicalV1(pin.Manifest)
+	if err != nil || len(canonical) > MaxManifestBytes {
+		return c.Fail(c.InvalidArgument, "extension manifest cannot be canonically represented within its bound")
+	}
+	digest := c.HashBytes(canonical)
+	if digest != pin.Digest {
 		return c.Fail(c.StaleAuthority, "extension manifest does not match its content pin")
 	}
 	return nil
+}
+
+// PinManifest reads one canonical manifest without following a caller-provided
+// path through an unexpected directory entry. The returned digest covers the
+// exact canonical bytes that were parsed.
+func PinManifest(path string) (PinnedManifest, error) {
+	var pin PinnedManifest
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
+		return pin, c.Fail(c.InvalidArgument, "absolute extension manifest path required")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return pin, c.Fail(c.InvalidArgument, "extension manifest path unavailable")
+	}
+	root, err := os.OpenRoot(filepath.Dir(absolute))
+	if err != nil {
+		return pin, c.Fail(c.PolicyDenied, "extension manifest unavailable")
+	}
+	defer root.Close()
+	raw, err := fileguard.ReadRegular(root, filepath.Base(absolute), MaxManifestBytes)
+	if err != nil || c.DecodeStrict(raw, &pin.Manifest) != nil || pin.Manifest.Validate() != nil {
+		return PinnedManifest{}, c.Fail(c.InvalidArgument, "extension manifest is invalid or unavailable")
+	}
+	canonical, err := c.CanonicalV1(pin.Manifest)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return PinnedManifest{}, c.Fail(c.InvalidArgument, "extension manifest must use canonical encoding")
+	}
+	pin.Digest = c.HashBytes(raw)
+	return pin, pin.Validate()
 }
 
 func ReadPinnedManifest(path, expectedDigest string) (PinnedManifest, error) {
@@ -334,7 +370,7 @@ func (admission Admission) Validate(pin PinnedManifest, tool Tool) error {
 	if err := pin.Validate(); err != nil {
 		return err
 	}
-	if admission.ManifestDigest != pin.Digest || !c.ValidDigest(admission.AuthorityDigest) || !admission.UserApproved || !containsEffect(admission.GrantedEffects, tool.Effect) {
+	if admission.ManifestDigest != pin.Digest || !c.ValidDigest(admission.AuthorityDigest) || !c.ValidDigest(admission.OperationDigest) || !admission.UserApproved || !containsEffect(admission.GrantedEffects, tool.Effect) {
 		return c.Fail(c.PolicyDenied, "current operator admission and explicit tool approval required")
 	}
 	if tool.Egress.Mode != EgressNone || len(tool.EgressOrigins()) != 0 || len(admission.EgressOrigins) != 0 {

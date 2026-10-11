@@ -152,6 +152,19 @@ func (cache *Cache) pruneScopes() {
 // Acquire revalidates authorized bytes before every hit. Release is idempotent.
 // A revoked scope or closed owner can never publish a build started earlier.
 func (cache *Cache) Acquire(ctx context.Context, scope string, binding Binding, documents []Document) (*Index, CacheEvidence, func(), error) {
+	return cache.acquire(ctx, scope, binding, documents, "")
+}
+
+// AcquirePartition retains indices from one source-bound partition plan together.
+// Revoking the parent task scope still retires every partition in that plan.
+func (cache *Cache) AcquirePartition(ctx context.Context, scope string, binding Binding, documents []Document, planDigest string) (*Index, CacheEvidence, func(), error) {
+	if !c.ValidDigest(planDigest) {
+		return nil, CacheEvidence{}, nil, c.Fail(c.InvalidArgument, "partition plan digest required")
+	}
+	return cache.acquire(ctx, scope, binding, documents, planDigest)
+}
+
+func (cache *Cache) acquire(ctx context.Context, scope string, binding Binding, documents []Document, planDigest string) (*Index, CacheEvidence, func(), error) {
 	evidence := CacheEvidence{Measurement: "CONSERVATIVE_SOURCE_CHUNK_SQLITE_ESTIMATE_NOT_PEAK_RSS"}
 	if !c.ValidDigest(scope) {
 		return nil, evidence, nil, c.Fail(c.InvalidArgument, "task scope digest required")
@@ -165,6 +178,17 @@ func (cache *Cache) Acquire(ctx context.Context, scope string, binding Binding, 
 	if err != nil {
 		return nil, evidence, nil, err
 	}
+	scopeRevision := scopedKey
+	if planDigest != "" {
+		scopeRevision, err = c.Digest(struct {
+			Scope   string
+			Binding Binding
+			Plan    string
+		}{scope, binding, planDigest})
+		if err != nil {
+			return nil, evidence, nil, err
+		}
+	}
 	for {
 		if err = ctx.Err(); err != nil {
 			return nil, evidence, nil, err
@@ -176,13 +200,13 @@ func (cache *Cache) Acquire(ctx context.Context, scope string, binding Binding, 
 		}
 		cache.sweep()
 		cache.pruneScopes()
-		if prior := cache.scopes[scope]; prior != scopedKey {
+		if prior := cache.scopes[scope]; prior != scopeRevision {
 			for _, entry := range cache.entries {
 				if entry.scope == scope {
 					cache.retire(entry)
 				}
 			}
-			cache.scopes[scope] = scopedKey
+			cache.scopes[scope] = scopeRevision
 		}
 		if entry := cache.entries[scopedKey]; entry != nil {
 			entry.refs++
@@ -220,7 +244,7 @@ func (cache *Cache) Acquire(ctx context.Context, scope string, binding Binding, 
 			cache.mu.Unlock()
 			return nil, evidence, nil, buildErr
 		}
-		if cache.closed || cache.scopes[scope] != scopedKey {
+		if cache.closed || cache.scopes[scope] != scopeRevision {
 			cache.pruneScopes()
 			cache.mu.Unlock()
 			index.Close()

@@ -62,3 +62,20 @@ func (effect DeliveryEffect) Validate() error {
 	}
 	return nil
 }
+
+// DeliveryAuthorityRebindDigest binds a read-only terminal-task generation
+// rebind to the exact current task cursor and, when present, one completed
+// delivery receipt. The old effect generation remains provenance only.
+func DeliveryAuthorityRebindDigest(state TaskState, currentGeneration int64, receipt *DeliveryEffect) (string, error) {
+	return Digest(struct {
+		TaskID             string          `json:"task_id"`
+		TaskSeq            int64           `json:"task_seq"`
+		DocumentDigest     string          `json:"document_digest"`
+		CandidateDigest    string          `json:"candidate_digest"`
+		SpecVersion        int64           `json:"spec_version"`
+		PolicyEpoch        int64           `json:"policy_epoch"`
+		PreviousGeneration int64           `json:"previous_generation"`
+		CurrentGeneration  int64           `json:"current_generation"`
+		Receipt            *DeliveryEffect `json:"receipt,omitempty"`
+	}{state.TaskID, state.TaskSeq, state.DocumentDigest, state.CandidateDigest, state.SpecVersion, state.PolicyEpoch, state.KernelGeneration, currentGeneration, receipt})
+}

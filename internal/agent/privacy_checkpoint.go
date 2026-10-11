@@ -104,15 +104,19 @@ type privacyCheckpointRetirement struct {
 // PrivacyCheckpointStatus describes a pinned projection and receipt-gated source
 // retirement. Owner catalogs and full dedup/UNKNOWN state remain retained.
 type PrivacyCheckpointStatus struct {
-	Supported         bool   `json:"checkpoint_supported"`
-	Pending           bool   `json:"checkpoint_pending"`
-	RetirementEnabled bool   `json:"retirement_enabled"`
-	Generation        int64  `json:"generation"`
-	Sequence          int64  `json:"sequence"`
-	Tail              string `json:"tail"`
-	Watermark         int64  `json:"watermark"`
-	AnchorDigest      string `json:"anchor_digest,omitempty"`
-	CheckpointDigest  string `json:"checkpoint_digest,omitempty"`
+	Supported                     bool   `json:"checkpoint_supported"`
+	Pending                       bool   `json:"checkpoint_pending"`
+	RetirementEnabled             bool   `json:"retirement_enabled"`
+	HistoricalRetirementPending   bool   `json:"historical_retirement_pending"`
+	HistoricalRetirementReason    string `json:"historical_retirement_pending_reason,omitempty"`
+	HistoricalDataFilesRetired    int    `json:"historical_data_files_retired"`
+	HistoricalReceiptFilesRetired int    `json:"historical_receipt_files_retired"`
+	Generation                    int64  `json:"generation"`
+	Sequence                      int64  `json:"sequence"`
+	Tail                          string `json:"tail"`
+	Watermark                     int64  `json:"watermark"`
+	AnchorDigest                  string `json:"anchor_digest,omitempty"`
+	CheckpointDigest              string `json:"checkpoint_digest,omitempty"`
 }
 
 func emptyPrivacyView() privacyView {
@@ -916,10 +920,22 @@ func (s *Session) CheckpointPrivacyMetadata(ctx context.Context) (PrivacyCheckpo
 	if err = recoverPrivacyCheckpoint(ctx, root, *s.privacy, s.Journal, s.instance, s.directory); err != nil {
 		return status, err
 	}
+	view, err = readPrivacy(root)
+	if err != nil {
+		return status, err
+	}
+	pruned, err := pruneHistoricalPrivacyCheckpointMetadata(ctx, root, *s.privacy, view)
+	if err != nil {
+		return status, err
+	}
 	status = PrivacyCheckpointStatus{
 		Supported: true, RetirementEnabled: true, Generation: generation,
 		Sequence: view.Sequence, Tail: view.Tail, Watermark: view.Watermark,
 		AnchorDigest: anchorDigest, CheckpointDigest: checkpointDigest,
+		HistoricalRetirementPending:   pruned.Pending,
+		HistoricalRetirementReason:    pruned.Reason,
+		HistoricalDataFilesRetired:    pruned.DataFiles,
+		HistoricalReceiptFilesRetired: pruned.ReceiptFiles,
 	}
 	return status, nil
 }

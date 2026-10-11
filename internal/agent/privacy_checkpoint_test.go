@@ -136,6 +136,90 @@ func TestPrivacyCheckpointRetainsFullStateAcrossJournalRetirementAndReopen(t *te
 	}
 }
 
+func TestPrivacyCheckpointPrunesOnlyProjectionsWithoutCurrentWatermarkBackupPins(t *testing.T) {
+	ctx := context.Background()
+	s, options, _ := startFixture(t, []Turn{{Text: "checkpoint backup pin", UsageKnown: true}}, false)
+	defer s.Close()
+	if err := s.ensurePrivacy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.CheckpointPrivacyMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(t.TempDir(), "current-watermark-backup")
+	manifest, err := s.Backup(ctx, backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != 2 || manifest.DeletionWatermark != first.Watermark {
+		t.Fatal("test backup does not carry the active deletion authority", manifest)
+	}
+	root, err := openPrivacyRoot(*s.privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, anchorDigest, err := currentPrivacyCheckpointAnchor(root)
+	if err != nil || anchor == nil {
+		root.Close()
+		t.Fatal("checkpoint anchor missing after backup", err)
+	}
+	ownerAuthority, pin, err := store.ReadPrivacyCheckpointOwnerAt(ctx, filepath.Join(backupPath, "database"))
+	expectedAuthority, _ := c.CanonicalV1(*s.privacy)
+	if err != nil || string(ownerAuthority) != string(expectedAuthority) || pin == nil {
+		root.Close()
+		t.Fatal("backup database lost its authority/checkpoint pin", pin, err)
+	}
+	if err = validateSourceCheckpointPin(ctx, root, *s.privacy, pin, *anchor, anchorDigest); err != nil {
+		root.Close()
+		t.Fatalf("backup pin did not validate at its anchor: %+v: %v", pin, err)
+	}
+	if err = root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SetRetention(ctx, options.TaskID, RetentionOptions{CommandID: "checkpoint-cleanup-retention", Mode: "KEEP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CheckpointPrivacyMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.HistoricalDataFilesRetired != 0 || second.HistoricalRetirementPending {
+		t.Fatalf("the only historical projection is still pinned by the backup: %+v", second)
+	}
+	third, err := s.CheckpointPrivacyMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Generation != second.Generation+1 || third.HistoricalDataFilesRetired != 1 || third.HistoricalReceiptFilesRetired < 1 || third.HistoricalRetirementPending {
+		t.Fatalf("unreferenced historical checkpoint metadata was not reclaimed: %+v", third)
+	}
+	root, err = openPrivacyRoot(*s.privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, wantPresent := range map[string]bool{
+		privacyCheckpointDataPath(first.CheckpointDigest):   true,
+		privacyCheckpointDataPath(second.CheckpointDigest):  false,
+		privacyCheckpointDataPath(third.CheckpointDigest):   true,
+		privacyCheckpointRetirementPath(third.AnchorDigest): true,
+	} {
+		_, statErr := root.Lstat(name)
+		if wantPresent && statErr != nil || !wantPresent && !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("unexpected historical metadata presence for %s: %v", name, statErr)
+		}
+	}
+	if err = root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The pinned generation remains a valid restore source after the unpinned
+	// middle projection and its receipt have been retired.
+	if _, err = RestoreBackup(ctx, backupPath, filepath.Join(t.TempDir(), "restored-from-pinned-history")); err != nil {
+		t.Fatalf("current-watermark backup lost its historical pin projection: %v", err)
+	}
+}
+
 func TestPrivacyCheckpointReusesOwnerThroughEquivalentDirectorySpelling(t *testing.T) {
 	ctx := context.Background()
 	s, _, _ := startFixture(t, []Turn{{Text: "alias", UsageKnown: true}}, false)

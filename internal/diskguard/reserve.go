@@ -26,10 +26,11 @@ type Status struct {
 	WorkReady            bool   `json:"work_ready"`
 }
 type Reserve struct {
-	mu   sync.Mutex
-	root *os.Root
-	file *os.File
-	free func(*os.Root) (uint64, error)
+	mu              sync.Mutex
+	root            *os.Root
+	file            *os.File
+	free            func(*os.Root) (uint64, error)
+	beforeAdmission func(int64, bool) error
 }
 
 func Open(directory string) (*Reserve, error) {
@@ -80,6 +81,19 @@ func (r *Reserve) Close() error {
 	r.file = nil
 	return err
 }
+
+// SetAdmissionHook installs an owner-specific durable admission step that runs
+// before this reserve mutates its control file or authorizes a writer. The hook
+// runs under the reserve lock and must not call methods on this Reserve.
+func (r *Reserve) SetAdmissionHook(hook func(int64, bool) error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return os.ErrClosed
+	}
+	r.beforeAdmission = hook
+	return nil
+}
 func (r *Reserve) retained() (int64, error) {
 	if r.file == nil {
 		return 0, os.ErrClosed
@@ -124,6 +138,11 @@ func (r *Reserve) Admit(bytes int64, control bool) error {
 	defer r.mu.Unlock()
 	if bytes < 0 || bytes > 64<<20 {
 		return c.Fail(c.InvalidArgument, "disk admission size outside bounded profile")
+	}
+	if r.beforeAdmission != nil {
+		if err := r.beforeAdmission(bytes, control); err != nil {
+			return err
+		}
 	}
 	current, err := r.status()
 	if err != nil {

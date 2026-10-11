@@ -94,7 +94,7 @@ type Capsule struct {
 
 func makeCapsule(owner Ownership, source string, p Profile, inv Invocation) (Capsule, error) {
 	capsule := Capsule{SchemaVersion: 1, Owner: owner, CandidateDigest: inv.CandidateDigest, SourceDigest: c.HashBytes([]byte(source))}
-	if owner.Validate() != nil || p.Validate() != nil || !c.ValidDigest(inv.CandidateDigest) {
+	if owner.Validate() != nil || p.Validate() != nil || !c.ValidDigest(inv.CandidateDigest) || inv.RequestDigest != "" && !c.ValidDigest(inv.RequestDigest) {
 		return capsule, c.Fail(c.InvalidArgument, "invalid owned dispatch")
 	}
 	var err error

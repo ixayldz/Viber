@@ -254,7 +254,7 @@ func (s *Session) Backup(ctx context.Context, output string) (BackupManifest, er
 	defer s.mu.Unlock()
 	return s.backupLocked(ctx, output)
 }
-func (s *Session) backupLocked(ctx context.Context, output string) (BackupManifest, error) {
+func (s *Session) backupLocked(ctx context.Context, output string) (result BackupManifest, resultErr error) {
 	m := BackupManifest{SchemaVersion: 1, DeletionPolicy: "UNSUPPORTED_NO_DELETIONS", Files: []BackupFile{}}
 	if err := s.Journal.Writable(); err != nil {
 		return m, err
@@ -271,6 +271,15 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 		if err = s.ensurePrivacy(ctx); err != nil {
 			return m, err
 		}
+		// Hold the shared privacy operation lease from before the database
+		// snapshot through managed-copy registration. Otherwise a checkpoint
+		// could retire the old pin's projection after the snapshot but before
+		// this backup becomes discoverable in the registry.
+		operation, operationErr := privacyOperation(ctx, *s.privacy)
+		if operationErr != nil {
+			return m, operationErr
+		}
+		defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
 		m.SchemaVersion, m.DeletionPolicy, m.PrivacyAuthority = 2, "CURRENT_EXTERNAL_AUTHORITY_REQUIRED", s.privacy
 		authorityRoot, err := openPrivacyRoot(*s.privacy)
 		if err != nil {
@@ -528,6 +537,37 @@ func readBackupFile(root *os.Root, f BackupFile) ([]byte, error) {
 	return raw, nil
 }
 
+// openLegacyRestoreValidationSession verifies a disposable legacy restore
+// without registering its temporary directory as an owner of any external
+// privacy authority inherited from the copied SQLite file. Legacy bundles do
+// not carry a current authority binding, so opening them through Open would
+// attach a fresh runtime at the staging path and leave that path pinned after
+// the stage is renamed. Callers must close the returned journal and archive.
+func openLegacyRestoreValidationSession(ctx context.Context, directory string, instance RuntimeInstance) (*Session, func() error, error) {
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		return nil, nil, err
+	}
+	archive, err := artifact.Open(filepath.Join(directory, "artifacts"))
+	if err != nil {
+		return nil, nil, errors.Join(err, journal.Close())
+	}
+	closeStores := func() error { return errors.Join(archive.Close(), journal.Close()) }
+	session := &Session{directory: directory, Journal: journal, Archive: archive, instance: instance}
+	rawAuthority, err := journal.PrivacyAuthority(ctx)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeStores())
+	}
+	if rawAuthority != nil {
+		var authority PrivacyAuthority
+		if decodeErr := c.DecodeStrict(rawAuthority, &authority); decodeErr != nil || authority.validate() != nil {
+			return nil, nil, errors.Join(c.Fail(c.StoreIntegrityError, "legacy restore privacy authority is invalid"), closeStores())
+		}
+		session.privacy = &authority
+	}
+	return session, closeStores, nil
+}
+
 // RestoreBackup validates the whole bundle before staging, then verifies replay
 // and semantic blob closure before publishing a new private store. Pending
 // effects/reservations remain pending; restore never authorizes their retry.
@@ -683,7 +723,8 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 			return m, err
 		}
 	}
-	if _, err = createRuntimeInstance(stagePath); err != nil {
+	validationInstance, err := createRuntimeInstance(stagePath)
+	if err != nil {
 		return m, err
 	}
 	if m.SchemaVersion == 2 {
@@ -695,7 +736,16 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 			return m, err
 		}
 	}
-	restored, err := Open(ctx, stagePath)
+	var restored *Session
+	var closeRestored func() error
+	if legacyMigrationValidation && m.SchemaVersion == 1 {
+		restored, closeRestored, err = openLegacyRestoreValidationSession(ctx, stagePath, validationInstance)
+	} else {
+		restored, err = Open(ctx, stagePath)
+		if err == nil {
+			closeRestored = restored.Close
+		}
+	}
 	if err != nil {
 		return m, err
 	}
@@ -713,7 +763,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if checkErr == nil && m.SchemaVersion == 2 {
 		checkErr = preparePrivacyRestoreTarget(ctx, *m.PrivacyAuthority, stagePath, target, restored.instance, restored.Journal)
 	}
-	checkErr = errors.Join(checkErr, restored.Close())
+	checkErr = errors.Join(checkErr, closeRestored())
 	if checkErr != nil {
 		return m, checkErr
 	}

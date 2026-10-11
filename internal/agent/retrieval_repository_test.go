@@ -81,39 +81,47 @@ func TestRealRepositoryOwnerRetrievalRecallSpansAndWarmInvalidation(t *testing.T
 	defer cache.Close()
 	cold, warm := []int64{}, []int64{}
 	recall, valid := 0, 0
-	for n, label := range labels {
-		args, _ := json.Marshal(map[string]any{"query": label.query, "mode": "ranked", "intent": "IDENTIFIER", "limit": 5})
+	warmPartitions := map[int]bool{}
+	for _, label := range labels {
 		for attempt := 0; attempt < 2; attempt++ {
-			started := time.Now()
-			value, err := nativeReadPageWithCache(context.Background(), capture, layers, state, model.Call{Name: "fs_search", Arguments: args}, cache)
-			elapsed := time.Since(started).Microseconds()
-			if err != nil {
-				t.Fatal(err)
-			}
-			encoded, _ := json.Marshal(value)
-			var page struct {
-				Retrieval retrieval.Result `json:"retrieval"`
-			}
-			if err = json.Unmarshal(encoded, &page); err != nil {
-				t.Fatal(err)
-			}
-			if page.Retrieval.Cache == nil || page.Retrieval.Cache.Hit != (n > 0 || attempt > 0) {
-				t.Fatal("owner cache evidence", string(encoded))
-			}
-			if n == 0 && attempt == 0 {
-				cold = append(cold, elapsed)
-			} else {
-				warm = append(warm, elapsed)
-			}
 			found := false
-			for _, hit := range page.Retrieval.Hits {
-				source := files[hit.Path]
-				if hit.Start < 0 || hit.End > len(source) || !bytes.Equal(hit.Bytes, source[hit.Start:hit.End]) || hit.FileDigest != c.HashBytes(source) {
-					t.Fatal("incorrect real source span")
+			partitions := 1
+			for partition := 0; partition < partitions; partition++ {
+				args, _ := json.Marshal(map[string]any{"query": label.query, "mode": "ranked", "intent": "IDENTIFIER", "limit": 5, "partition": partition})
+				started := time.Now()
+				value, err := nativeReadPageWithCache(context.Background(), capture, layers, state, model.Call{Name: "fs_search", Arguments: args}, cache)
+				elapsed := time.Since(started).Microseconds()
+				if err != nil {
+					t.Fatal(err)
 				}
-				valid++
-				if hit.Path == label.path && bytes.Contains(hit.Bytes, []byte(label.query)) {
-					found = true
+				encoded, _ := json.Marshal(value)
+				var page struct {
+					Retrieval retrieval.Result `json:"retrieval"`
+				}
+				if err = json.Unmarshal(encoded, &page); err != nil {
+					t.Fatal(err)
+				}
+				if page.Retrieval.Cache == nil || page.Retrieval.Cache.Hit != warmPartitions[partition] {
+					t.Fatal("owner cache evidence", string(encoded))
+				}
+				if !warmPartitions[partition] {
+					cold = append(cold, elapsed)
+				} else {
+					warm = append(warm, elapsed)
+				}
+				warmPartitions[partition] = true
+				if page.Retrieval.Partition != nil {
+					partitions = len(page.Retrieval.Partition.Partitions)
+				}
+				for _, hit := range page.Retrieval.Hits {
+					source := files[hit.Path]
+					if hit.Start < 0 || hit.End > len(source) || !bytes.Equal(hit.Bytes, source[hit.Start:hit.End]) || hit.FileDigest != c.HashBytes(source) {
+						t.Fatal("incorrect real source span")
+					}
+					valid++
+					if hit.Path == label.path && bytes.Contains(hit.Bytes, []byte(label.query)) {
+						found = true
+					}
 				}
 			}
 			if attempt == 0 && found {
@@ -122,14 +130,14 @@ func TestRealRepositoryOwnerRetrievalRecallSpansAndWarmInvalidation(t *testing.T
 		}
 	}
 	if recall != len(labels) {
-		t.Fatalf("real repository recall@5=%d/%d", recall, len(labels))
+		t.Fatalf("real repository recall@5 per source partition=%d/%d", recall, len(labels))
 	}
 	peak, err := testutil.PeakResidentBytes()
 	if err != nil || peak <= 0 {
 		t.Fatal("OS process resident measurement unavailable", err)
 	}
 	sort.Slice(warm, func(i, j int) bool { return warm[i] < warm[j] })
-	t.Logf("real repository files=%d recall@5=%d/%d exact spans=%d cold_us=%v warm_median_us=%d warm_p95_us=%d; NOT independent coding success or hardware reference acceptance", len(files), recall, len(labels), valid, cold, warm[len(warm)/2], warm[len(warm)-1])
+	t.Logf("real repository files=%d partitions=%d recall@5 per partition=%d/%d exact spans=%d cold_us=%v warm_median_us=%d warm_p95_us=%d; NOT global top-5 ranking, independent coding success or hardware reference acceptance", len(files), len(warmPartitions), recall, len(labels), valid, cold, warm[len(warm)/2], warm[len(warm)-1])
 	t.Logf("OS process-wide peak resident bytes=%d; includes test runner and capture setup; NOT cache-attributable RSS or a hard quota", peak)
 	// An actually changed source must fail integrity before a warm cache hit.
 	capture.Contents[labels[0].path] = []byte("changed source")

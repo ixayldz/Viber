@@ -46,7 +46,7 @@ func operatorLayer(state c.TaskState, doc Document) []policy.Policy {
 	if err != nil {
 		return []policy.Policy{{SchemaVersion: 1, Epoch: 0, Generation: 0}}
 	}
-	effects := []string{"snapshot.read", "model.infer", "plan.update", "candidate.write", "check.run", "export", "context.read"}
+	effects := []string{"snapshot.read", "model.infer", "plan.update", "candidate.write", "check.run", "export", "context.read", "workspace.apply", "workspace.restore"}
 	if authority.AllowedEffects != nil {
 		effects = append([]string{}, (*authority.AllowedEffects)...)
 	}

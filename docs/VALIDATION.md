@@ -1,5 +1,11 @@
 # Doğrulama kaydı
 
+## 11 Ekim birleşik anahtarsız takip
+
+Son çalışma ağacı için `go vet -p 1 ./...` ve `go build -p 1 ./cmd/viber` PASS. Veri korumasını etkileyen değişikliklerin odaklı kabulü: Windows exact-file apply/restore ve actual Close+OpenExisting recovery, crash-left UNKNOWN reconciliation, current operator effect denial, mapped-view refusal; backup-pinned checkpoint projection pruning; mutable SQLite crash/high-water/anti-spoof accounting; source-bound cross-file Go graph ve packed Git delta/cutoff/inventory; partition cache warm/invalidation. İlgili kontroller geçti. Doküman ve düşük etkili CLI değişiklikleri için gereksiz yeni test eklenmedi; full yerel suite tekrar edilmedi.
+
+`e342766` CI native migration/retrieval/path regresyonları nedeniyle FAILED; bu kayıt geçerli kalır. Yeni source SHA'nın üç OS, race/fuzz, actual Docker MCP, rootless, vault, portable/managed installation ve OIDC dahil 16 job kabulü ayrıca gereklidir. Gerçek eligible ChatGPT hesap kabulü NOT_RUN; API key istemez. İlk yeni managed public baseline olmadan cross-revision upgrade/rollback kabulü NOT_RUN; yalnız hazır yol veya fixture bu kabul yerine sayılmaz.
+
 ## 0.9 V4 independent observer — 9 Ekim 2026
 
 Frozen .cache/validation-0.9-observer Windows full suite: **579 test/alt test PASS / 6 SKIP / 0 FAIL** (.cache/windows-0.9-observer-full.jsonl). SKIP: dört opt-in Docker ve iki Windows symlink privilege fixture. Format/vet/native CLI build PASS. Aynı sabit kopyanın Linux full race turu: **585 PASS / 4 SKIP / 0 FAIL** (.cache/linux-0.9-observer-full.jsonl). Module verify/vet/Linux build/doctor PASS; bütün Darwin arm64 paketleri ve CLI binary COMPILE_ONLY. Dört opt-in Docker SKIP ayrı gerçek Docker turuyla değerlendirilir; native macOS PASS değildir.

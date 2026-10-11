@@ -48,6 +48,7 @@ func DefaultProfile(image string) Profile {
 
 type Invocation struct {
 	Stdin           *[]byte  `json:"stdin,omitempty"`
+	RequestDigest   string   `json:"protocol_request_digest,omitempty"`
 	CandidateDigest string   `json:"candidate_digest"`
 	Argv            []string `json:"argv"`
 }
@@ -283,7 +284,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	if err := p.Validate(); err != nil {
 		return result, err
 	}
-	if !c.ValidDigest(inv.CandidateDigest) || len(inv.Argv) == 0 || inv.Argv[0] == "" || len(inv.Argv) > 128 {
+	if !c.ValidDigest(inv.CandidateDigest) || inv.RequestDigest != "" && !c.ValidDigest(inv.RequestDigest) || len(inv.Argv) == 0 || inv.Argv[0] == "" || len(inv.Argv) > 128 {
 		return result, c.Fail(c.InvalidArgument, "invalid computation invocation")
 	}
 	argvBytes := 0

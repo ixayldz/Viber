@@ -31,12 +31,14 @@ Usage:
   viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
   viber run "TASK" --provider openai|anthropic --allow-remote --model ID --root PATH --store PATH [--context-limit N] [--output-limit N] [--stream] [--json]
     Optional local advisory controls: [--ranking-registry DIR] [--skills-registry DIR --skills-trust-policy FILE]
+    Optional isolated MCP tools: [--extension-manifest CANONICAL_FILE] (explicit approval per call)
   viber auth login|status|profiles|select|models|logout|migrate-storage [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber check-config --runtime FILE [--plan FILE] [--json]
   viber check-prepare --file RECIPE --output FRESH_FILE
   viber check-discover --root PATH [--json]
   viber repo-history --root PATH --allow-local-history --cutoff UTC [--json]
+  viber repo-graph --root PATH [--goos OS --goarch ARCH --compiler gc --go-version go1.27 --tags TAG --tags-complete --cgo DISABLED] [--changed PATH] [--json]
   viber context-why|checks|verification|report TASK --store PATH [--json]
   viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
@@ -80,8 +82,9 @@ Usage:
   viber training-export TASK --store PATH --output NEW_PATH --consent FILE --samples FILE [--json]
   viber delivery-preview TASK --store PATH --output NEW_PATH [--json]
   viber delivery-reverify TASK --store PATH --command-file FILE [--json]
-  viber apply TASK --store PATH --output NEW_PATH [--json]
-  viber restore TASK --store PATH [--checkpoint ID] [--json]
+  viber apply TASK --store PATH --output NEW_PATH [--exclusive-ntfs] [--json]
+  viber restore TASK --store PATH --checkpoint ID [--json]
+  viber delivery-reconcile TASK --store PATH --checkpoint ID [--json]
   viber detach TASK --store PATH [--command-id ID] [--json]
   viber attach TASK --store PATH [--after TASK_SEQ] [--limit N] [--follow] [--poll-ms N] [--json]
   viber serve-background|owner-status|owner-stop --store PATH [--json]
@@ -180,12 +183,16 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runCheckDiscover(args[1:], out, errout)
 	case "repo-history":
 		return runRepoHistory(args[1:], out, errout)
+	case "repo-graph":
+		return runRepoGraph(args[1:], out, errout)
 	case "goal-queue":
 		return runGoalQueue(args[1:], out, errout)
 	case "apply", "delivery-apply":
 		return runDeliveryApply(args[1:], out, errout)
 	case "restore", "delivery-restore":
 		return runDeliveryRestore(args[1:], out, errout)
+	case "delivery-reconcile":
+		return runDeliveryReconcile(args[1:], out, errout)
 	case "queue":
 		return runQueue(args[1:], out, errout)
 	case "ui":
@@ -286,12 +293,15 @@ func runDoctor(args []string, out, errout io.Writer) int {
 	}
 	_, gitErr := exec.LookPath("git")
 	d := doctor{Continuity: "SOURCE_BOUND_HISTORY_PIN_LOCKED_PROVIDER_SWITCH", ResourceAccounting: "CONSERVATIVE_GLOBAL_VECTOR; PHYSICAL_CONTROL_RESERVE", ArchiveGC: "TYPED_ROOTS_ORPHAN_GC; TASK_CONTENT_DELETE_WITH_EXTERNAL_WATERMARK; EXPLICIT_MANAGED_CONTENT_EXPIRY; METADATA_AUDIT_RETENTION_PENDING", Supervisor: "DETACHED_OWNER_CURSOR_ATTACH; HOSTILE_FENCING_ACCEPTANCE_PENDING", SupportReport: "NUMERIC_ALLOWLIST_SUPPORT_V1", CredentialStorage: "WINDOWS_DPAPI_OR_UNIX_OS_VAULT; NATIVE_UNIX_ROUNDTRIP_CI_TESTED; HOST_AVAILABILITY_NOT_PROBED", SchemaVersion: c.SchemaVersion, Version: Version, Platform: runtime.GOOS + "/" + runtime.GOARCH, GitDiscovered: gitErr == nil, SnapshotPreview: true, ProposalPreview: true, ProcessSandbox: "DEVELOPER_OFFLINE_V1_CONFORMANCE_PENDING", ChatGPTAuth: "OFFICIAL_SIWC; OFFLINE_SECURITY_TESTED; LIVE_ACCEPTANCE_PENDING", ChatGPTInference: "STATELESS_SSE; GPT_6_1_SOL_PUBLISHED_CEILING; LIVE_ACCEPTANCE_PENDING", RemoteProviders: "API_KEY_RUNTIME; JSON_SSE_OFFLINE_TESTED; LIVE_ACCEPTANCE_PENDING", LocalProvider: "DECLARED_LOCAL_RUNTIME_CONFORMANCE_PENDING", LiveApply: "UNSUPPORTED", CaptureConsistency: "BEST_EFFORT"}
+	if runtime.GOOS == "windows" {
+		d.LiveApply = "EXPLICIT_FIXED_NTFS_PROFILE; HOST_NOT_PROBED; GENERAL_UNSUPPORTED"
+	}
 	if *jsonMode {
 		if err := jsonWrite(out, d); err != nil {
 			return 4
 		}
 	} else {
-		fmt.Fprintf(out, "Viber %s · %s\nSnapshot/proposal: developer preview · BEST_EFFORT\nOffline sandbox: developer profile · providers: fixture conformance · live apply: unavailable\nStable release: gates closed · telemetry/training: off\n", d.Version, d.Platform)
+		fmt.Fprintf(out, "Viber %s · %s\nSnapshot/proposal: developer preview · BEST_EFFORT\nOffline sandbox: developer profile · providers: fixture conformance\nLive apply: %s\nStable release: gates closed · telemetry/training: off\n", d.Version, d.Platform, d.LiveApply)
 	}
 	return 0
 }

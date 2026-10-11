@@ -99,6 +99,7 @@ func Execute(ctx context.Context, broker DuplexBroker, sourceDir, candidateDiges
 	if err != nil {
 		return result, c.Fail(c.InvalidArgument, "pinned extension schema digest unavailable")
 	}
+	result.OperationDigest = admission.OperationDigest
 
 	x := &exchange{nextID: 1}
 	driver := func(driverCtx context.Context, stdout io.Reader, stdin io.Writer) error {
@@ -116,12 +117,17 @@ func Execute(ctx context.Context, broker DuplexBroker, sourceDir, candidateDiges
 		return nil
 	}
 
-	invocation := runner.Invocation{CandidateDigest: candidateDigest, Argv: append([]string(nil), pin.Manifest.Command...)}
+	invocation := runner.Invocation{CandidateDigest: candidateDigest, Argv: append([]string(nil), pin.Manifest.Command...), RequestDigest: admission.OperationDigest}
 	runResult, runErr := broker.RunDuplex(ctx, sourceDir, pin.Manifest.Profile, invocation, driver)
 	result.SandboxResultDigest, _ = c.Digest(runResult)
+	result.SandboxOwnership = runResult.Ownership
 	result.TranscriptDigest = runResult.DuplexTranscriptDigest
 	result.ProcessTreeQuiescent = runResult.ProcessTreeQuiescent
 	result.RequestDigest = x.requestDigest
+	expectedInvocationDigest := invocationDigest(invocation)
+	if expectedInvocationDigest == "" || runResult.InvocationDigest != expectedInvocationDigest {
+		runErr = errors.Join(runErr, c.Fail(c.StoreIntegrityError, "extension invocation receipt differs from the admitted request"))
+	}
 	if runResult.OutputTruncated || runResult.DuplexTranscriptDigest == "" || runResult.DuplexStdinBytes < 1 || runResult.DuplexStdoutBytes < 1 {
 		runErr = errors.Join(runErr, c.Fail(c.StoreIntegrityError, "extension duplex transcript is missing or exceeded its bound"))
 	}
@@ -164,6 +170,13 @@ func Execute(ctx context.Context, broker DuplexBroker, sourceDir, candidateDiges
 		result.Outcome = CompletedError
 	}
 	return result, nil
+}
+
+func invocationDigest(invocation runner.Invocation) string {
+	empty := []byte{}
+	invocation.Stdin = &empty // RunDuplex binds its interactive OpenStdin mode.
+	digest, _ := c.Digest(invocation)
+	return digest
 }
 
 func newToolResult(pin PinnedManifest, toolName string, admission Admission) ToolResult {

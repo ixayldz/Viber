@@ -6,6 +6,37 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 )
 
+func findDeliveryEffect(effects []c.DeliveryEffect, operationID string) (c.DeliveryEffect, bool) {
+	for _, effect := range effects {
+		if effect.OperationID == operationID {
+			return effect, true
+		}
+	}
+	return c.DeliveryEffect{}, false
+}
+
+func deliveryStateQuiescent(state c.TaskState) bool {
+	if state.Tokens != nil {
+		for _, reservation := range state.Tokens.Reservations {
+			if reservation.Status == "RESERVED" || reservation.Status == "UNKNOWN" {
+				return false
+			}
+		}
+	}
+	if state.Resources != nil {
+		for _, reservation := range state.Resources.Reservations {
+			if reservation.Status == "RESERVED" || reservation.Status == "UNKNOWN" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func deliveryGenerationRebindAllowed(state c.TaskState, payload c.EventPayload, event c.Event) bool {
+	return event.Actor == "kernel" && state.Execution == c.Terminated && !state.InputBarrier && len(state.PendingInputIDs) == 0 && state.Deletion == nil && deliveryStateQuiescent(state) && event.KernelGeneration > state.KernelGeneration && c.ValidDigest(payload.DocumentDigest) && payload.DocumentDigest == state.DocumentDigest && payload.SnapshotDigest == state.CandidateDigest
+}
+
 func applyDeliveryEffect(previous []c.DeliveryEffect, incoming c.DeliveryEffect) ([]c.DeliveryEffect, error) {
 	if err := incoming.Validate(); err != nil {
 		return nil, err

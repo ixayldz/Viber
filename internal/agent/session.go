@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/ixayldz/Viber/internal/config"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/discovery"
+	"github.com/ixayldz/Viber/internal/extensions"
 
 	"github.com/ixayldz/Viber/internal/learning"
 	"github.com/ixayldz/Viber/internal/model"
@@ -61,6 +63,7 @@ func (b Budget) Validate() error {
 }
 
 type Pending struct {
+	ExtensionIntent *ExtensionIntent `json:"extension_intent,omitempty"`
 	NativeLease     *runner.Lease    `json:"native_lease,omitempty"`
 	NativeSubjects  []runner.Capsule `json:"native_subjects,omitempty"`
 	ID              string           `json:"id"`
@@ -72,6 +75,8 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
+	ExtensionManifest     *extensions.PinnedManifest   `json:"extension_manifest,omitempty"`
+	Extension             *ExtensionRef                `json:"extension,omitempty"`
 	SkillRegistry         *SkillRegistryRef            `json:"advisory_skill_registry,omitempty"`
 	Ranking               *learning.Binding            `json:"advisory_ranking,omitempty"`
 	EvaluationAssignment  *EvaluationAssignmentBinding `json:"evaluation_assignment,omitempty"`
@@ -315,6 +320,13 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 			return state, doc, err
 		}
 	}
+	if doc.Extension == nil {
+		if doc.ExtensionManifest != nil {
+			return state, doc, c.Fail(c.StoreIntegrityError, "extension manifest lacks an explicit operator binding")
+		}
+	} else if doc.Extension.Validate() != nil || doc.ExtensionManifest == nil || doc.ExtensionManifest.Validate() != nil || doc.Extension.ManifestDigest != doc.ExtensionManifest.Digest {
+		return state, doc, c.Fail(c.StoreIntegrityError, "retained extension binding failed validation")
+	}
 	if doc.Ranking != nil {
 		if err = doc.Ranking.Validate(); err != nil {
 			return state, doc, err
@@ -446,6 +458,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	Extension            *ExtensionRef
 	SkillRegistry        *SkillRegistryRef
 	Ranking              *learning.Binding
 	evaluationOrigin     *privacyAttempt
@@ -481,6 +494,31 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	return s.createLocked(ctx, options)
 }
 func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.TaskState, error) {
+	var extensionPin *extensions.PinnedManifest
+	if options.Extension != nil {
+		if err := options.Extension.Validate(); err != nil {
+			return c.TaskState{}, err
+		}
+		if !fileguard.Disjoint(options.Root, options.Extension.ManifestPath) || !fileguard.Disjoint(s.directory, options.Extension.ManifestPath) {
+			return c.TaskState{}, c.Fail(c.PolicyDenied, "extension manifest must be outside source and task store")
+		}
+		pin, err := options.Extension.Read()
+		if err != nil {
+			return c.TaskState{}, err
+		}
+		if pin.Digest != options.Extension.ManifestDigest {
+			return c.TaskState{}, c.Fail(c.StaleAuthority, "extension manifest changed during task binding")
+		}
+		if len(Tools())+len(pin.Manifest.Tools) > 32 {
+			return c.TaskState{}, c.Fail(c.UnsupportedCapability, "extension tools exceed the model protocol tool limit")
+		}
+		if options.Config != nil {
+			if err := options.Config.AdmitEffect("check.run"); err != nil {
+				return c.TaskState{}, err
+			}
+		}
+		extensionPin = &pin
+	}
 	if options.SkillRegistry != nil {
 		if err := options.SkillRegistry.Validate(); err != nil {
 			return c.TaskState{}, err
@@ -654,7 +692,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{SkillRegistry: options.SkillRegistry, Ranking: options.Ranking, Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	doc := Document{Extension: options.Extension, ExtensionManifest: extensionPin, SkillRegistry: options.SkillRegistry, Ranking: options.Ranking, Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	doc.MergedDelivery = options.mergedDelivery
 	doc.EvaluationOrigin = options.evaluationOrigin
 	doc.EvaluationAssignment = options.evaluationAssignment
@@ -701,6 +739,9 @@ func disjointSession(a, b string) bool { return fileguard.Disjoint(a, b) }
 func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
 	effects := []string{"snapshot.read", "model.infer", "plan.update"}
 	if doc.CheckRuntime != nil {
+		effects = append(effects, "check.run")
+	}
+	if doc.Extension != nil {
 		effects = append(effects, "check.run")
 	}
 	if doc.Autonomy != "review" && taskKind(doc) != "ANALYSIS" {
@@ -1057,6 +1098,7 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 	for n := doc.ToolCursor; n < int64(len(calls)); n++ {
 		call := calls[n]
 		approvedIndex := -1
+		var extensionIntent *ExtensionIntent
 		var preflightErr error
 		if call.Name == "candidate_propose" && taskKind(doc) == "ANALYSIS" {
 			preflightErr = c.Fail(c.PolicyDenied, "analysis task cannot mutate its candidate")
@@ -1078,13 +1120,37 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 				preflightErr = c.Fail(c.PolicyDenied, "candidate proposal rejected by user")
 			}
 		}
+		_, _, isExtensionTool, extensionLookupErr := extensionToolForCall(doc, call.Name)
+		if extensionLookupErr != nil && preflightErr == nil {
+			preflightErr = extensionLookupErr
+		}
+		if isExtensionTool && preflightErr == nil {
+			requestIndex := boundRequest(doc, state, "EXTENSION_CALL", &call)
+			if requestIndex < 0 || doc.Requests[requestIndex].Status == "PENDING" {
+				if _, err := s.admitExtensionCall(ctx, state, &doc, call); err == nil {
+					if _, err = ensureRequest(&doc, state, "EXTENSION_CALL", &call); err != nil {
+						return state, doc, err
+					}
+					next, err := s.stop(ctx, state, doc, "EXTENSION_CALL_REVIEW_REQUIRED", c.WaitingUser)
+					return next, doc, err
+				} else {
+					preflightErr = err
+				}
+			} else if doc.Requests[requestIndex].Status == "APPROVED" {
+				approvedIndex = requestIndex
+				extensionIntent, preflightErr = s.admitExtensionCall(ctx, state, &doc, call)
+			} else {
+				preflightErr = c.Fail(c.PolicyDenied, "extension tool call rejected by user")
+			}
+		}
 		if doc.Budget.ToolCalls >= doc.Budget.MaxToolCalls {
 			state, err := s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "tool call budget exhausted")
 			return state, doc, err
 		}
 		doc.Budget.ToolCalls++
 		doc.Pending = &Pending{ID: call.ID, Kind: "NATIVE_TOOL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes(call.Arguments), Status: "ADMITTED"}
-		if preflightErr == nil && call.Name == "check_run" {
+		doc.Pending.ExtensionIntent = extensionIntent
+		if preflightErr == nil && (call.Name == "check_run" || extensionIntent != nil) {
 			preflightErr = s.prepareNativeLease(state, &doc, call)
 		}
 		var err error
@@ -1106,17 +1172,27 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		var next *artifact.Ref
 		toolErr := preflightErr
 		if toolErr == nil {
-			reply, next, toolErr = s.executeTool(ctx, state, &doc, call)
+			if extensionIntent != nil {
+				var value any
+				value, toolErr = s.executeExtension(ctx, state, &doc, call)
+				if toolErr == nil {
+					var raw []byte
+					raw, toolErr = json.Marshal(value)
+					reply = model.Reply{CallID: call.ID, Content: string(raw)}
+				}
+			} else {
+				reply, next, toolErr = s.executeTool(ctx, state, &doc, call)
+			}
 		}
 		doc.Budget.ActiveMillis += time.Since(toolStarted).Milliseconds()
 		commitCtx := ctx
-		if call.Name == "check_run" && (ctx.Err() != nil || doc.UnknownEffect) {
+		if (call.Name == "check_run" || extensionIntent != nil) && (ctx.Err() != nil || doc.UnknownEffect) {
 			var cancel context.CancelFunc
 			commitCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 		}
 		if doc.UnknownEffect {
-			nextState, stopErr := s.stop(commitCtx, state, doc, "CHECK_OPERATION_OUTCOME_UNKNOWN; no blind retry", c.Blocked)
+			nextState, stopErr := s.stop(commitCtx, state, doc, "NATIVE_OPERATION_OUTCOME_UNKNOWN; no blind retry", c.Blocked)
 			return nextState, doc, stopErr
 		}
 		if approvedIndex >= 0 {

@@ -78,6 +78,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	rankingDirectory := f.String("ranking-registry", "", "explicit local advisory ranking control outside source/store; disabled by default")
 	skillsDirectory := f.String("skills-registry", "", "explicit externally reviewed procedural skill registry; disabled by default")
 	skillsTrustFile := f.String("skills-trust-policy", "", "separate operator evaluator trust pins for advisory skills")
+	extensionFile := f.String("extension-manifest", "", "explicit canonical MCP manifest outside source/store; each call requires approval")
 	directory := f.String("store", "", "private session store outside source")
 	task := f.String("task", "", "task ID (default random)")
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
@@ -412,6 +413,14 @@ func runTask(args []string, out, errout io.Writer) int {
 	}
 	var ranking *learning.Binding
 	var skillRegistry *agent.SkillRegistryRef
+	var extension *agent.ExtensionRef
+	if *extensionFile != "" {
+		binding, e := agent.BindExtensionManifest(*extensionFile)
+		if e != nil {
+			return report(out, errout, e, *jsonMode)
+		}
+		extension = &binding
+	}
 	if (*skillsDirectory == "") != (*skillsTrustFile == "") {
 		return report(out, errout, c.Fail(c.InvalidArgument, "skills registry and separate operator trust policy required together"), *jsonMode)
 	}
@@ -439,7 +448,7 @@ func runTask(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	_, err = session.Create(ctx, agent.StartOptions{SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{Extension: extension, SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

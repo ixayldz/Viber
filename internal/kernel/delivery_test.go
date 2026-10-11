@@ -114,3 +114,49 @@ func TestDeliveryEffectCannotPromoteQualityOrSkipItsBinding(t *testing.T) {
 		t.Fatal("delivery intent with stale candidate binding accepted")
 	}
 }
+
+func TestDeliveryReconcileAndAuthorityRebindAdvanceOnlyCurrentGeneration(t *testing.T) {
+	state := c.TaskState{
+		SchemaVersion: c.SchemaVersion, TaskID: "task", TaskSeq: 9, StoreSeq: 9,
+		KernelGeneration: 3, SpecVersion: 2, PolicyEpoch: 4,
+		DocumentDigest: deliveryDigest("document"), CandidateDigest: deliveryDigest("candidate"),
+		Execution: c.Terminated, Outcome: c.Finished, Quality: c.Unverified, Fulfillment: c.Satisfied,
+	}
+	apply := c.DeliveryEffect{
+		OperationID: "0123456789abcdef0123456789abcdef", Phase: c.DeliveryApplyPhase, Status: c.DeliveryUnknown,
+		PlanDigest: deliveryDigest("plan"), SourceDocument: state.DocumentDigest,
+		SourceTaskSeq: state.TaskSeq, SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch,
+		Generation: state.KernelGeneration, CandidateDigest: state.CandidateDigest,
+		TargetDigest: deliveryDigest("target"), ResultDigest: deliveryDigest("result"),
+	}
+	intentEvent, intentPayload := deliveryEvent(state, apply, state.DocumentDigest, state.TaskSeq)
+	intentState, err := Reduce(&state, intentEvent, intentPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := apply
+	completed.Status = c.DeliveryApplied
+	completed.ReceiptDigest = deliveryDigest("receipt")
+	reason, _ := c.Digest(completed)
+	reconcileEvent := c.Event{SchemaVersion: c.SchemaVersion, ID: "delivery-reconcile", StoreSeq: intentState.StoreSeq + 1, TaskID: intentState.TaskID, TaskSeq: intentState.TaskSeq + 1, KernelGeneration: 4, Actor: "kernel", Type: "DeliveryEffectReconciled"}
+	reconcilePayload := c.EventPayload{DocumentDigest: intentState.DocumentDigest, SnapshotDigest: completed.CandidateDigest, Reason: reason, DeliveryEffect: &completed}
+	reconciled, err := Reduce(&intentState, reconcileEvent, reconcilePayload)
+	if err != nil {
+		t.Fatalf("read-only crash reconciliation did not advance generation: %v", err)
+	}
+	if reconciled.KernelGeneration != 4 || reconciled.DeliveryEffects[0].Status != c.DeliveryApplied || reconciled.Quality != state.Quality {
+		t.Fatal("delivery reconciliation changed task verdict or lost its receipt")
+	}
+
+	current := c.TaskState{SchemaVersion: c.SchemaVersion, TaskID: "fresh", TaskSeq: 3, StoreSeq: 3, KernelGeneration: 7, SpecVersion: 1, PolicyEpoch: 1, DocumentDigest: deliveryDigest("fresh-document"), CandidateDigest: deliveryDigest("fresh-candidate"), Execution: c.Terminated, Outcome: c.Finished, Quality: c.Partial, Fulfillment: c.Satisfied}
+	currentGeneration := int64(8)
+	bind, err := c.DeliveryAuthorityRebindDigest(current, currentGeneration, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebindEvent := c.Event{SchemaVersion: c.SchemaVersion, ID: "delivery-authority-rebind", StoreSeq: current.StoreSeq + 1, TaskID: current.TaskID, TaskSeq: current.TaskSeq + 1, KernelGeneration: currentGeneration, Actor: "kernel", Type: "DeliveryAuthorityRebound"}
+	rebound, err := Reduce(&current, rebindEvent, c.EventPayload{DocumentDigest: current.DocumentDigest, SnapshotDigest: current.CandidateDigest, Reason: bind})
+	if err != nil || rebound.KernelGeneration != currentGeneration || rebound.Quality != current.Quality || rebound.DocumentDigest != current.DocumentDigest {
+		t.Fatalf("safe terminal authority rebind changed immutable task facts: %+v %v", rebound, err)
+	}
+}

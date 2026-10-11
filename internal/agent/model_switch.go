@@ -123,7 +123,11 @@ func (s *Session) SwitchModel(ctx context.Context, command ModelSwitch) (c.TaskS
 	probe.Context = nil
 	// Validate the old complete tool boundary before removing opaque state.
 	provider, _, _ := contextProfile(doc)
-	validation := model.Request{SchemaVersion: 1, ID: "switch-boundary", Model: doc.Runtime.Model, Messages: doc.Messages, Tools: Tools(), Stream: doc.Runtime.Stream, MaxOutputTokens: doc.Runtime.OutputLimit, ContextWindow: requestContextWindow(doc.Runtime)}
+	tools, err := toolsForDocument(doc)
+	if err != nil {
+		return state, err
+	}
+	validation := model.Request{SchemaVersion: 1, ID: "switch-boundary", Model: doc.Runtime.Model, Messages: doc.Messages, Tools: tools, Stream: doc.Runtime.Stream, MaxOutputTokens: doc.Runtime.OutputLimit, ContextWindow: requestContextWindow(doc.Runtime)}
 	if err = model.ValidateRequest(validation, provider); err != nil {
 		return state, err
 	}

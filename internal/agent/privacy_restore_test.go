@@ -46,11 +46,15 @@ func TestPrivacyRestoreDeletionRetainsSiblingOwnerTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Stores) != 1 || filepath.Clean(plan.Stores[0].Scope.Directory) != filepath.Clean(restoredPath) {
+	canonicalRestored, err := canonicalExistingDirectory(restoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Stores) != 1 || filepath.Clean(plan.Stores[0].Scope.Directory) != filepath.Clean(canonicalRestored) {
 		t.Fatal("final restore owner was not bound as a per-task deletion store", plan.Stores)
 	}
 	for _, copy := range plan.Copies {
-		if filepath.Clean(copy.Directory) == filepath.Clean(restoredPath) {
+		if filepath.Clean(copy.Directory) == filepath.Clean(canonicalRestored) {
 			t.Fatal("active restore owner was treated as a whole-store managed copy")
 		}
 	}
