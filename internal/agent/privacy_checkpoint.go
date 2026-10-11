@@ -1028,7 +1028,18 @@ func withPrivacyScopeStore(ctx context.Context, authority PrivacyAuthority, scop
 	}
 	journal := preferred
 	opened := false
-	if journal == nil || scope.InstanceID != preferredInstance.ID || scope.PhysicalRoot != preferredInstance.PhysicalRoot || filepath.Clean(scope.Directory) != filepath.Clean(preferredDirectory) {
+	preferredPath := ""
+	if journal != nil {
+		var err error
+		preferredPath, err = filepath.EvalSymlinks(preferredDirectory)
+		if err == nil {
+			preferredPath, err = filepath.Abs(preferredPath)
+		}
+		if err != nil {
+			return c.Fail(c.StaleAuthority, "current owner directory unavailable during checkpoint admission")
+		}
+	}
+	if journal == nil || scope.InstanceID != preferredInstance.ID || scope.PhysicalRoot != preferredInstance.PhysicalRoot || filepath.Clean(scope.Directory) != filepath.Clean(preferredPath) {
 		var err error
 		journal, err = store.Open(ctx, scope.Directory)
 		if err != nil {

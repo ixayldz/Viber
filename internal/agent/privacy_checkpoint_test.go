@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 func TestPrivacyCheckpointRetainsFullStateAcrossJournalRetirementAndReopen(t *testing.T) {
@@ -79,5 +81,39 @@ func TestPrivacyCheckpointRetainsFullStateAcrossJournalRetirementAndReopen(t *te
 	}
 	if err = root.Rename(receipt+".held", receipt); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPrivacyCheckpointReusesOwnerThroughEquivalentDirectorySpelling(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := startFixture(t, []Turn{{Text: "alias", UsageKnown: true}}, false)
+	defer s.Close()
+	canonical, err := filepath.EvalSymlinks(s.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err = filepath.Abs(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, s.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := privacyScope{InstanceID: s.instance.ID, Directory: canonical, PhysicalRoot: s.instance.PhysicalRoot}
+	called := false
+	err = withPrivacyScopeStore(ctx, *s.privacy, scope, s.Journal, s.instance, relative, func(journal *store.Store) error {
+		if journal != s.Journal {
+			t.Fatal("equivalent owner spelling opened another writer")
+		}
+		called = true
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatal("canonical scope did not reuse equivalent current owner", err)
 	}
 }
