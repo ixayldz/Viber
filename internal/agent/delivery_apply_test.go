@@ -14,15 +14,18 @@ import (
 
 func TestDeliveryApplyPreservesOpenWriterAndReviewPackageSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
-	tempRoot, err := os.MkdirTemp(filepath.Join("..", "..", ".cache"), "delivery-apply-test-")
+	cacheRoot, err := filepath.Abs(filepath.Join("..", "..", ".cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(cacheRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	tempRoot, err := os.MkdirTemp(cacheRoot, "delivery-apply-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tempRoot, err = filepath.Abs(tempRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cacheRoot, err := filepath.Abs(filepath.Join("..", "..", ".cache"))
 	if err != nil {
 		t.Fatal(err)
 	}

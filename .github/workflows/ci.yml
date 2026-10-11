@@ -94,6 +94,8 @@ jobs:
           go-version-file: go.mod
       - name: Real Docker acceptance
         shell: bash
+        env:
+          VIBER_QUOTA_DIAGNOSTICS: '1'
         run: |
           mkdir -p evidence
           docker version > evidence/docker-version.txt

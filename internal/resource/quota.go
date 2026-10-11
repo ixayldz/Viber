@@ -966,14 +966,19 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 	if measured.ChargedBytes > charged || measured.Entries > entries {
 		return c.Fail(c.StaleAuthority, fmt.Sprintf("physical tree exceeds retained or outstanding admission (bytes=%d/%d entries=%d/%d)", measured.ChargedBytes, charged, measured.Entries, entries))
 	}
+	unadmitted := make([]string, 0)
 	for _, file := range measured.Files {
 		if expected, ok := known[file.Path]; ok {
 			if file != expected {
 				return c.Fail(c.StaleAuthority, "retained physical file identity or bytes changed")
 			}
 		} else if !unknown {
-			return c.Fail(c.StaleAuthority, "physical tree contains an unadmitted file")
+			unadmitted = append(unadmitted, file.Path)
 		}
+	}
+	if len(unadmitted) != 0 {
+		writeQuotaTreeDiagnostic(measured, known, charged, entries, unknown, unadmitted)
+		return c.Fail(c.StaleAuthority, "physical tree contains an unadmitted file")
 	}
 	return nil
 }
