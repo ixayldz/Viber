@@ -102,8 +102,14 @@ func (s *Store) SnapshotDatabaseUpperBytes(ctx context.Context) (uint64, error) 
 func (s *Store) SnapshotDatabaseReserved(ctx context.Context, directory string, allocation resource.Allocation) (SnapshotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.physical != nil && !allocation.Covers(directory) {
-		return SnapshotInfo{}, c.Fail(c.StaleAuthority, "backup snapshot is outside its shared physical reservation")
+	if s.physical != nil {
+		active, covered, err := s.physical.EnclosingReservation(ctx, directory)
+		if err != nil {
+			return SnapshotInfo{}, err
+		}
+		if !covered || active.ID != allocation.ID || !allocation.Covers(directory) {
+			return SnapshotInfo{}, c.Fail(c.StaleAuthority, "backup snapshot is outside its active shared physical reservation")
+		}
 	}
 	return s.snapshotDatabaseLocked(ctx, directory, resource.Allocation{})
 }

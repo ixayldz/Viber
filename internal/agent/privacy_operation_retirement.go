@@ -164,6 +164,88 @@ func retirePrivacyOperationLeases(ctx context.Context, root *os.Root, authority 
 	return retired, nil
 }
 
+// hasLivePrivacyOperationLease is a read-only admission check for operations
+// whose durable work spans multiple registry-lock acquisitions. The family
+// lock serializes lease publication with this inventory, while the native file
+// lock distinguishes a live operation from a crash-left descriptor.
+func hasLivePrivacyOperationLease(ctx context.Context, root *os.Root, authority PrivacyAuthority) (bool, error) {
+	scopes, _, err := readPrivacyScopes(root)
+	if err != nil {
+		return false, err
+	}
+	pinned := map[string]bool{}
+	for _, scope := range scopes {
+		pinned[filepath.Join("owners", scope.InstanceID+".lock")] = true
+	}
+	directory, err := root.Open("owners")
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	names, err := directory.Readdirnames(privacyCatalogLimit + 1)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	err = errors.Join(err, directory.Close())
+	if err != nil {
+		return false, err
+	}
+	if len(names) > privacyCatalogLimit {
+		return false, c.Fail(c.BudgetLimitReached, "operation lease catalog bound exceeded")
+	}
+	digest, err := c.Digest(authority)
+	if err != nil {
+		return false, err
+	}
+	for _, base := range names {
+		if err = ctx.Err(); err != nil {
+			return false, err
+		}
+		if strings.HasSuffix(base, ".json") && c.ValidDigest(strings.TrimSuffix(base, ".json")) {
+			continue
+		}
+		if !validPrivacyLeaseFilename(base) {
+			return false, c.Fail(c.StoreIntegrityError, "foreign operation lease catalog member")
+		}
+		name := filepath.Join("owners", base)
+		if pinned[name] {
+			continue
+		}
+		// Probe before reading. Windows byte-range locks prohibit reads through
+		// a second descriptor while the live operation owns the lease.
+		f, lockErr := fileguard.LockExisting(root, name)
+		var typed *c.Error
+		if errors.As(lockErr, &typed) && typed.Code == c.StoreOwned {
+			return true, nil
+		}
+		if lockErr != nil {
+			return false, lockErr
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(f, 4097))
+		readErr = errors.Join(readErr, f.Close())
+		if readErr != nil {
+			return false, readErr
+		}
+		if len(raw) > 4096 {
+			return false, c.Fail(c.StoreIntegrityError, "oversized operation lease")
+		}
+		if len(raw) == 0 {
+			continue // Legacy/untyped owner lease has no operation claim.
+		}
+		var lease privacyOperationLease
+		if c.DecodeStrict(raw, &lease) != nil || lease.SchemaVersion != 1 || lease.Kind != "RESTORE_OPERATION" || lease.Name != name || lease.AuthorityDigest != digest {
+			return false, c.Fail(c.StoreIntegrityError, "operation lease is foreign or malformed")
+		}
+		canonical, canonicalErr := c.CanonicalV1(lease)
+		if canonicalErr != nil || string(canonical) != string(raw) {
+			return false, c.Fail(c.StoreIntegrityError, "operation lease is noncanonical")
+		}
+	}
+	return false, nil
+}
+
 // RetirePrivacyOperationLeases is bounded remediation, not owner/fence pruning.
 func (s *Session) RetirePrivacyOperationLeases(ctx context.Context) (*PrivacyMetadataStatus, error) {
 	s.mu.Lock()

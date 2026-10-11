@@ -2,13 +2,65 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/store"
 )
+
+func TestPrivacyCheckpointWaitsForLiveRestoreOperation(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := startFixture(t, []Turn{{Text: "checkpoint gate", UsageKnown: true}}, false)
+	defer s.Close()
+	if err := s.ensurePrivacy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := privacyOperation(ctx, *s.privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Close() })
+	_, checkpointErr := s.CheckpointPrivacyMetadata(ctx)
+	var typed *c.Error
+	if !errors.As(checkpointErr, &typed) || typed.Code != c.StoreOwned {
+		t.Fatalf("checkpoint advanced under a live restore lease: %v", checkpointErr)
+	}
+	if err = operation.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CheckpointPrivacyMetadata(ctx); err != nil {
+		t.Fatalf("checkpoint did not resume after the operation lease closed: %v", err)
+	}
+}
+
+func TestPrivacyCheckpointBlocksAnUnfinishedRestoreStage(t *testing.T) {
+	ctx := context.Background()
+	s, options, _ := startFixture(t, []Turn{{Text: "checkpoint stage gate", UsageKnown: true}}, false)
+	defer s.Close()
+	if err := s.ensurePrivacy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stageRoot, err := freshPrivate(filepath.Join(t.TempDir(), "restore-stage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.allocateManagedCopy(ctx, stageRoot, "RESTORE_STAGE", []string{options.TaskID}); err != nil {
+		stageRoot.Close()
+		t.Fatal(err)
+	}
+	if err = stageRoot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.CheckpointPrivacyMetadata(ctx)
+	var typed *c.Error
+	if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+		t.Fatalf("checkpoint did not block an unfinished restore allocation: %v", err)
+	}
+}
 
 func TestPrivacyCheckpointRetainsFullStateAcrossJournalRetirementAndReopen(t *testing.T) {
 	ctx := context.Background()

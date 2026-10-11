@@ -20,6 +20,7 @@ import (
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/ipc"
 	"github.com/ixayldz/Viber/internal/kernel"
+	"github.com/ixayldz/Viber/internal/learning"
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/owner"
 	"github.com/ixayldz/Viber/internal/plan"
@@ -74,6 +75,9 @@ func runTask(args []string, out, errout io.Writer) int {
 	root := f.String("root", ".", "live source root")
 	userConfigFile := f.String("user-config", "", "secret-free global config; default OS user config directory")
 	operatorPolicyFile := f.String("operator-policy", "", "absolute operator restriction profile outside project; revision changes invalidate task admissions")
+	rankingDirectory := f.String("ranking-registry", "", "explicit local advisory ranking control outside source/store; disabled by default")
+	skillsDirectory := f.String("skills-registry", "", "explicit externally reviewed procedural skill registry; disabled by default")
+	skillsTrustFile := f.String("skills-trust-policy", "", "separate operator evaluator trust pins for advisory skills")
 	directory := f.String("store", "", "private session store outside source")
 	task := f.String("task", "", "task ID (default random)")
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
@@ -406,12 +410,36 @@ func runTask(args []string, out, errout io.Writer) int {
 	if err := budget.Validate(); err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
+	var ranking *learning.Binding
+	var skillRegistry *agent.SkillRegistryRef
+	if (*skillsDirectory == "") != (*skillsTrustFile == "") {
+		return report(out, errout, c.Fail(c.InvalidArgument, "skills registry and separate operator trust policy required together"), *jsonMode)
+	}
+	if *skillsDirectory != "" {
+		binding, e := agent.BindSkillRegistry(*skillsDirectory, *skillsTrustFile)
+		if e != nil {
+			return report(out, errout, e, *jsonMode)
+		}
+		skillRegistry = &binding
+	}
+	if *rankingDirectory != "" {
+		registry, e := learning.Open(*rankingDirectory, false)
+		if e != nil {
+			return report(out, errout, e, *jsonMode)
+		}
+		binding, e := registry.Bind()
+		registry.Close()
+		if e != nil {
+			return report(out, errout, e, *jsonMode)
+		}
+		ranking = &binding
+	}
 	session, err := agent.Open(ctx, *directory)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	_, err = session.Create(ctx, agent.StartOptions{GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	_, err = session.Create(ctx, agent.StartOptions{SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}

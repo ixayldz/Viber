@@ -39,6 +39,14 @@ API key isteyen kabul: OpenAI/Anthropic actual dispatch/protocol/usage/model-qua
 
 Her teslim aşağıdakileri ekler: değişen dosya ve kullanıcı komutu; kaynak/policy/digest bağları; çalıştırılan scoped test/build sonucu; entegrasyon durumu; gerçek kabul sınırı. Kapsamın tamamı kapanmadan bu belge veya release `DONE/%100` olarak işaretlenmez.
 
+## 11 Ekim akşam entegrasyonu
+
+README ilk kurulum → ChatGPT hesabı → ilk görev → onay → export sırasına indirildi; ayrıntılı komutlar `CLI_REFERENCE.md` içinde kaldı. Resmi SIWC OSS akışı ayrı API key/client secret istemez. Gerçek eligible hesapla giriş ve model çağrısı ölçülmedi; bu anahtarsız dış kabul hâlâ açıktır.
+
+Restore/checkpoint rebase, exact owned stage recovery, sibling export koruması, live-operation checkpoint gate, FREE_PENDING durable replay ve canonical-path-bound physical quota seed uygulandı. Skills, source-bound DEV eğitimi/ayrık HOLDOUT evaluation/SHADOW-CANARY-ACTIVE/kill-rollback ve exact new-repository generation CLI'ye bağlandı. MCP protocol/duplex ve Windows sealed-file helper için odaklı kontroller geçti; Session/CLI extension ve owned live delivery entegrasyonu henüz açık.
+
+Yerel yeni binary: `go vet` ve build geçti; mevcut offline demo ilk görev, export, backup, fresh restore, geçmiş replay ve source preservation akışını başarıyla çalıştırdı. Son exact-source CI ayrıca zorunludur. Kalan büyük anahtarsız PRD başlıkları: old catalog retirement/legacy owners, bütün mutable quota/fence writers, genel protected verifier/runtime coverage, resolved graph/packed history, typed multi-worker DAG/shared parent budget, authenticated team/remote execution, iki farklı revision upgrade ve bağımsız pilot/performance kabulü. Bunlar API key işi diye yeniden sınıflandırılmadı.
+
 ## Bu uygulama turunun teslimi
 
 | Teslim | Çalışan yüzey | Kabul sınırı |

@@ -23,6 +23,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/discovery"
 
+	"github.com/ixayldz/Viber/internal/learning"
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/plan"
 	"github.com/ixayldz/Viber/internal/policy"
@@ -71,6 +72,8 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
+	SkillRegistry         *SkillRegistryRef            `json:"advisory_skill_registry,omitempty"`
+	Ranking               *learning.Binding            `json:"advisory_ranking,omitempty"`
 	EvaluationAssignment  *EvaluationAssignmentBinding `json:"evaluation_assignment,omitempty"`
 	EvaluationOrigin      *privacyAttempt              `json:"evaluation_origin,omitempty"`
 	MergedDelivery        *MergedDeliveryOrigin        `json:"merged_delivery_origin,omitempty"`
@@ -197,6 +200,21 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 			return nil, encodeErr
 		}
 	}
+	rawAuthority, authorityErr := journal.PrivacyAuthority(ctx)
+	if authorityErr != nil {
+		session.Close()
+		return nil, authorityErr
+	}
+	if rawAuthority != nil {
+		var retainedAuthority PrivacyAuthority
+		if err = c.DecodeStrict(rawAuthority, &retainedAuthority); err == nil {
+			err = session.attachPhysicalQuota(ctx, &retainedAuthority)
+		}
+		if err != nil {
+			session.Close()
+			return nil, err
+		}
+	}
 	if err = session.attachPrivacy(ctx); err != nil {
 		session.Close()
 		return nil, err
@@ -209,37 +227,9 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 		session.Close()
 		return nil, err
 	}
-	if session.privacy != nil {
-		pin, pinErr := journal.PhysicalQuotaBinding(ctx)
-		if pinErr != nil {
-			session.Close()
-			return nil, pinErr
-		}
-		expectedLedgerID := ""
-		if pin != nil {
-			if pin.AuthorityID != session.privacy.ID || pin.Directory != session.privacy.Directory || pin.PhysicalRoot != session.privacy.PhysicalRoot {
-				session.Close()
-				return nil, c.Fail(c.StaleAuthority, "owner physical quota pin differs from current privacy authority")
-			}
-			expectedLedgerID = pin.LedgerID
-		}
-		ledger, ledgerErr := resource.OpenPinned(resource.Authority{ID: session.privacy.ID, Directory: session.privacy.Directory, PhysicalRoot: session.privacy.PhysicalRoot}, resource.DefaultLimits(), expectedLedgerID)
-		if ledgerErr != nil {
-			session.Close()
-			return nil, ledgerErr
-		}
-		session.PhysicalQuota = ledger
-		binding := store.PhysicalQuotaBinding{SchemaVersion: 1, AuthorityID: session.privacy.ID, Directory: session.privacy.Directory, PhysicalRoot: session.privacy.PhysicalRoot, LedgerID: ledger.LedgerID}
-		if err = journal.BindPhysicalQuota(ctx, binding); err == nil {
-			err = journal.AttachPhysicalQuota(ledger)
-		}
-		if err == nil {
-			err = archive.BindPhysicalQuota(ledger)
-		}
-		if err != nil {
-			session.Close()
-			return nil, err
-		}
+	if err = session.attachPhysicalQuota(ctx, session.privacy); err != nil {
+		session.Close()
+		return nil, err
 	}
 	return session, nil
 }
@@ -319,6 +309,19 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	}
 	if err = validateTaskConfig(doc); err != nil {
 		return state, doc, err
+	}
+	if doc.SkillRegistry != nil {
+		if err = doc.SkillRegistry.Validate(); err != nil {
+			return state, doc, err
+		}
+	}
+	if doc.Ranking != nil {
+		if err = doc.Ranking.Validate(); err != nil {
+			return state, doc, err
+		}
+		if doc.Ranking.Definition.SourceDigest != doc.Baseline.SnapshotDigest {
+			return state, doc, c.Fail(c.StoreIntegrityError, "ranking source binding changed")
+		}
 	}
 	if err = s.validateRuntime(doc); err != nil {
 		return state, doc, err
@@ -443,6 +446,8 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	SkillRegistry        *SkillRegistryRef
+	Ranking              *learning.Binding
 	evaluationOrigin     *privacyAttempt
 	evaluationAssignment *EvaluationAssignmentBinding
 	mergedDelivery       *MergedDeliveryOrigin
@@ -476,6 +481,22 @@ func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState
 	return s.createLocked(ctx, options)
 }
 func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.TaskState, error) {
+	if options.SkillRegistry != nil {
+		if err := options.SkillRegistry.Validate(); err != nil {
+			return c.TaskState{}, err
+		}
+		if !fileguard.Disjoint(options.Root, options.SkillRegistry.Directory) || !fileguard.Disjoint(options.Root, options.SkillRegistry.TrustFile) || !fileguard.Disjoint(s.directory, options.SkillRegistry.Directory) || !fileguard.Disjoint(s.directory, options.SkillRegistry.TrustFile) {
+			return c.TaskState{}, c.Fail(c.PolicyDenied, "advisory skill registry and operator trust file must be outside source/store")
+		}
+	}
+	if options.Ranking != nil {
+		if err := options.Ranking.Validate(); err != nil {
+			return c.TaskState{}, err
+		}
+		if !fileguard.Disjoint(options.Root, options.Ranking.Directory) || !fileguard.Disjoint(s.directory, options.Ranking.Directory) {
+			return c.TaskState{}, c.Fail(c.PolicyDenied, "ranking control must be outside source and task store")
+		}
+	}
 	if err := s.Journal.Writable(); err != nil {
 		return c.TaskState{}, err
 	}
@@ -587,6 +608,9 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if options.GoalOrigin != nil && base.Snapshot.Digest != options.GoalOrigin.SourceSnapshotDigest {
 		return c.TaskState{}, c.Fail(c.StaleAuthority, "scheduled child source snapshot changed before creation")
 	}
+	if options.Ranking != nil && options.Ranking.Definition.SourceDigest != base.Snapshot.Digest {
+		return c.TaskState{}, c.Fail(c.StaleBase, "ranking policy was not evaluated for this exact source snapshot")
+	}
 	ref, err := s.Archive.Put(options.TaskID, base)
 	if err != nil {
 		return c.TaskState{}, err
@@ -630,7 +654,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	doc := Document{SkillRegistry: options.SkillRegistry, Ranking: options.Ranking, Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	doc.MergedDelivery = options.mergedDelivery
 	doc.EvaluationOrigin = options.evaluationOrigin
 	doc.EvaluationAssignment = options.evaluationAssignment

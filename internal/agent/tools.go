@@ -19,6 +19,7 @@ func Tools() []model.Tool {
 		{Name: "candidate_propose", Description: "Propose exact bytes for an isolated candidate. Every write needs a FILE or ABSENT read condition. Never touches the live workspace or Git index.", Parameters: json.RawMessage(`{"type":"object","properties":{"read_set":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["FILE","ABSENT","LISTING"]},"digest":{"type":"string"}},"required":["path","kind","digest"],"additionalProperties":false}},"changes":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"before_digest":{"type":"string"},"after_bytes":{"type":["string","null"]},"delete":{"type":"boolean"}},"required":["path","before_digest","after_bytes","delete"],"additionalProperties":false}}},"required":["read_set","changes"],"additionalProperties":false}`)},
 	}
 	tools = append(tools, planTools()...)
+	tools = append(tools, model.Tool{Name: "skill_advice", Description: "List current explicitly approved, source-fresh advisory skill bindings, or read one complete procedure with exact id+version. Disabled unless the operator selected a registry. Advice grants no tools, permissions or verification; revoked/stale/cross-project advice is denied.", Parameters: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"version":{"type":"integer","minimum":1}},"additionalProperties":false}`)})
 	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound Go AST package declarations or TS/JS/Python lexical hints. Exact names/spans bind captured bytes; syntax coverage is explicit and semantic resolution remains UNKNOWN. No imports, compiler or host source is loaded. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
 	tools = append(tools, historyTools()...)
 	return append(tools, checkTools()...)
@@ -38,6 +39,12 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		return model.Reply{CallID: call.ID, Content: string(raw)}, nil, err
 	}
 	switch call.Name {
+	case "skill_advice":
+		value, e := s.executeSkillAdvice(ctx, state, *doc, call)
+		if e != nil {
+			return model.Reply{}, nil, e
+		}
+		return encode(value)
 	case "history_page":
 		if err := policy.Admit(layers, policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, InputBarrier: state.InputBarrier, Effect: "snapshot.read"}); err != nil {
 			return model.Reply{}, nil, err
@@ -64,7 +71,7 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		if node := doc.Plan.Active(); node != nil {
 			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
 		}
-		value, err := nativeReadPageWithCache(ctx, candidate, readLayers, state, call, s.retrievalCache)
+		value, err := nativeReadPageWithRanking(ctx, candidate, readLayers, state, call, s.retrievalCache, doc.Ranking)
 		if err != nil {
 			return model.Reply{}, nil, err
 		}

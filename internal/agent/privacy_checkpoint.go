@@ -818,6 +818,13 @@ func (s *Session) CheckpointPrivacyMetadata(ctx context.Context) (PrivacyCheckpo
 		return status, err
 	}
 	defer lock.Close()
+	liveOperation, err := hasLivePrivacyOperationLease(ctx, root, *s.privacy)
+	if err != nil {
+		return status, err
+	}
+	if liveOperation {
+		return status, c.Fail(c.StoreOwned, "privacy checkpoint is blocked by a live backup or restore operation")
+	}
 	if err = recoverPrivacyCheckpoint(ctx, root, *s.privacy, s.Journal, s.instance, s.directory); err != nil {
 		return status, err
 	}
@@ -834,6 +841,9 @@ func (s *Session) CheckpointPrivacyMetadata(ctx context.Context) (PrivacyCheckpo
 	}
 	if len(scopes) == 0 {
 		return status, c.Fail(c.StaleAuthority, "checkpoint requires a registered owner scope")
+	}
+	if privacyCheckpointHasUnfinishedRestore(view, scopes) {
+		return status, c.Fail(c.StaleAuthority, "finish or recover the registered restore stage before advancing the privacy checkpoint")
 	}
 	previous, previousDigest, err := currentPrivacyCheckpointAnchor(root)
 	if err != nil {

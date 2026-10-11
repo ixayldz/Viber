@@ -77,14 +77,39 @@ func TestCoChangeRanksOnlyBoundHistoryAndMarksPartialCoverage(t *testing.T) {
 	if err := ValidateCoChanges(forged, history, source); err == nil {
 		t.Fatal("forged co-change evidence admitted")
 	}
+	duplicated := report
+	duplicated.Results = append([]CoChange(nil), report.Results...)
+	duplicated.Results[0].EvidenceCommits = append([]string(nil), report.Results[0].EvidenceCommits...)
+	duplicated.Results[0].EvidenceCommits[0] = duplicated.Results[0].EvidenceCommits[1]
+	duplicated.ReportDigest = ""
+	duplicated.ReportDigest, _ = c.Digest(duplicated)
+	if err := ValidateCoChanges(duplicated, history, source); err == nil {
+		t.Fatal("rehash did not legitimize duplicate historical evidence")
+	}
+}
+
+func TestCoChangeRejectsHistoryAfterDeclaredCutoff(t *testing.T) {
+	source := testCapture(t)
+	cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	history := testGitHistory(t, source, []workspace.HistoryCommit{{
+		ObjectID: strings.Repeat("a", 40), CommitterUTC: "2026-03-01T00:00:01Z",
+		Changes: []workspace.HistoryChange{{Path: "target.go", Kind: "MODIFIED"}},
+	}}, cutoff)
+	if _, err := RankCoChanges(history, source, "target.go", 10); err == nil {
+		t.Fatal("history newer than the at-or-before cutoff was admitted")
+	}
 }
 
 func TestLocalEmbeddingReranksExactPoolAndRejectsUntrustedSourceBoundary(t *testing.T) {
 	source := testCapture(t)
+	modelDigest := strings.Repeat("a", 64)
+	canonicalModelDigest := "sha256:" + modelDigest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/version":
 			_ = json.NewEncoder(w).Encode(map[string]string{"version": "test-runtime"})
+		case "/api/tags":
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []map[string]any{{"name": "local-embed:1", "model": "local-embed:1", "digest": modelDigest, "details": map[string]any{}}}})
 		case "/api/embed":
 			var request struct {
 				Model    string   `json:"model"`
@@ -107,13 +132,13 @@ func TestLocalEmbeddingReranksExactPoolAndRejectsUntrustedSourceBoundary(t *test
 	defer server.Close()
 	spans := []SourceSpan{{Path: "related.go", Start: 0, End: len(source.Contents["related.go"])}, {Path: "target.go", Start: 0, End: len(source.Contents["target.go"])}}
 	report, err := RankCapturedSpans(context.Background(), source, "target", spans, LocalEmbeddingOptions{
-		Endpoint: server.URL, Model: "local-embed:1", ModelRevision: "sha256:operator-declared", Timeout: 5 * time.Second})
+		Endpoint: server.URL, Model: "local-embed:1", ModelRevision: modelDigest, Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Ranked[0].Path != "target.go" || report.Manifest.EgressAttested ||
 		report.Manifest.EgressPosture != "LOOPBACK_ONLY_DECLARED_NOT_ATTESTED" ||
-		report.Manifest.RuntimeVersion != "test-runtime" || report.Manifest.Dimensions != 2 {
+		report.Manifest.RuntimeVersion != "test-runtime" || report.Manifest.ModelDigest != canonicalModelDigest || report.Manifest.Dimensions != 2 {
 		t.Fatalf("unexpected local ranking: %#v", report)
 	}
 	if err := ValidateSemanticRanking(report, source, spans); err != nil {
@@ -134,17 +159,39 @@ func TestLocalEmbeddingRejectsRemoteEndpointAndMalformedVectors(t *testing.T) {
 	if err == nil {
 		t.Fatal("remote embedding endpoint admitted")
 	}
+	modelDigest := "sha256:" + strings.Repeat("b", 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/version" {
+		switch r.URL.Path {
+		case "/api/version":
 			_, _ = w.Write([]byte("{\"version\":\"test\"}"))
-			return
+		case "/api/tags":
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []map[string]any{{"name": "local:1", "model": "local:1", "digest": modelDigest, "details": map[string]any{}}}})
+		default:
+			_, _ = w.Write([]byte("{\"model\":\"local:1\",\"embeddings\":[[1,0],[0,0]]}"))
 		}
-		_, _ = w.Write([]byte("{\"model\":\"local:1\",\"embeddings\":[[1,0],[0,0]]}"))
 	}))
 	defer server.Close()
-	_, err = RankCapturedSpans(context.Background(), source, "query", spans, LocalEmbeddingOptions{Endpoint: server.URL, Model: "local:1", ModelRevision: "v1"})
+	_, err = RankCapturedSpans(context.Background(), source, "query", spans, LocalEmbeddingOptions{Endpoint: server.URL, Model: "local:1", ModelRevision: modelDigest})
 	if err == nil {
 		t.Fatal("zero vector accepted")
+	}
+
+	embedCalled := false
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte("{\"version\":\"test\"}"))
+		case "/api/tags":
+			_, _ = w.Write([]byte("{\"models\":[]}"))
+		default:
+			embedCalled = true
+			_, _ = w.Write([]byte("{}"))
+		}
+	}))
+	defer missing.Close()
+	_, err = RankCapturedSpans(context.Background(), source, "query", spans, LocalEmbeddingOptions{Endpoint: missing.URL, Model: "local:1", ModelRevision: "sha256:" + strings.Repeat("c", 64)})
+	if err == nil || embedCalled {
+		t.Fatal("missing local model reached embedding request", err)
 	}
 }
 

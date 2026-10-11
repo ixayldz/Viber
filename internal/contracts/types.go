@@ -168,6 +168,7 @@ type GoalSchedule struct {
 }
 type TaskState struct {
 	Deletion                *TaskDeletion    `json:"content_deletion,omitempty"`
+	DeliveryEffects         []DeliveryEffect `json:"delivery_effects,omitempty"`
 	GoalQueue               []GoalSchedule   `json:"goal_queue,omitempty"`
 	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
 	Resources               *ResourceAccount `json:"resource_account,omitempty"`
@@ -206,6 +207,7 @@ type Event struct {
 }
 type EventPayload struct {
 	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
+	DeliveryEffect      *DeliveryEffect           `json:"delivery_effect,omitempty"`
 	Goal                *GoalMutation             `json:"goal,omitempty"`
 	Verification        *VerificationFinalization `json:"verification,omitempty"`
 	QueueID             string                    `json:"queue_id,omitempty"`

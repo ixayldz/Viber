@@ -3,6 +3,7 @@ package intelligence
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math"
@@ -25,6 +26,7 @@ const maxSemanticCandidates = 64
 const maxSemanticSpanBytes = 4096
 const maxSemanticInputBytes = 128 << 10
 const maxSemanticResponseBytes = 2 << 20
+const maxOllamaTagsResponseBytes = 1 << 20
 
 type SourceSpan struct {
 	Path  string `json:"path"`
@@ -45,6 +47,8 @@ type EmbeddingManifest struct {
 	Endpoint              string `json:"endpoint"`
 	Model                 string `json:"model"`
 	DeclaredModelRevision string `json:"declared_model_revision"`
+	ModelDigest           string `json:"local_model_digest"`
+	ModelDigestSource     string `json:"model_digest_source"`
 	SourceSnapshotDigest  string `json:"source_snapshot_digest"`
 	InputSetDigest        string `json:"input_set_digest"`
 	QueryDigest           string `json:"query_digest"`
@@ -83,6 +87,20 @@ type ollamaEmbedResponse struct {
 type ollamaVersionResponse struct {
 	Version string `json:"version"`
 }
+type ollamaTagsResponse struct {
+	Models []ollamaModelTag `json:"models"`
+}
+type ollamaModelTag struct {
+	Name         string          `json:"name"`
+	Model        string          `json:"model"`
+	RemoteModel  string          `json:"remote_model,omitempty"`
+	RemoteHost   string          `json:"remote_host,omitempty"`
+	Digest       string          `json:"digest"`
+	ModifiedAt   string          `json:"modified_at"`
+	Size         int64           `json:"size"`
+	Details      json.RawMessage `json:"details"`
+	Capabilities []string        `json:"capabilities,omitempty"`
+}
 
 // RankCapturedSpans calls a literal loopback Ollama origin and reranks only
 // exact spans in the supplied pool. It never adds source paths or check authority.
@@ -102,9 +120,10 @@ func RankCapturedSpans(ctx context.Context, source workspace.Capture, query stri
 	lower := strings.ToLower(model)
 	if model == "" || len(model) > 256 || strings.ContainsAny(model, "\r\n\x00") ||
 		strings.Contains(lower, ":cloud") || strings.HasSuffix(lower, "-cloud") ||
-		revision == "" || len(revision) > 256 || strings.ContainsAny(revision, "\r\n\x00") {
-		return out, c.Fail(c.InvalidArgument, "local model and declared revision required")
+		!validOllamaModelDigest(revision) {
+		return out, c.Fail(c.InvalidArgument, "local model and exact declared sha256 model digest required")
 	}
+	revision, _ = canonicalOllamaModelDigest(revision)
 	timeout := options.Timeout
 	if timeout == 0 {
 		timeout = 20 * time.Second
@@ -150,6 +169,13 @@ func RankCapturedSpans(ctx context.Context, source workspace.Capture, query stri
 	if err != nil {
 		return out, err
 	}
+	modelDigest, err := ollamaInstalledModelDigest(ctx, endpoint, parsed, timeout, model)
+	if err != nil {
+		return out, err
+	}
+	if modelDigest != revision {
+		return out, c.Fail(c.Conflict, "installed local model digest differs from declared revision")
+	}
 	vectors, err := ollamaEmbed(ctx, endpoint, parsed, timeout, model, inputs)
 	if err != nil {
 		return out, err
@@ -186,6 +212,7 @@ func RankCapturedSpans(ctx context.Context, source workspace.Capture, query stri
 	}
 	out.Manifest = EmbeddingManifest{AdapterVersion: LocalSemanticVersion, Runtime: "OLLAMA_LOCAL_LOOPBACK",
 		RuntimeVersion: runtimeVersion, Endpoint: endpoint, Model: model, DeclaredModelRevision: revision,
+		ModelDigest: modelDigest, ModelDigestSource: "OLLAMA_TAGS_LOCAL_RUNTIME_SELF_REPORT_NOT_ATTESTED",
 		SourceSnapshotDigest: source.Snapshot.Digest, InputSetDigest: poolDigest, QueryDigest: queryDigest,
 		Dimensions: dimensions, EgressPosture: "LOOPBACK_ONLY_DECLARED_NOT_ATTESTED", EgressAttested: false}
 	out.PoolDigest, out.Original, out.Ranked = poolDigest, refs, ranked
@@ -224,7 +251,8 @@ func ValidateSemanticRanking(report SemanticRanking, source workspace.Capture, c
 		report.Manifest.AdapterVersion != LocalSemanticVersion || report.Manifest.Runtime != "OLLAMA_LOCAL_LOOPBACK" ||
 		report.Manifest.EgressPosture != "LOOPBACK_ONLY_DECLARED_NOT_ATTESTED" || report.Manifest.EgressAttested ||
 		report.Manifest.SourceSnapshotDigest != source.Snapshot.Digest || report.Manifest.Model == "" ||
-		report.Manifest.DeclaredModelRevision == "" || report.Manifest.Dimensions < 1 || report.Manifest.Dimensions > 4096 ||
+		!validOllamaModelDigest(report.Manifest.DeclaredModelRevision) || report.Manifest.ModelDigest != report.Manifest.DeclaredModelRevision ||
+		report.Manifest.ModelDigestSource != "OLLAMA_TAGS_LOCAL_RUNTIME_SELF_REPORT_NOT_ATTESTED" || report.Manifest.Dimensions < 1 || report.Manifest.Dimensions > 4096 ||
 		len(report.Ranked) != len(candidates) || len(report.Original) != len(candidates) || len(report.Ranked) > maxSemanticCandidates {
 		return c.Fail(c.StoreIntegrityError, "semantic ranking does not match exact source pool")
 	}
@@ -374,6 +402,73 @@ func ollamaVersion(ctx context.Context, endpoint string, origin *url.URL, timeou
 	}
 	return result.Version, nil
 }
+
+func ollamaInstalledModelDigest(ctx context.Context, endpoint string, origin *url.URL, timeout time.Duration, wanted string) (string, error) {
+	client := localClient(origin, timeout)
+	defer client.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/api/tags", nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", c.Fail(c.UnsupportedCapability, "local installed-model inventory unavailable")
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxOllamaTagsResponseBytes+1))
+	if err != nil || len(raw) > maxOllamaTagsResponseBytes {
+		return "", c.Fail(c.UnsupportedCapability, "local installed-model inventory exceeded bound")
+	}
+	var result ollamaTagsResponse
+	if err = readOneJSON(raw, &result); err != nil || len(result.Models) > 4096 {
+		return "", c.Fail(c.StoreIntegrityError, "invalid local installed-model inventory")
+	}
+	var matched string
+	for _, model := range result.Models {
+		if len(model.Name) > 256 || len(model.Model) > 256 || len(model.Digest) > 128 || model.Size < 0 ||
+			len(model.RemoteModel) > 256 || len(model.RemoteHost) > 512 || len(model.ModifiedAt) > 128 || len(model.Details) > 64<<10 || len(model.Capabilities) > 64 {
+			return "", c.Fail(c.StoreIntegrityError, "local installed-model metadata outside bounds")
+		}
+		if model.Name != wanted && model.Model != wanted {
+			continue
+		}
+		if model.RemoteModel != "" || model.RemoteHost != "" {
+			return "", c.Fail(c.PolicyDenied, "remote Ollama model is outside the local embedding adapter")
+		}
+		canonicalDigest, valid := canonicalOllamaModelDigest(model.Digest)
+		if !valid || matched != "" && matched != canonicalDigest {
+			return "", c.Fail(c.StoreIntegrityError, "local model inventory has missing or conflicting digest")
+		}
+		matched = canonicalDigest
+	}
+	if matched == "" {
+		return "", c.Fail(c.UnsupportedCapability, "declared local embedding model is not already installed")
+	}
+	return matched, nil
+}
+
+func validOllamaModelDigest(digest string) bool {
+	_, ok := canonicalOllamaModelDigest(digest)
+	return ok
+}
+
+func canonicalOllamaModelDigest(digest string) (string, bool) {
+	if strings.HasPrefix(digest, "sha256:") {
+		digest = strings.TrimPrefix(digest, "sha256:")
+	}
+	if len(digest) != 64 {
+		return "", false
+	}
+	_, err := hex.DecodeString(digest)
+	if err != nil || strings.ToLower(digest) != digest {
+		return "", false
+	}
+	return "sha256:" + digest, true
+}
+
 func ollamaEmbed(ctx context.Context, endpoint string, origin *url.URL, timeout time.Duration, model string, inputs []string) ([][]float64, error) {
 	payload, err := json.Marshal(ollamaEmbedRequest{Model: model, Input: inputs, Truncate: false})
 	if err != nil {

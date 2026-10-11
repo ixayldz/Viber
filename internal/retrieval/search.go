@@ -27,26 +27,47 @@ type Hit struct {
 	Signals    []Signal `json:"signals"`
 }
 type Result struct {
-	Partition     *PartitionEvidence `json:"partition,omitempty"`
-	SpanPolicy    string             `json:"span_policy"`
-	Cache         *CacheEvidence     `json:"cache,omitempty"`
-	SchemaVersion int                `json:"schema_version"`
-	Trust         string             `json:"trust"`
-	Manifest      Manifest           `json:"index"`
-	Query         string             `json:"query"`
-	Intent        string             `json:"intent"`
-	Hits          []Hit              `json:"hits"`
-	Total         int                `json:"ranked_pool_total"`
-	PoolTruncated bool               `json:"ranked_pool_truncated"`
-	QueryMicros   int64              `json:"query_micros"`
-	Fallback      bool               `json:"fallback_used"`
+	AdvisoryRanking any                `json:"advisory_ranking,omitempty"`
+	Partition       *PartitionEvidence `json:"partition,omitempty"`
+	SpanPolicy      string             `json:"span_policy"`
+	Cache           *CacheEvidence     `json:"cache,omitempty"`
+	SchemaVersion   int                `json:"schema_version"`
+	Trust           string             `json:"trust"`
+	Manifest        Manifest           `json:"index"`
+	Query           string             `json:"query"`
+	Intent          string             `json:"intent"`
+	Hits            []Hit              `json:"hits"`
+	Total           int                `json:"ranked_pool_total"`
+	PoolTruncated   bool               `json:"ranked_pool_truncated"`
+	QueryMicros     int64              `json:"query_micros"`
+	Fallback        bool               `json:"fallback_used"`
 }
 
 func ValidIntent(intent string) bool {
 	return intent == "IDENTIFIER" || intent == "ERROR" || intent == "FEATURE" || intent == "REFACTOR"
 }
 func (index *Index) Search(ctx context.Context, binding Binding, query, intent string, offset, limit int) (Result, error) {
+	return index.SearchWeighted(ctx, binding, query, intent, offset, limit, Weights{BM25: 1, Trigram: 1})
+}
+
+// Weights only reorder admitted source hints. Literal precedence, source
+// hydration, limits and required verification are never learned parameters.
+type Weights struct {
+	BM25    int64 `json:"bm25"`
+	Trigram int64 `json:"trigram"`
+}
+
+func (w Weights) Validate() error {
+	if w.BM25 < 1 || w.BM25 > 8 || w.Trigram < 1 || w.Trigram > 8 {
+		return c.Fail(c.InvalidArgument, "ranking weights must be bounded positive integers")
+	}
+	return nil
+}
+func (index *Index) SearchWeighted(ctx context.Context, binding Binding, query, intent string, offset, limit int, weights Weights) (Result, error) {
 	result := Result{SchemaVersion: 1, Trust: "UNTRUSTED_SOURCE_BOUND_RANKING_HINT", Manifest: index.manifest, Query: query, Intent: intent, Hits: []Hit{}, SpanPolicy: "MAX_3_NONOVERLAPPING_CHUNKS_PER_FILE; BODY_LITERAL_BEFORE_PATH"}
+	if err := weights.Validate(); err != nil {
+		return result, err
+	}
 	if binding != index.manifest.Binding {
 		return result, c.Fail(c.StaleBase, "index snapshot or policy changed")
 	}
@@ -89,7 +110,11 @@ func (index *Index) Search(ctx context.Context, binding Binding, query, intent s
 			current.bodyExact = true
 		}
 		if kind != "BODY_LITERAL" && kind != "PATH_LITERAL" {
-			current.score += 1000000 / int64(60+rank)
+			weight := weights.BM25
+			if kind == "TRIGRAM" {
+				weight = weights.Trigram
+			}
+			current.score += weight * 1000000 / int64(60+rank)
 		}
 		current.signals = append(current.signals, Signal{kind, rank})
 	}

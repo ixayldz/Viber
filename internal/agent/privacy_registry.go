@@ -61,12 +61,26 @@ func closePrivacyRoot(root *os.Root, err *error) *os.Root {
 }
 
 type ManagedCopy struct {
-	ExcludedStore *privacyScope `json:"excluded_owner_store,omitempty"`
-	Kind          string        `json:"kind"`
-	Directory     string        `json:"directory"`
-	PhysicalRoot  string        `json:"physical_root"`
-	Files         []BackupFile  `json:"files"`
-	Tasks         []string      `json:"tasks"`
+	ExcludedStore             *privacyScope `json:"excluded_owner_store,omitempty"`
+	Kind                      string        `json:"kind"`
+	Directory                 string        `json:"directory"`
+	PhysicalRoot              string        `json:"physical_root"`
+	Files                     []BackupFile  `json:"files"`
+	Tasks                     []string      `json:"tasks"`
+	RestoreStageDirectory     string        `json:"restore_stage_directory,omitempty"`
+	RestoreTarget             string        `json:"restore_target,omitempty"`
+	RestoreSource             string        `json:"restore_source,omitempty"`
+	RestoreSourcePhysicalRoot string        `json:"restore_source_physical_root,omitempty"`
+	RestoreBackupDigest       string        `json:"restore_backup_digest,omitempty"`
+	RestoreInstanceID         string        `json:"restore_instance_id,omitempty"`
+	RestorePinnedAnchor       string        `json:"restore_pinned_anchor,omitempty"`
+	RestorePinnedBinding      string        `json:"restore_pinned_binding,omitempty"`
+	RestoreAnchor             string        `json:"restore_anchor,omitempty"`
+	RestorePreviousAnchor     string        `json:"restore_previous_anchor_digest,omitempty"`
+	RestoreBinding            string        `json:"restore_binding,omitempty"`
+	RestorePreviousBinding    string        `json:"restore_previous_binding,omitempty"`
+	RestoreWatermark          int64         `json:"restore_watermark,omitempty"`
+	RestoreCurrentWatermark   int64         `json:"restore_current_watermark,omitempty"`
 }
 type privacyRecord struct {
 	SchemaVersion int                     `json:"schema_version"`
@@ -279,7 +293,7 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			}
 			if i, replaced := copies[record.Copy.Directory]; replaced {
 				prior := view.Copies[i]
-				if len(prior.Files) != 0 || prior.Kind != record.Copy.Kind || prior.PhysicalRoot != record.Copy.PhysicalRoot || (!sameManagedTasks(prior.Tasks, record.Copy.Tasks) || !sameExcludedStore(prior.ExcludedStore, record.Copy.ExcludedStore)) {
+				if len(prior.Files) != 0 || prior.Kind != record.Copy.Kind || prior.PhysicalRoot != record.Copy.PhysicalRoot || (!sameManagedTasks(prior.Tasks, record.Copy.Tasks) || !sameExcludedStore(prior.ExcludedStore, record.Copy.ExcludedStore)) || !validRestoreProvenanceTransition(prior, *record.Copy) {
 					return view, c.Fail(c.StoreIntegrityError, "managed allocation cannot be rebound")
 				}
 				view.Copies[i] = *record.Copy
@@ -379,12 +393,21 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			return view, c.Fail(c.StoreIntegrityError, "retention authority changed during replay")
 		}
 	}
-	if !checkpointRecovery {
-		genesis, err := fileguard.ReadRegular(root, "authority.json", 4096)
-		var authority PrivacyAuthority
-		if err != nil || c.DecodeStrict(genesis, &authority) != nil || authority.validate() != nil {
-			return view, c.Fail(c.StoreIntegrityError, "privacy checkpoint authority unavailable or invalid")
+	genesis, genesisErr := fileguard.ReadRegular(root, "authority.json", 4096)
+	var authority PrivacyAuthority
+	if genesisErr != nil || c.DecodeStrict(genesis, &authority) != nil || authority.validate() != nil {
+		return view, c.Fail(c.StoreIntegrityError, "privacy authority unavailable or invalid")
+	}
+	for _, copy := range view.Copies {
+		if copy.RestoreTarget == "" {
+			continue
 		}
+		binding, bindingErr := privacyRestoreBindingDigest(authority, copy)
+		if bindingErr != nil || binding != copy.RestoreBinding {
+			return view, c.Fail(c.StoreIntegrityError, "restore managed-copy binding digest mismatch")
+		}
+	}
+	if !checkpointRecovery {
 		pinCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		pinErr := validateCurrentPrivacyPinsReadOnly(pinCtx, root, authority)
 		cancel()
@@ -432,6 +455,13 @@ func validateManagedCopy(copy ManagedCopy) error {
 	} else if copy.ExcludedStore != nil {
 		return c.Fail(c.StoreIntegrityError, "unexpected excluded store")
 	}
+	if copy.RestoreTarget == "" {
+		if copy.RestoreStageDirectory != "" || copy.RestoreSource != "" || copy.RestoreSourcePhysicalRoot != "" || copy.RestoreBackupDigest != "" || copy.RestoreInstanceID != "" || copy.RestorePinnedAnchor != "" || copy.RestorePinnedBinding != "" || copy.RestoreAnchor != "" || copy.RestorePreviousAnchor != "" || copy.RestoreBinding != "" || copy.RestorePreviousBinding != "" || copy.RestoreWatermark != 0 || copy.RestoreCurrentWatermark != 0 {
+			return c.Fail(c.StoreIntegrityError, "incomplete restore provenance")
+		}
+	} else if copy.Kind != "RESTORE_STAGE" || !filepath.IsAbs(copy.RestoreStageDirectory) || len(copy.RestoreStageDirectory) > 2048 || !filepath.IsAbs(copy.RestoreTarget) || len(copy.RestoreTarget) > 2048 || filepath.Clean(copy.RestoreStageDirectory) == filepath.Clean(copy.RestoreTarget) || filepath.Clean(copy.Directory) != filepath.Clean(copy.RestoreStageDirectory) && filepath.Clean(copy.Directory) != filepath.Clean(copy.RestoreTarget) || !filepath.IsAbs(copy.RestoreSource) || len(copy.RestoreSource) > 2048 || !c.ValidDigest(copy.RestoreSourcePhysicalRoot) || !c.ValidDigest(copy.RestoreBackupDigest) || !validPrivacyInstanceID(copy.RestoreInstanceID) || copy.RestorePinnedAnchor != "" && !c.ValidDigest(copy.RestorePinnedAnchor) || copy.RestorePinnedBinding != "" && !c.ValidDigest(copy.RestorePinnedBinding) || copy.RestorePinnedBinding != "" && copy.RestorePinnedAnchor == "" || copy.RestoreAnchor != "" && !c.ValidDigest(copy.RestoreAnchor) || copy.RestorePreviousAnchor != "" && !c.ValidDigest(copy.RestorePreviousAnchor) || !c.ValidDigest(copy.RestoreBinding) || copy.RestorePreviousBinding != "" && !c.ValidDigest(copy.RestorePreviousBinding) || copy.RestoreWatermark < 0 || copy.RestoreCurrentWatermark < copy.RestoreWatermark || copy.RestorePreviousAnchor != "" && copy.RestorePreviousBinding == "" {
+		return c.Fail(c.StoreIntegrityError, "invalid restore provenance binding")
+	}
 	previous := ""
 	for _, task := range copy.Tasks {
 		if _, err := artifact.ScopedBlobPath(task, c.HashBytes(nil)); err != nil || task <= previous {
@@ -449,6 +479,37 @@ func validateManagedCopy(copy ManagedCopy) error {
 		previous = f.Path
 	}
 	return nil
+}
+
+func sameRestoreProvenance(prior, next ManagedCopy) bool {
+	return prior.RestoreStageDirectory == next.RestoreStageDirectory && prior.RestoreTarget == next.RestoreTarget &&
+		prior.RestoreSource == next.RestoreSource && prior.RestoreSourcePhysicalRoot == next.RestoreSourcePhysicalRoot &&
+		prior.RestoreBackupDigest == next.RestoreBackupDigest && prior.RestoreInstanceID == next.RestoreInstanceID && prior.RestoreWatermark == next.RestoreWatermark
+}
+
+func validRestoreProvenanceTransition(prior, next ManagedCopy) bool {
+	if prior.RestoreTarget == "" {
+		if next.RestoreTarget == "" {
+			return next.RestoreStageDirectory == "" && next.RestoreSource == "" && next.RestoreSourcePhysicalRoot == "" && next.RestoreBackupDigest == "" && next.RestoreInstanceID == "" && next.RestorePinnedAnchor == "" && next.RestorePinnedBinding == "" && next.RestoreAnchor == "" && next.RestorePreviousAnchor == "" && next.RestoreBinding == "" && next.RestorePreviousBinding == "" && next.RestoreWatermark == 0 && next.RestoreCurrentWatermark == 0
+		}
+		return next.RestorePreviousAnchor == "" && next.RestorePreviousBinding == ""
+	}
+	if !sameRestoreProvenance(prior, next) || next.RestoreCurrentWatermark < prior.RestoreCurrentWatermark {
+		return false
+	}
+	if prior.RestoreBinding == next.RestoreBinding {
+		if prior.RestoreAnchor != next.RestoreAnchor || prior.RestorePreviousAnchor != next.RestorePreviousAnchor || prior.RestorePreviousBinding != next.RestorePreviousBinding || prior.RestoreCurrentWatermark != next.RestoreCurrentWatermark {
+			return false
+		}
+		if prior.RestorePinnedAnchor == next.RestorePinnedAnchor && prior.RestorePinnedBinding == next.RestorePinnedBinding {
+			return true
+		}
+		// After the store pin CAS commits, a second registry record closes the
+		// crash window by recording that exact ACTIVE pin. The old pair remains
+		// in the preceding record and the new pair must name this restore binding.
+		return next.RestorePinnedAnchor == next.RestoreAnchor && next.RestorePinnedBinding == next.RestoreBinding
+	}
+	return next.RestoreAnchor != prior.RestoreAnchor && next.RestorePreviousAnchor == prior.RestoreAnchor && next.RestorePreviousBinding == prior.RestoreBinding && next.RestoreCurrentWatermark == prior.RestoreCurrentWatermark && next.RestorePinnedAnchor == prior.RestorePinnedAnchor && next.RestorePinnedBinding == prior.RestorePinnedBinding
 }
 func safeCopyPath(kind, name string) bool {
 	if strings.HasPrefix(name, ".publish-") && len(name) == 41 {
@@ -516,7 +577,8 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		root.Close()
 		return err
 	}
-	if _, err = readPrivacy(root); err != nil {
+	view, err := readPrivacy(root)
+	if err != nil {
 		root.Close()
 		return err
 	}
@@ -534,6 +596,62 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 	}
 	name := filepath.Join("owners", s.instance.ID+".lock")
 	scope := privacyScope{InstanceID: s.instance.ID, Directory: directory, PhysicalRoot: s.instance.PhysicalRoot}
+	scopes, _, err := readPrivacyScopes(root)
+	if err != nil {
+		root.Close()
+		return err
+	}
+	registered := false
+	for _, existing := range scopes {
+		if existing.InstanceID == s.instance.ID || filepath.Clean(existing.Directory) == filepath.Clean(directory) {
+			if existing.InstanceID != s.instance.ID || existing.Directory != directory || existing.PhysicalRoot != s.instance.PhysicalRoot {
+				root.Close()
+				return c.Fail(c.StaleAuthority, "owner runtime is already bound to another physical scope")
+			}
+			scope, registered = existing, true
+		}
+	}
+	anchor, _, err := currentPrivacyCheckpointAnchor(root)
+	if err != nil {
+		root.Close()
+		return err
+	}
+	publishScope := true
+	if !registered {
+		copy, found := findManagedCopy(view, directory)
+		if found && copy.RestoreTarget != "" {
+			if copy.Kind != "RESTORE_STAGE" || copy.RestoreInstanceID != s.instance.ID || copy.PhysicalRoot != s.instance.PhysicalRoot {
+				root.Close()
+				return c.Fail(c.StaleAuthority, "restore owner runtime differs from its durable allocation")
+			}
+			isFinalTarget := filepath.Clean(copy.Directory) == filepath.Clean(copy.RestoreTarget)
+			if err = reconcilePrivacyRestoreScopeLocked(ctx, root, authority, view, copy, s.Journal, s.instance, isFinalTarget); err != nil {
+				root.Close()
+				return err
+			}
+			view, err = readPrivacy(root)
+			if err != nil {
+				root.Close()
+				return err
+			}
+			if isFinalTarget {
+				updated, ok := findManagedCopy(view, directory)
+				if !ok {
+					root.Close()
+					return c.Fail(c.StoreIntegrityError, "restore target allocation disappeared during owner publication")
+				}
+				scope.CheckpointAnchor = updated.RestoreAnchor
+				if scope.CheckpointAnchor != "" {
+					scope.RestoreBinding = updated.RestoreBinding
+				}
+			} else {
+				publishScope = false
+			}
+		} else if anchor != nil {
+			root.Close()
+			return c.Fail(c.StaleAuthority, "new owner is not bound to the current checkpoint or a registered restore")
+		}
+	}
 	if _, err = admitPrivacyCatalog(root, name, filepath.Join("owners", scopeName(scope))); err != nil {
 		root.Close()
 		return err
@@ -543,7 +661,10 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		root.Close()
 		return err
 	}
-	if err = publishPrivacyScope(root, scope); err != nil {
+	if publishScope {
+		err = publishPrivacyScope(root, scope)
+	}
+	if err != nil {
 		lease.Close()
 		root.Close()
 		return err

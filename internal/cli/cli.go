@@ -21,11 +21,16 @@ const Version = "0.9.0-dev"
 const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
+  viber repo-blueprint --root SOURCE --blueprint SPEC_JSON [--git] [--json]
+  viber repo-generate --root SOURCE --blueprint MANIFEST_JSON --blueprint-digest SHA --files JSON --output NEW_DIR [--git] [--check-config FILE --task ID --input-sha SHA] [--json]
+  viber skills source|propose|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]
+  viber rank-policy init|status|train|evaluate|select|disable --registry PATH [--id ID --version N --license LICENSE] [--definition FILE --dataset FILE --dataset-sha SHA] [--definition-sha SHA --evaluation-sha SHA --mode SHADOW|CANARY|ACTIVE --approve ACK] [--json]
   viber package install|status|rollback|deactivate|uninstall|run --prefix PATH [--archive FILE --source-sha FULL_SHA --gh ABSOLUTE_GH] [--revision SHA] [--store PATH] [--json] [-- ARGS...]
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
   viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--stream] [--model-timeout-ms N] [--json]
   viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
   viber run "TASK" --provider openai|anthropic --allow-remote --model ID --root PATH --store PATH [--context-limit N] [--output-limit N] [--stream] [--json]
+    Optional local advisory controls: [--ranking-registry DIR] [--skills-registry DIR --skills-trust-policy FILE]
   viber auth login|status|profiles|select|models|logout|migrate-storage [--provider chatgpt] [--profile ID] [--auth-dir PATH] [--json]
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber check-config --runtime FILE [--plan FILE] [--json]
@@ -149,6 +154,16 @@ func Execute(args []string, out, errout io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(out, help)
 		return 0
+	}
+
+	if args[0] == "rank-policy" {
+		return runRanking(args[1:], out, errout)
+	}
+	if args[0] == "skills" {
+		return runSkills(args[1:], out, errout)
+	}
+	if args[0] == "repo-blueprint" || args[0] == "repo-generate" {
+		return runRepoGeneration(args[0], args[1:], out, errout)
 	}
 	switch args[0] {
 	case "training-export":

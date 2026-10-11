@@ -69,6 +69,9 @@ type Result struct {
 	ProtectedResultChannel bool     `json:"protected_result_channel"`
 	ProcessTreeQuiescent   bool     `json:"process_tree_quiescent"`
 	DurationMillis         int64    `json:"duration_millis"`
+	DuplexTranscriptDigest string   `json:"duplex_transcript_digest,omitempty"`
+	DuplexStdinBytes       int64    `json:"duplex_stdin_bytes,omitempty"`
+	DuplexStdoutBytes      int64    `json:"duplex_stdout_bytes,omitempty"`
 }
 type Docker struct {
 	binary      string
@@ -261,6 +264,7 @@ func scratchOptions(p Profile) string {
 	return fmt.Sprintf("rw,exec,nosuid,nodev,size=%d,mode=1777", p.ScratchBytes)
 }
 func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocation) (result Result, resultErr error) {
+	duplexDriver, duplex := duplexDriverFromContext(ctx)
 	dispatched := false
 	owner, ownerErr := activeOwnership(ctx)
 	if ownerErr != nil {
@@ -291,6 +295,9 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	}
 	if argvBytes > 65536 || inv.Stdin != nil && len(*inv.Stdin) > 64<<10 {
 		return result, c.Fail(c.InvalidArgument, "invocation argv exceeds quota")
+	}
+	if duplex && inv.Stdin == nil {
+		return result, c.Fail(c.InvalidArgument, "duplex invocation requires an interactive stdin binding")
 	}
 	absolute, err := filepath.Abs(source)
 	if err != nil {
@@ -436,17 +443,24 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 		startArgs = []string{"start", "--attach", "--interactive", id}
 	}
 	command := d.command(runCtx, startArgs...)
-	if inv.Stdin != nil {
+	if inv.Stdin != nil && !duplex {
 		command.Stdin = bytes.NewReader(*inv.Stdin)
 	}
-	command.Stdout = stdout
-	command.Stderr = stderr
 	started := time.Now()
-	runErr := command.Run()
+	var runErr error
+	if duplex {
+		runErr = runDuplexCommand(runCtx, cancel, command, duplexDriver, p.MaxOutputBytes, &result)
+	} else {
+		command.Stdout = stdout
+		command.Stderr = stderr
+		runErr = command.Run()
+	}
 	result.DurationMillis = time.Since(started).Milliseconds()
-	result.Stdout = stdout.Bytes()
-	result.Stderr = stderr.Bytes()
-	result.OutputTruncated = stdout.Truncated() || stderr.Truncated()
+	if !duplex {
+		result.Stdout = stdout.Bytes()
+		result.Stderr = stderr.Bytes()
+	}
+	result.OutputTruncated = result.OutputTruncated || stdout.Truncated() || stderr.Truncated()
 	result.TimedOut = errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	result.Cancelled = ctx.Err() != nil
 	if runCtx.Err() != nil || runErr != nil {
@@ -477,6 +491,9 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	result.ExitCode = final.State.ExitCode
 	result.OOMKilled = final.State.OOMKilled
 	result.ProtectedResultChannel = true
+	if duplex && runErr != nil {
+		return result, runErr
+	}
 	// Nonzero candidate exit is a recorded computation outcome, not a broker
 	// error and never a verification verdict inferred from stdout.
 	return result, nil

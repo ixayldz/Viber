@@ -244,8 +244,11 @@ func (s *Store) RebindRestoredPrivacyCheckpointPin(ctx context.Context, expected
 		if current.AuthorityDigest != next.AuthorityDigest || current.Phase != "ACTIVE" ||
 			next.Generation < current.Generation || next.Sequence < current.Sequence || next.Watermark < current.Watermark ||
 			(next.Generation == current.Generation && next.AnchorDigest != current.AnchorDigest) ||
-			(next.InstanceID == current.InstanceID && next.PhysicalRoot == current.PhysicalRoot) || next.RestoreBinding == current.RestoreBinding {
+			next.RestoreBinding == current.RestoreBinding {
 			return c.Fail(c.StaleAuthority, "restored checkpoint would regress or reuse an owner binding")
+		}
+		if next.InstanceID == current.InstanceID && next.PhysicalRoot == current.PhysicalRoot && next.Generation == current.Generation {
+			return c.Fail(c.StaleAuthority, "restored owner rebind did not advance its checkpoint anchor")
 		}
 	}
 	return s.writePrivacyCheckpointPinLocked(ctx, current, next)

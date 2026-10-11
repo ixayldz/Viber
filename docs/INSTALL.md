@@ -63,6 +63,6 @@ Her demo için yeni store seçin; store kaynak/paket dizininin dışında olmal�
 
 Yeni archive'ı aynı provenance kontrolünden geçirip farklı sürüm dizinine açın. Aktif çalışmayı pause/settle edin, ilgili store owner'ını kapatın ve yeni binary'ye geçin. Eski dizini saklayın. Aktif kritik task üzerinde otomatik kernel/schema update yapılmaz; bu dağıtım manuel sürüm seçer. Kurulum store'u taşımaz veya migrate etmez.
 
-Store formatı değişiyorsa [README migration/backup yönergelerini](../README.md) kullanın; validated backup ve explicit migration gerekir. Önceki binary'ye geri dönmek store/authority downgrade izni değildir. Incompatible format/policy read-only/fail-closed kalır; metadata'yı elle silerek devam etmeyin.
+Store formatı değişiyorsa [CLI migration/backup yönergelerini](CLI_REFERENCE.md#eski-storeu-yükseltme) kullanın; validated backup ve explicit migration gerekir. Önceki binary'ye geri dönmek store/authority downgrade izni değildir. Incompatible format/policy read-only/fail-closed kalır; metadata'yı elle silerek devam etmeyin.
 
 Kaldırma yalnız owner kapatıldıktan sonra seçtiğiniz program sürüm dizinini kaldırır. Task/store, backup ve credentials ayrı açık silme/revoke işlemi olmadan korunur. Dağıtımda otomatik updater/installer servisi veya OS certificate/notarization kabulü henüz yoktur. Public stable tag, yalnız bütün ilgili PRD kabulü kapandıktan sonra yayımlanabilir.

@@ -145,7 +145,7 @@ func (s *Session) stagedAttemptPlans(ctx context.Context, task string, view priv
 				return nil, err
 			}
 		} else {
-			journal, archive, err := openDeletionStore(ctx, allocation.Scope, *s.privacy)
+			journal, archive, ledger, err := openDeletionStore(ctx, allocation.Scope, *s.privacy)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -160,7 +160,7 @@ func (s *Session) stagedAttemptPlans(ctx context.Context, task string, view priv
 					objects, replayErr = archive.TaskInventory(ctx, allocation.ChildTask)
 				}
 			}
-			err = errors.Join(replayErr, archive.Close(), journal.Close())
+			err = errors.Join(replayErr, archive.Close(), journal.Close(), ledger.Close())
 			if err != nil {
 				return nil, err
 			}
@@ -176,16 +176,17 @@ func (s *Session) stagedAttemptPlans(ctx context.Context, task string, view priv
 
 func (s *Session) purgeStagedAttempt(ctx context.Context, bound DeletionAttempt) (resultErr error) {
 	journal, archive := s.Journal, s.Archive
+	var ledger interface{ Close() error }
 	if bound.Allocation.Scope.PhysicalRoot != s.instance.PhysicalRoot {
 		var err error
-		journal, archive, err = openDeletionStore(ctx, bound.Allocation.Scope, *s.privacy)
+		journal, archive, ledger, err = openDeletionStore(ctx, bound.Allocation.Scope, *s.privacy)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		defer func() { resultErr = errors.Join(resultErr, archive.Close(), journal.Close()) }()
+		defer func() { resultErr = errors.Join(resultErr, archive.Close(), journal.Close(), ledger.Close()) }()
 	}
 	states, err := journal.Replay(ctx, "")
 	if err != nil {

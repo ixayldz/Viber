@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/learning"
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/policy"
 	"github.com/ixayldz/Viber/internal/retrieval"
@@ -16,6 +17,9 @@ import (
 )
 
 func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, action policy.Action, args pageArgs, cursor pageCursor, cache *retrieval.Cache, scope string) (any, error) {
+	return rankedReadPageWithRanking(ctx, candidate, layers, action, args, cursor, cache, scope, nil, nil)
+}
+func rankedReadPageWithRanking(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, action policy.Action, args pageArgs, cursor pageCursor, cache *retrieval.Cache, scope string, ranking *learning.Binding, decision *learning.Decision) (any, error) {
 	if args.Query == "" || len(args.Query) > 256 || !utf8.ValidString(args.Query) || strings.ContainsRune(args.Query, 0) {
 		return nil, c.Fail(c.InvalidArgument, "bounded UTF-8 retrieval query required")
 	}
@@ -107,6 +111,33 @@ func rankedReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 	result, err := index.Search(queryCtx, binding, args.Query, args.Intent, int(cursor.Position), int(args.Limit))
 	if err != nil {
 		return nil, err
+	}
+	if decision != nil && decision.Mode != "OFF" {
+		challenger, rankErr := index.SearchWeighted(queryCtx, binding, args.Query, args.Intent, int(cursor.Position), int(args.Limit), ranking.Definition.Weights)
+		if rankErr != nil {
+			return nil, rankErr
+		}
+		if challenger.Total != result.Total || challenger.PoolTruncated != result.PoolTruncated {
+			return nil, c.Fail(c.StoreIntegrityError, "advisory ranking changed the admitted pool")
+		}
+		baselinePaths, candidatePaths := []string{}, []string{}
+		for _, hit := range result.Hits {
+			baselinePaths = append(baselinePaths, hit.Path)
+		}
+		for _, hit := range challenger.Hits {
+			candidatePaths = append(candidatePaths, hit.Path)
+		}
+		if decision.UseCandidate {
+			result = challenger
+		}
+		result.AdvisoryRanking = struct {
+			Decision       learning.Decision `json:"decision"`
+			BaselinePaths  []string          `json:"baseline_page_paths"`
+			CandidatePaths []string          `json:"candidate_page_paths"`
+			Trust          string            `json:"trust"`
+		}{*decision, baselinePaths, candidatePaths, "SHADOW_COMPARISON_IS_NOT_EFFICACY_OR_VERIFICATION"}
+	} else if decision != nil {
+		result.AdvisoryRanking = decision
 	}
 	result.Cache = evidence
 	result.Partition = partition

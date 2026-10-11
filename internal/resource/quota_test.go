@@ -326,7 +326,9 @@ func TestExactFreeReceiptRequiredBeforeCapacityReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ledger.setFreePending(context.Background(), allocation.ID, freeBefore); err != nil {
+	file := inventory.Files[0]
+	intent := freeIntent{Path: file.Path, Digest: file.Digest, Identity: file.Identity, Logical: file.LogicalBytes, Allocated: file.Allocated, Charged: file.ChargedBytes, Before: freeBefore, Volume: inventory.VolumeIdentity, Root: inventory.RootIdentity}
+	if err = ledger.beginFreeIntent(context.Background(), allocation.ID, intent); err != nil {
 		t.Fatal(err)
 	}
 	if err = root.Remove("payload.bin"); err != nil {
@@ -335,21 +337,30 @@ func TestExactFreeReceiptRequiredBeforeCapacityReturns(t *testing.T) {
 	if err = fileguard.SyncDirectory(root, "."); err != nil {
 		t.Fatal(err)
 	}
+	reconciled, err := ledger.ReconcileFreePending(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile exact pending free after unlink: %+v %v", reconciled, err)
+	}
 	interrupted, err := ledger.Capacity(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if interrupted.Unknown != 1 || interrupted.RetainedBytes == 0 {
-		t.Fatalf("pending free receipt did not remain charged: %+v", interrupted)
+	if interrupted.Unknown == 1 {
+		if interrupted.RetainedBytes == 0 || reconciled.ReclaimedFiles > 0 {
+			t.Fatalf("unproven pending free receipt did not remain charged: %+v result=%+v", interrupted, reconciled)
+		}
+	} else if interrupted.Unknown != 0 || interrupted.RetainedBytes != 0 {
+		t.Fatalf("proven pending free receipt did not return capacity: %+v result=%+v", interrupted, reconciled)
 	}
 	ledgerID := ledger.LedgerID
 	if err = ledger.Close(); err != nil {
 		t.Fatal(err)
 	}
 	ledger = openTestLedger(t, authority, smallLimits(), ledgerID)
-	removed, err := ledger.ReleaseFile(context.Background(), root, "payload.bin", c.HashBytes(content), int64(len(content)), 1<<20)
+	defer ledger.Close()
+	recovered, err := ledger.ReconcileFreePending(context.Background())
 	if err != nil {
-		t.Fatalf("recovered exact measured free receipt failed: removed=%v err=%v", removed, err)
+		t.Fatalf("recovered exact measured free receipt failed: result=%+v err=%v", recovered, err)
 	}
 	if _, err = root.Lstat("payload.bin"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("released output still exists: %v", err)
@@ -358,18 +369,81 @@ func TestExactFreeReceiptRequiredBeforeCapacityReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed {
-		if after.RetainedBytes != 0 || after.RetainedEntries != 0 || after.Unknown != 0 {
-			t.Fatalf("proven exact free receipt did not return capacity: %+v", after)
-		}
-	} else {
+	if after.Unknown == 1 {
 		// A shared CI volume can allocate unrelated files between the persisted
 		// intent and readback. Namespace absence is not proof of returned disk
 		// capacity. The required outcome is conservative charging, never a
 		// forged free receipt just to make recovery appear successful.
-		if after.RetainedBytes != before.RetainedBytes || after.RetainedEntries != before.RetainedEntries || after.Unknown != 1 {
+		if after.RetainedBytes != before.RetainedBytes || after.RetainedEntries != before.RetainedEntries || recovered.ReclaimedFiles != 0 {
 			t.Fatalf("unproven free changed retained capacity: before=%+v after=%+v", before, after)
 		}
 		t.Log("PHYSICAL_FREE_PENDING: exact missing member stays fully charged until volume free proof is available")
+	} else if after.Unknown != 0 || after.RetainedBytes != 0 || after.RetainedEntries != 0 {
+		t.Fatalf("proven exact free receipt did not return capacity: %+v", after)
+	}
+}
+
+func TestFreePendingRecoveryCancelsWhenExactFileStillExists(t *testing.T) {
+	authority, base := testAuthority(t)
+	ledger := openTestLedger(t, authority, smallLimits(), "")
+	defer ledger.Close()
+	target := filepath.Join(base, "cancel")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	allocation, err := ledger.Reserve(context.Background(), Request{Writer: "test", Family: "FILE", RequestDigest: c.HashBytes([]byte("cancel")), TargetRoot: target, UpperBytes: 128 << 10, UpperEntries: 1, Class: Payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.Begin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("exact pending member")
+	if err = os.WriteFile(filepath.Join(target, "member.bin"), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := MeasureFileInventory(root, "member.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.Commit(context.Background(), inventory); err != nil {
+		t.Fatal(err)
+	}
+	file := inventory.Files[0]
+	available, err := fileguard.AvailableBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := freeIntent{Path: file.Path, Digest: file.Digest, Identity: file.Identity, Logical: file.LogicalBytes, Allocated: file.Allocated, Charged: file.ChargedBytes, Before: available, Volume: inventory.VolumeIdentity, Root: inventory.RootIdentity}
+	if err = ledger.beginFreeIntent(context.Background(), allocation.ID, intent); err != nil {
+		t.Fatal(err)
+	}
+	ledgerID := ledger.LedgerID
+	if err = ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ledger = openTestLedger(t, authority, smallLimits(), ledgerID)
+	defer ledger.Close()
+	result, err := ledger.ReconcileFreePending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PendingFiles != 0 || result.ReclaimedFiles != 0 {
+		t.Fatalf("startup did not cancel interrupted delete for exact extant file: %+v", result)
+	}
+	if _, found, err := ledger.readFreeIntent(context.Background(), allocation.ID); err != nil || found {
+		t.Fatalf("startup left a free intent for the unchanged file: found=%v err=%v", found, err)
+	}
+	capacity, err := ledger.Capacity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity.Unknown != 0 || capacity.RetainedEntries != inventory.Entries || capacity.RetainedBytes != inventory.ChargedBytes {
+		t.Fatalf("cancelled intent did not restore retained accounting: %+v", capacity)
 	}
 }

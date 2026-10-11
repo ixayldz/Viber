@@ -36,9 +36,14 @@ const (
 	ledgerSchema       = 1
 	maxLedgerRecords   = 100000
 	maxInventoryItems  = 1 << 20
+	maxInventoryBytes  = 8 << 20
 	maxLogicalFileSize = 1 << 48
 	metadataAdmission  = 64 << 10
 	lockedFileSlack    = 64 << 10
+	maxLedgerPages     = 32768
+	maxLedgerDBBytes   = int64(maxLedgerPages * 4096)
+	maxLedgerWALBytes  = int64(16 << 20)
+	maxLedgerSHMBytes  = int64(1 << 20)
 	defaultQuotaBytes  = 8 << 30
 	defaultQuotaItems  = 1 << 20
 	defaultControlSize = 32 << 20
@@ -125,6 +130,15 @@ type Capacity struct {
 	Allocations      int    `json:"allocations"`
 }
 
+// ReconcileResult reports exact free intents resolved without hiding ones for
+// which the filesystem has not proved that the reservation was returned.
+type ReconcileResult struct {
+	ReclaimedFiles int `json:"reclaimed_files"`
+	CancelledFiles int `json:"cancelled_files"`
+	PendingFiles   int `json:"pending_files"`
+	LegacyUnknown  int `json:"legacy_unknown"`
+}
+
 type anchor struct {
 	SchemaVersion    int    `json:"schema_version"`
 	AuthorityID      string `json:"authority_id"`
@@ -141,14 +155,15 @@ type authorityGenesis struct {
 }
 
 type Ledger struct {
-	mu        sync.Mutex
-	root      *os.Root
-	db        *sql.DB
-	lockName  string
-	closed    bool
-	Authority Authority
-	Limits    Limits
-	LedgerID  string
+	mu               sync.Mutex
+	root             *os.Root
+	db               *sql.DB
+	lockName         string
+	closed           bool
+	Authority        Authority
+	Limits           Limits
+	LedgerID         string
+	DatabaseIdentity string
 }
 
 type Allocation struct {
@@ -201,14 +216,14 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = verifyAuthorityGenesis(root, authority); err != nil {
 		return nil, err
 	}
-	if err = admitMetadata(root, metadataAdmission); err != nil {
-		return nil, err
-	}
 	lock, err := acquireLock(root)
 	if err != nil {
 		return nil, err
 	}
 	defer lock.Close()
+	if err = admitMetadata(root, metadataAdmission); err != nil {
+		return nil, err
+	}
 	for _, name := range []string{"physical-quota.anchor", "physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock"} {
 		if err = fileguard.RegularPath(root, name, true); err != nil {
 			return nil, err
@@ -298,7 +313,16 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = checkDatabaseFiles(root); err != nil {
 		return nil, err
 	}
-	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID}
+	if err = ensureFreeIntentSchema(db); err != nil {
+		return nil, err
+	}
+	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
+	if _, err = ledger.reconcileFreePendingLocked(context.Background()); err != nil {
+		return nil, err
+	}
+	if err = ledger.verifyPinnedMetadata(); err != nil {
+		return nil, err
+	}
 	cleanupDB = false
 	closeOnError = false
 	return ledger, nil
@@ -378,11 +402,38 @@ func (l *Ledger) acquire(ctx context.Context) (*os.File, error) {
 }
 
 func admitMetadata(root *os.Root, bytes int64) error {
+	if bytes < 0 || bytes > 64<<20 {
+		return c.Fail(c.InvalidArgument, "physical quota metadata admission exceeds bounded profile")
+	}
 	reserve, err := diskguard.OpenRoot(root)
 	if err != nil {
 		return err
 	}
 	return errors.Join(reserve.Admit(bytes, true), reserve.Close())
+}
+
+// admitReceiptMutation covers the old/new SQLite row plus bounded WAL/page
+// metadata before replacing a potentially large canonical inventory receipt.
+func admitReceiptMutation(root *os.Root, raw []byte) error {
+	if len(raw) > maxInventoryBytes {
+		return c.Fail(c.BudgetLimitReached, "physical quota receipt exceeds metadata write profile")
+	}
+	bytes := int64(len(raw))*2 + metadataAdmission
+	return admitMetadata(root, bytes)
+}
+
+func admitCheckpointMetadata(root *os.Root) error {
+	info, err := root.Lstat("physical-quota.sqlite-wal")
+	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == 0) {
+		return admitMetadata(root, metadataAdmission)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() < 0 || info.Size() > maxLedgerWALBytes {
+		return c.Fail(c.BudgetLimitReached, "physical quota WAL exceeds checkpoint admission profile")
+	}
+	return admitMetadata(root, info.Size()+metadataAdmission)
 }
 
 func openDatabase(root *os.Root) (*sql.DB, error) {
@@ -396,7 +447,7 @@ func openDatabase(root *os.Root) (*sql.DB, error) {
 }
 
 func configureDatabase(db *sql.DB) error {
-	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA foreign_keys=ON", "PRAGMA wal_autocheckpoint=1"} {
+	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA foreign_keys=ON", "PRAGMA wal_autocheckpoint=1", "PRAGMA journal_size_limit=16777216", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
 		if _, err := db.Exec(pragma); err != nil {
 			return err
 		}
@@ -407,6 +458,23 @@ func configureDatabase(db *sql.DB) error {
 	}
 	if err := db.QueryRow("PRAGMA synchronous").Scan(&synchronous); err != nil || synchronous != "2" {
 		return c.Fail(c.StoreIntegrityError, "physical quota SQLite FULL durability unavailable")
+	}
+	var maxPages, pageSize, pageCount, walLimit int64
+	if err := db.QueryRow("PRAGMA max_page_count=32768").Scan(&maxPages); err != nil || maxPages < 1 || maxPages > maxLedgerPages {
+		return c.Fail(c.UnsupportedCapability, "bounded physical quota SQLite database unavailable")
+	}
+	if err := db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil || pageSize != 4096 {
+		return c.Fail(c.StoreIntegrityError, "invalid physical quota SQLite page profile")
+	}
+	if err := db.QueryRow("PRAGMA page_count").Scan(&pageCount); err != nil || pageCount < 1 || pageCount > maxPages {
+		return c.Fail(c.BudgetLimitReached, "physical quota ledger exceeded its bounded database profile")
+	}
+	if err := db.QueryRow("PRAGMA journal_size_limit").Scan(&walLimit); err != nil || walLimit < 0 || walLimit > maxLedgerWALBytes {
+		return c.Fail(c.UnsupportedCapability, "bounded physical quota WAL unavailable")
+	}
+	var tempStore int
+	if err := db.QueryRow("PRAGMA temp_store").Scan(&tempStore); err != nil || tempStore != 2 {
+		return c.Fail(c.UnsupportedCapability, "memory-bounded physical quota SQLite temp profile unavailable")
 	}
 	return nil
 }
@@ -445,6 +513,7 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 		"CREATE TABLE quota_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1),schema_version INTEGER NOT NULL,authority_id TEXT NOT NULL,physical_root TEXT NOT NULL,ledger_id TEXT NOT NULL,limit_bytes INTEGER NOT NULL,limit_entries INTEGER NOT NULL,control_bytes INTEGER NOT NULL,control_entries INTEGER NOT NULL,low_water_bytes INTEGER NOT NULL)",
 		"CREATE TABLE quota_allocations (id TEXT PRIMARY KEY,writer TEXT NOT NULL,family TEXT NOT NULL,request_digest TEXT NOT NULL,target_root TEXT NOT NULL,volume_identity TEXT NOT NULL,parent_path TEXT NOT NULL,parent_identity TEXT NOT NULL,target_identity TEXT NOT NULL,target_existed INTEGER NOT NULL,class TEXT NOT NULL,status TEXT NOT NULL,upper_bytes INTEGER NOT NULL,upper_entries INTEGER NOT NULL,retained_bytes INTEGER NOT NULL,retained_entries INTEGER NOT NULL,receipt BLOB,free_before INTEGER NOT NULL DEFAULT 0,free_after INTEGER NOT NULL DEFAULT 0)",
 		"CREATE INDEX quota_allocations_status ON quota_allocations(status)",
+		freeIntentsDDL,
 		"PRAGMA user_version=1",
 	}
 	for _, statement := range statements {
@@ -460,6 +529,67 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 		return err
 	}
 	return checkDatabaseFiles(root)
+}
+
+const freeIntentsDDL = "CREATE TABLE quota_free_intents (allocation_id TEXT PRIMARY KEY REFERENCES quota_allocations(id),path TEXT NOT NULL,file_digest TEXT NOT NULL,file_identity TEXT NOT NULL,logical_bytes INTEGER NOT NULL,allocated_bytes INTEGER NOT NULL,charged_bytes INTEGER NOT NULL,free_before INTEGER NOT NULL,volume_identity TEXT NOT NULL,root_identity TEXT NOT NULL)"
+
+// ensureFreeIntentSchema upgrades pre-ledger-intent databases in place. Old
+// FREE_PENDING rows without a member identity remain charged as legacy unknown;
+// the missing identity is never guessed from the current namespace.
+func ensureFreeIntentSchema(db *sql.DB) error {
+	var exists int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='quota_free_intents'").Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		if _, err := db.Exec(freeIntentsDDL); err != nil {
+			return err
+		}
+	} else if exists != 1 {
+		return c.Fail(c.StoreIntegrityError, "physical quota free-intent table is ambiguous")
+	}
+	rows, err := db.Query("PRAGMA table_info(quota_free_intents)")
+	if err != nil {
+		return err
+	}
+	want := []string{"allocation_id", "path", "file_digest", "file_identity", "logical_bytes", "allocated_bytes", "charged_bytes", "free_before", "volume_identity", "root_identity"}
+	columns := make([]string, 0, len(want))
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		columns = append(columns, name)
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if len(columns) != len(want) {
+		return c.Fail(c.StoreIntegrityError, "physical quota free-intent schema is invalid")
+	}
+	for i := range want {
+		if columns[i] != want[i] {
+			return c.Fail(c.StoreIntegrityError, "physical quota free-intent schema is invalid")
+		}
+	}
+	var triggers int
+	if err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND tbl_name='quota_free_intents'").Scan(&triggers); err != nil {
+		return err
+	}
+	if triggers != 0 {
+		return c.Fail(c.StoreIntegrityError, "physical quota free-intent triggers are not permitted")
+	}
+	var dangling int
+	if err = db.QueryRow("SELECT COUNT(*) FROM quota_free_intents AS intent LEFT JOIN quota_allocations AS allocation ON allocation.id=intent.allocation_id WHERE allocation.id IS NULL OR allocation.status<>'FREE_PENDING'").Scan(&dangling); err != nil {
+		return err
+	}
+	if dangling != 0 {
+		return c.Fail(c.StoreIntegrityError, "physical quota free intent is detached from a pending allocation")
+	}
+	return nil
 }
 
 func readMeta(db *sql.DB) (databaseMeta, error) {
@@ -485,8 +615,74 @@ func checkDatabaseFiles(root *os.Root) error {
 		if err := fileguard.RegularPath(root, name, true); err != nil {
 			return err
 		}
+		info, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			if name == "physical-quota.sqlite" || name == "physical-quota.lock" {
+				return c.Fail(c.StaleAuthority, "pinned physical quota metadata file is missing")
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Size() < 0 {
+			return c.Fail(c.StoreIntegrityError, "physical quota metadata size is invalid")
+		}
+		limit := maxLedgerSHMBytes
+		switch name {
+		case "physical-quota.sqlite":
+			limit = maxLedgerDBBytes
+		case "physical-quota.sqlite-wal":
+			limit = maxLedgerWALBytes
+		case "physical-quota.lock":
+			limit = 4096
+		}
+		if info.Size() > limit {
+			return c.Fail(c.BudgetLimitReached, "physical quota metadata exceeded its bounded file profile")
+		}
+	}
+	if _, err := root.Lstat("physical-quota.sqlite-journal"); err == nil {
+		return c.Fail(c.StoreIntegrityError, "unexpected physical quota rollback journal")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
+}
+
+func (l *Ledger) verifyPinnedMetadata() error {
+	if l == nil || l.root == nil || l.DatabaseIdentity == "" {
+		return c.Fail(c.StaleAuthority, "physical quota ledger binding is incomplete")
+	}
+	rootIdentity, err := fileguard.DirectoryIdentity(l.root)
+	if err != nil {
+		return err
+	}
+	if rootIdentity != l.Authority.PhysicalRoot {
+		return c.Fail(c.StaleAuthority, "physical quota authority root identity changed")
+	}
+	if err = verifyAuthorityGenesis(l.root, l.Authority); err != nil {
+		return err
+	}
+	raw, err := fileguard.ReadRegular(l.root, "physical-quota.anchor", 4096)
+	if err != nil {
+		return err
+	}
+	var saved anchor
+	if strictJSON(raw, &saved) != nil {
+		return c.Fail(c.StaleAuthority, "physical quota anchor binding is invalid")
+	}
+	canonical, err := json.Marshal(saved)
+	if err != nil || !bytes.Equal(canonical, raw) || saved.SchemaVersion != ledgerSchema || saved.AuthorityID != l.Authority.ID || saved.PhysicalRoot != l.Authority.PhysicalRoot || saved.LedgerID != l.LedgerID || saved.DatabaseIdentity != l.DatabaseIdentity {
+		return c.Fail(c.StaleAuthority, "physical quota anchor binding changed")
+	}
+	databaseIdentity, err := fileIdentity(l.root, "physical-quota.sqlite")
+	if err != nil {
+		return err
+	}
+	if databaseIdentity != l.DatabaseIdentity {
+		return c.Fail(c.StaleAuthority, "physical quota database inode changed after binding")
+	}
+	return checkDatabaseFiles(l.root)
 }
 
 func writeExclusive(root *os.Root, name string, raw []byte) error {
@@ -542,11 +738,15 @@ func (l *Ledger) Close() error {
 	var err error
 	if l.db != nil {
 		if lock, lockErr := l.lock(); lockErr == nil {
-			if admissionErr := admitMetadata(l.root, metadataAdmission); admissionErr != nil {
+			if verifyErr := l.verifyPinnedMetadata(); verifyErr != nil {
+				err = errors.Join(err, verifyErr)
+			} else if admissionErr := admitCheckpointMetadata(l.root); admissionErr != nil {
 				err = errors.Join(err, admissionErr)
+			} else {
+				_, checkpointErr := l.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+				err = errors.Join(err, checkpointErr, l.verifyPinnedMetadata())
 			}
-			_, checkpointErr := l.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-			err = errors.Join(err, checkpointErr, lock.Close())
+			err = errors.Join(err, lock.Close())
 		} else {
 			err = errors.Join(err, lockErr)
 		}
@@ -570,14 +770,19 @@ func (l *Ledger) withLock(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := admitMetadata(l.root, metadataAdmission); err != nil {
-		return err
-	}
 	lock, err := l.acquire(ctx)
 	if err != nil {
 		return err
 	}
-	return errors.Join(fn(), lock.Close())
+	if err = admitMetadata(l.root, metadataAdmission); err != nil {
+		return errors.Join(err, lock.Close())
+	}
+	if err = l.verifyPinnedMetadata(); err != nil {
+		return errors.Join(err, lock.Close())
+	}
+	operationErr := fn()
+	metadataErr := l.verifyPinnedMetadata()
+	return errors.Join(operationErr, metadataErr, lock.Close())
 }
 
 func (l *Ledger) Reserve(ctx context.Context, request Request) (Allocation, error) {
@@ -597,6 +802,17 @@ func (l *Ledger) Reserve(ctx context.Context, request Request) (Allocation, erro
 	}
 	var allocation Allocation
 	err = l.withLock(ctx, func() error {
+		if _, err := l.reconcileFreePendingLocked(ctx); err != nil {
+			return err
+		}
+		currentTarget, currentVolume, currentParent, currentParentID, currentTargetID, currentExisted, currentAvailable, err := targetVolume(request.TargetRoot)
+		if err != nil {
+			return err
+		}
+		if currentTarget != target || currentVolume != volume || currentParent != parentPath || currentParentID != parentID || currentTargetID != targetID || currentExisted != targetExisted {
+			return c.Fail(c.StaleAuthority, "physical quota target changed before reservation")
+		}
+		available = currentAvailable
 		tx, err := l.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -670,7 +886,36 @@ func (a Allocation) Begin(ctx context.Context) error {
 		return c.Fail(c.InvalidArgument, "physical quota reservation required")
 	}
 	return a.ledger.withLock(ctx, func() error {
-		result, err := a.ledger.db.ExecContext(ctx, "UPDATE quota_allocations SET status='WRITING' WHERE id=? AND status='RESERVED'", a.ID)
+		tx, err := a.ledger.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		var status, target, volume, parentPath, parentIdentity, targetIdentity, class string
+		var targetExisted int
+		var upperBytes int64
+		if err = tx.QueryRowContext(ctx, "SELECT status,target_root,volume_identity,parent_path,parent_identity,target_identity,target_existed,class,upper_bytes FROM quota_allocations WHERE id=?", a.ID).Scan(&status, &target, &volume, &parentPath, &parentIdentity, &targetIdentity, &targetExisted, &class, &upperBytes); err != nil {
+			return err
+		}
+		if status != "RESERVED" || filepath.Clean(target) != filepath.Clean(a.targetRoot) || (class != string(Payload) && class != string(Control)) || upperBytes < 0 {
+			return c.Fail(c.StaleAuthority, "physical quota reservation is missing or already dispatched")
+		}
+		available, err := verifyReservedTarget(target, volume, parentPath, parentIdentity, targetIdentity, targetExisted)
+		if err != nil {
+			return err
+		}
+		outstanding, err := outstandingForVolumeTx(tx, volume)
+		if err != nil {
+			return err
+		}
+		minimum := a.ledger.Limits.LowWaterBytes
+		if class == string(Control) {
+			minimum = 0
+		}
+		if available < minimum || outstanding > available-minimum {
+			return c.Fail(c.BudgetLimitReached, "target volume no longer has measured free space for all outstanding reservations")
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE quota_allocations SET status='WRITING' WHERE id=? AND status='RESERVED'", a.ID)
 		if err != nil {
 			return err
 		}
@@ -678,8 +923,59 @@ func (a Allocation) Begin(ctx context.Context) error {
 		if err != nil || count != 1 {
 			return c.Fail(c.StaleAuthority, "physical quota reservation is missing or already dispatched")
 		}
-		return nil
+		return tx.Commit()
 	})
+}
+
+func verifyReservedTarget(target, volume, parentPath, parentIdentity, targetIdentity string, targetExisted int) (uint64, error) {
+	if !filepath.IsAbs(target) || !filepath.IsAbs(parentPath) || !c.ValidDigest(volume) || !c.ValidDigest(parentIdentity) || !c.ValidDigest(targetIdentity) || (targetExisted != 0 && targetExisted != 1) {
+		return 0, c.Fail(c.StoreIntegrityError, "physical quota reservation target binding is invalid")
+	}
+	resolved, err := fileguard.ResolveProspective(target)
+	if err != nil || filepath.Clean(resolved) != filepath.Clean(target) {
+		return 0, c.Fail(c.StaleAuthority, "physical quota target path changed after reservation")
+	}
+	if targetExisted == 1 {
+		root, openErr := os.OpenRoot(target)
+		if openErr != nil {
+			return 0, c.Fail(c.StaleAuthority, "reserved physical target root disappeared")
+		}
+		identity, identityErr := fileguard.DirectoryIdentity(root)
+		actualVolume, volumeErr := fileguard.VolumeIdentity(root)
+		available, availableErr := fileguard.AvailableBytes(root)
+		closeErr := root.Close()
+		if err = errors.Join(identityErr, volumeErr, availableErr, closeErr); err != nil {
+			return 0, err
+		}
+		if identity != targetIdentity || identity != parentIdentity || actualVolume != volume {
+			return 0, c.Fail(c.StaleAuthority, "reserved physical target root identity changed")
+		}
+		return available, nil
+	}
+	if _, err = os.Lstat(target); err == nil {
+		return 0, c.Fail(c.StaleAuthority, "reserved physical target was created before writer dispatch")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	if err != nil || filepath.Clean(resolvedParent) != filepath.Clean(parentPath) {
+		return 0, c.Fail(c.StaleAuthority, "reserved physical target parent path changed")
+	}
+	parent, err := os.OpenRoot(parentPath)
+	if err != nil {
+		return 0, err
+	}
+	identity, identityErr := fileguard.DirectoryIdentity(parent)
+	actualVolume, volumeErr := fileguard.VolumeIdentity(parent)
+	available, availableErr := fileguard.AvailableBytes(parent)
+	closeErr := parent.Close()
+	if err = errors.Join(identityErr, volumeErr, availableErr, closeErr); err != nil {
+		return 0, err
+	}
+	if identity != parentIdentity || identity != targetIdentity || actualVolume != volume {
+		return 0, c.Fail(c.StaleAuthority, "reserved physical target parent identity changed")
+	}
+	return available, nil
 }
 
 func (a Allocation) Commit(ctx context.Context, inventory Inventory) error {
@@ -725,6 +1021,9 @@ func (a Allocation) Commit(ctx context.Context, inventory Inventory) error {
 		}
 		raw, err := json.Marshal(measured)
 		if err != nil {
+			return err
+		}
+		if err = admitReceiptMutation(a.ledger.root, raw); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, "UPDATE quota_allocations SET status='RETAINED',retained_bytes=?,retained_entries=?,receipt=? WHERE id=? AND status='WRITING'", measured.ChargedBytes, measured.Entries, raw, a.ID)
@@ -853,13 +1152,29 @@ func (l *Ledger) ImportRetained(ctx context.Context, writer, family string, inve
 		return err
 	}
 	digest := c.HashBytes(receipt)
-	id := c.HashBytes([]byte("physical-quota-seed-v1:" + l.Authority.ID + ":" + measured.RootIdentity))[:32]
+	// Filesystem identities can be reused after an unrelated tree is deleted.
+	// A seed names the canonical path AND its physical identity; inode equality
+	// alone must never authorize a new evaluator/restore tree.
+	id := retainedSeedID(l.Authority.ID, measured.RootPath, measured.RootIdentity)
+	legacyID := c.HashBytes([]byte("physical-quota-seed-v1:" + l.Authority.ID + ":" + measured.RootIdentity))[:32]
 	return l.withLock(ctx, func() error {
+		if _, err := l.reconcileFreePendingLocked(ctx); err != nil {
+			return err
+		}
 		tx, err := l.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
+		// Preserve exact same-path legacy accounting without importing it twice.
+		// A legacy receipt for another path stays charged and cannot admit this tree.
+		var legacyTarget string
+		legacyErr := tx.QueryRowContext(ctx, "SELECT target_root FROM quota_allocations WHERE id=?", legacyID).Scan(&legacyTarget)
+		if legacyErr == nil && filepath.Clean(legacyTarget) == filepath.Clean(target) {
+			id = legacyID
+		} else if legacyErr != nil && !errors.Is(legacyErr, sql.ErrNoRows) {
+			return legacyErr
+		}
 		var status, storedDigest string
 		var stored []byte
 		queryErr := tx.QueryRowContext(ctx, "SELECT status,request_digest,receipt FROM quota_allocations WHERE id=?", id).Scan(&status, &storedDigest, &stored)
@@ -878,6 +1193,9 @@ func (l *Ledger) ImportRetained(ctx context.Context, writer, family string, inve
 		if !errors.Is(queryErr, sql.ErrNoRows) {
 			return queryErr
 		}
+		if err = admitReceiptMutation(l.root, receipt); err != nil {
+			return err
+		}
 		capacity, err := capacityTx(tx, l.Limits)
 		if err != nil {
 			return err
@@ -891,6 +1209,10 @@ func (l *Ledger) ImportRetained(ctx context.Context, writer, family string, inve
 		}
 		return tx.Commit()
 	})
+}
+
+func retainedSeedID(authority, rootPath, rootIdentity string) string {
+	return c.HashBytes([]byte("physical-quota-seed-v2:" + authority + "\x00" + filepath.Clean(rootPath) + "\x00" + rootIdentity))[:32]
 }
 
 func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory) error {
@@ -934,9 +1256,13 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 			return c.Fail(c.StoreIntegrityError, "invalid retained physical receipt")
 		}
 		prefix := ""
-		if inventory.RootIdentity != measured.RootIdentity {
+		if filepath.Clean(inventory.RootPath) == filepath.Clean(measured.RootPath) {
+			if inventory.RootIdentity != measured.RootIdentity {
+				return c.Fail(c.StaleAuthority, "retained physical tree identity changed at its registered path")
+			}
+		} else {
 			relative, relErr := filepath.Rel(measured.RootPath, inventory.RootPath)
-			if relErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			if relErr != nil || filepath.IsAbs(relative) || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 				continue
 			}
 			prefix = filepath.ToSlash(relative) + "/"
@@ -984,7 +1310,7 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 }
 
 func validateInventory(inventory Inventory) (Inventory, error) {
-	if inventory.RootPath == "" || !filepath.IsAbs(inventory.RootPath) || !c.ValidDigest(inventory.RootIdentity) || !c.ValidDigest(inventory.VolumeIdentity) || inventory.Entries > 1<<40 || inventory.AllocatedBytes > 1<<48 || inventory.LogicalBytes > 1<<48 || inventory.ChargedBytes > 1<<48 || inventory.ChargedBytes < inventory.AllocatedBytes || inventory.ChargedBytes < inventory.LogicalBytes {
+	if inventory.RootPath == "" || len(inventory.RootPath) > 2048 || !filepath.IsAbs(inventory.RootPath) || !c.ValidDigest(inventory.RootIdentity) || !c.ValidDigest(inventory.VolumeIdentity) || inventory.Entries > 1<<40 || inventory.AllocatedBytes > 1<<48 || inventory.LogicalBytes > 1<<48 || inventory.ChargedBytes > 1<<48 || inventory.ChargedBytes < inventory.AllocatedBytes || inventory.ChargedBytes < inventory.LogicalBytes || len(inventory.Files) > maxInventoryItems {
 		return Inventory{}, c.Fail(c.InvalidArgument, "invalid measured physical inventory")
 	}
 	resolved, err := fileguard.ResolveProspective(inventory.RootPath)
@@ -995,7 +1321,7 @@ func validateInventory(inventory Inventory) (Inventory, error) {
 	var allocated, logical, charged uint64
 	for _, file := range inventory.Files {
 		clean := path.Clean(filepath.ToSlash(file.Path))
-		if file.Path <= previous || filepath.IsAbs(file.Path) || clean == ".." || strings.HasPrefix(clean, "../") || !c.ValidDigest(file.Digest) || !c.ValidDigest(file.Identity) || file.Allocated > file.ChargedBytes || file.LogicalBytes > file.ChargedBytes {
+		if file.Path <= previous || len(file.Path) > 4096 || filepath.IsAbs(file.Path) || clean == ".." || strings.HasPrefix(clean, "../") || !c.ValidDigest(file.Digest) || !c.ValidDigest(file.Identity) || file.Allocated > file.ChargedBytes || file.LogicalBytes > file.ChargedBytes {
 			return Inventory{}, c.Fail(c.InvalidArgument, "invalid physical file receipt")
 		}
 		previous = file.Path
@@ -1016,17 +1342,362 @@ func validateInventory(inventory Inventory) (Inventory, error) {
 	if len(inventory.Files) > 0 && (allocated > inventory.AllocatedBytes || logical > inventory.LogicalBytes || charged > inventory.ChargedBytes) {
 		return Inventory{}, c.Fail(c.StoreIntegrityError, "physical receipt totals do not match file inventory")
 	}
+	raw, err := json.Marshal(inventory)
+	if err != nil {
+		return Inventory{}, err
+	}
+	if len(raw) > maxInventoryBytes {
+		return Inventory{}, c.Fail(c.BudgetLimitReached, "physical inventory receipt exceeds the bounded ledger profile")
+	}
 	return inventory, nil
 }
 
 func (l *Ledger) Capacity(ctx context.Context) (Capacity, error) {
 	var result Capacity
-	err := l.withReadLock(ctx, func() error {
+	err := l.withLock(ctx, func() error {
 		var err error
+		if _, err = l.reconcileFreePendingLocked(ctx); err != nil {
+			return err
+		}
 		result, err = capacityQuery(ctx, l.db, l.Limits)
 		return err
 	})
 	return result, err
+}
+
+// ReconcileFreePending replays durable exact deletion intents. A missing path
+// is reclaimed only after its parent chain is synced and the same volume
+// reports its available bytes at or above the recorded baseline plus the exact
+// allocated bytes and metadata-write margin. Intents without an exact member
+// identity remain charged as legacy unknown.
+func (l *Ledger) ReconcileFreePending(ctx context.Context) (ReconcileResult, error) {
+	var result ReconcileResult
+	err := l.withLock(ctx, func() error {
+		var err error
+		result, err = l.reconcileFreePendingLocked(ctx)
+		return err
+	})
+	return result, err
+}
+
+type freeIntent struct {
+	Path, Digest, Identity, Volume, Root string
+	Logical, Allocated, Charged, Before  uint64
+}
+
+type pendingAllocation struct {
+	ID, Target, Volume, Status             string
+	RetainedBytes, RetainedEntries, Before int64
+	Receipt                                []byte
+}
+
+func (l *Ledger) reconcileFreePendingLocked(ctx context.Context) (ReconcileResult, error) {
+	var result ReconcileResult
+	rows, err := l.db.QueryContext(ctx, "SELECT id,target_root,volume_identity,status,retained_bytes,retained_entries,receipt,free_before FROM quota_allocations WHERE status='FREE_PENDING' ORDER BY id")
+	if err != nil {
+		return result, err
+	}
+	pending := make([]pendingAllocation, 0)
+	for rows.Next() {
+		var item pendingAllocation
+		if err = rows.Scan(&item.ID, &item.Target, &item.Volume, &item.Status, &item.RetainedBytes, &item.RetainedEntries, &item.Receipt, &item.Before); err != nil {
+			rows.Close()
+			return result, err
+		}
+		pending = append(pending, item)
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return result, err
+	}
+	for _, allocation := range pending {
+		if err = ctx.Err(); err != nil {
+			return result, err
+		}
+		intent, found, intentErr := l.readFreeIntent(ctx, allocation.ID)
+		if intentErr != nil {
+			return result, intentErr
+		}
+		if !found {
+			result.LegacyUnknown++
+			result.PendingFiles++
+			continue
+		}
+		inventory, err := validatePendingIntent(allocation, intent)
+		if err != nil {
+			return result, err
+		}
+		root, resolved, err := openPendingRoot(allocation.Target)
+		if errors.Is(err, os.ErrNotExist) {
+			result.PendingFiles++
+			continue
+		}
+		if err != nil {
+			return result, err
+		}
+		if filepath.Clean(resolved) != filepath.Clean(allocation.Target) {
+			root.Close()
+			return result, c.Fail(c.StaleAuthority, "physical free-intent root path changed")
+		}
+		rootIdentity, identityErr := fileguard.DirectoryIdentity(root)
+		volumeIdentity, volumeErr := fileguard.VolumeIdentity(root)
+		if err = errors.Join(identityErr, volumeErr); err != nil {
+			root.Close()
+			return result, err
+		}
+		if rootIdentity != inventory.RootIdentity || volumeIdentity != inventory.VolumeIdentity || rootIdentity != intent.Root || volumeIdentity != intent.Volume {
+			root.Close()
+			return result, c.Fail(c.StaleAuthority, "physical free-intent root or volume identity changed")
+		}
+		memberPath := filepath.FromSlash(intent.Path)
+		_, statErr := root.Lstat(memberPath)
+		if statErr == nil {
+			measured, measureErr := measureFile(root, memberPath)
+			if measureErr != nil {
+				root.Close()
+				return result, measureErr
+			}
+			if !sameReceipt(measured, receiptFromIntent(intent)) {
+				root.Close()
+				return result, c.Fail(c.StaleBase, "physical free-intent file identity or content changed")
+			}
+			closeErr := root.Close()
+			if closeErr != nil {
+				return result, closeErr
+			}
+			if err = l.cancelFreeIntent(ctx, allocation, intent); err != nil {
+				return result, err
+			}
+			result.CancelledFiles++
+			continue
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			root.Close()
+			return result, statErr
+		}
+		if err = syncExistingParents(root, memberPath); err != nil {
+			root.Close()
+			return result, err
+		}
+		available, spaceErr := fileguard.AvailableBytes(root)
+		if spaceErr != nil {
+			_ = root.Close()
+			result.PendingFiles++
+			continue
+		}
+		if available > math.MaxInt64 || !freeCapacityProven(intent, available) {
+			_ = root.Close()
+			result.PendingFiles++
+			continue
+		}
+		// Recheck absence after the volume query and parent sync, immediately
+		// before publishing the receipt. This narrows the namespace race while
+		// retaining the original exact intent and inode binding.
+		if _, statErr = root.Lstat(memberPath); statErr == nil {
+			_ = root.Close()
+			result.PendingFiles++
+			continue
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			_ = root.Close()
+			return result, statErr
+		}
+		closeErr := root.Close()
+		if closeErr != nil {
+			return result, closeErr
+		}
+		if err = l.finishFreeIntent(ctx, allocation, inventory, intent, available); err != nil {
+			return result, err
+		}
+		result.ReclaimedFiles++
+	}
+	return result, nil
+}
+
+func (l *Ledger) readFreeIntent(ctx context.Context, id string) (freeIntent, bool, error) {
+	var intent freeIntent
+	if !validID(id) {
+		return intent, false, c.Fail(c.StoreIntegrityError, "invalid physical free-intent allocation ID")
+	}
+	var logical, allocated, charged, before int64
+	err := l.db.QueryRowContext(ctx, "SELECT path,file_digest,file_identity,logical_bytes,allocated_bytes,charged_bytes,free_before,volume_identity,root_identity FROM quota_free_intents WHERE allocation_id=?", id).Scan(&intent.Path, &intent.Digest, &intent.Identity, &logical, &allocated, &charged, &before, &intent.Volume, &intent.Root)
+	if errors.Is(err, sql.ErrNoRows) {
+		return intent, false, nil
+	}
+	if err != nil {
+		return intent, false, err
+	}
+	if logical < 0 || allocated < 0 || charged < 0 || before < 0 {
+		return intent, false, c.Fail(c.StoreIntegrityError, "negative physical free-intent counter")
+	}
+	intent.Logical, intent.Allocated, intent.Charged, intent.Before = uint64(logical), uint64(allocated), uint64(charged), uint64(before)
+	if !validRelativeReceiptPath(intent.Path) || !c.ValidDigest(intent.Digest) || !c.ValidDigest(intent.Identity) || !c.ValidDigest(intent.Volume) || !c.ValidDigest(intent.Root) || intent.Charged < intent.Logical || intent.Charged < intent.Allocated {
+		return intent, false, c.Fail(c.StoreIntegrityError, "invalid physical free-intent receipt")
+	}
+	return intent, true, nil
+}
+
+func validatePendingIntent(allocation pendingAllocation, intent freeIntent) (Inventory, error) {
+	var inventory Inventory
+	if allocation.Status != "FREE_PENDING" || allocation.Before < 0 || uint64(allocation.Before) != intent.Before || allocation.RetainedBytes < 0 || allocation.RetainedEntries < 0 || strictJSON(allocation.Receipt, &inventory) != nil {
+		return Inventory{}, c.Fail(c.StoreIntegrityError, "physical free intent does not match its allocation")
+	}
+	canonical, err := json.Marshal(inventory)
+	if err != nil || !bytes.Equal(canonical, allocation.Receipt) {
+		return Inventory{}, c.Fail(c.StoreIntegrityError, "physical free-intent inventory is not canonical")
+	}
+	if _, err = validateInventory(inventory); err != nil {
+		return Inventory{}, err
+	}
+	if filepath.Clean(inventory.RootPath) != filepath.Clean(allocation.Target) || inventory.VolumeIdentity != allocation.Volume || inventory.RootIdentity != intent.Root || inventory.VolumeIdentity != intent.Volume || inventory.ChargedBytes != uint64(allocation.RetainedBytes) || inventory.Entries != uint64(allocation.RetainedEntries) {
+		return Inventory{}, c.Fail(c.StoreIntegrityError, "physical free-intent allocation counters differ from its receipt")
+	}
+	count := 0
+	for _, file := range inventory.Files {
+		if file.Path == intent.Path && sameReceipt(file, receiptFromIntent(intent)) {
+			count++
+		}
+	}
+	if count != 1 {
+		return Inventory{}, c.Fail(c.StoreIntegrityError, "physical free-intent member is not uniquely present in its inventory")
+	}
+	return inventory, nil
+}
+
+func receiptFromIntent(intent freeIntent) FileReceipt {
+	return FileReceipt{Path: intent.Path, Digest: intent.Digest, Identity: intent.Identity, LogicalBytes: intent.Logical, Allocated: intent.Allocated, ChargedBytes: intent.Charged}
+}
+
+func sameReceipt(left, right FileReceipt) bool {
+	return left == right
+}
+
+func validRelativeReceiptPath(name string) bool {
+	if name == "" || filepath.IsAbs(name) {
+		return false
+	}
+	clean := path.Clean(filepath.ToSlash(name))
+	return clean == filepath.ToSlash(name) && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func openPendingRoot(name string) (*os.Root, string, error) {
+	if !filepath.IsAbs(name) || filepath.Clean(name) != name {
+		return nil, "", c.Fail(c.StoreIntegrityError, "physical free-intent root path is invalid")
+	}
+	resolved, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(resolved)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, resolved, nil
+}
+
+func syncExistingParents(root *os.Root, name string) error {
+	parent := filepath.Dir(name)
+	for {
+		info, err := root.Lstat(parent)
+		if err == nil {
+			if !info.IsDir() {
+				return c.Fail(c.Conflict, "physical free-intent parent namespace changed")
+			}
+			return fileguard.SyncParents(root, parent)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if parent == "." {
+			return err
+		}
+		parent = filepath.Dir(parent)
+	}
+}
+
+func freeCapacityProven(intent freeIntent, available uint64) bool {
+	need := intent.Allocated
+	if need > math.MaxUint64-metadataAdmission {
+		return false
+	}
+	need += metadataAdmission
+	if intent.Before > math.MaxUint64-need {
+		return false
+	}
+	return available >= intent.Before+need
+}
+
+func (l *Ledger) cancelFreeIntent(ctx context.Context, allocation pendingAllocation, intent freeIntent) error {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE quota_allocations SET status='RETAINED',free_before=0,free_after=0 WHERE id=? AND status='FREE_PENDING' AND receipt=? AND free_before=?", allocation.ID, allocation.Receipt, intent.Before)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return c.Fail(c.StaleAuthority, "physical free intent changed during cancellation")
+	}
+	result, err = tx.ExecContext(ctx, "DELETE FROM quota_free_intents WHERE allocation_id=? AND path=? AND file_digest=? AND file_identity=? AND free_before=?", allocation.ID, intent.Path, intent.Digest, intent.Identity, intent.Before)
+	if err != nil {
+		return err
+	}
+	changed, err = result.RowsAffected()
+	if err != nil || changed != 1 {
+		return c.Fail(c.StaleAuthority, "physical free-intent identity changed during cancellation")
+	}
+	return tx.Commit()
+}
+
+func (l *Ledger) finishFreeIntent(ctx context.Context, allocation pendingAllocation, inventory Inventory, intent freeIntent, available uint64) error {
+	if inventory.ChargedBytes < intent.Charged || inventory.AllocatedBytes < intent.Allocated || inventory.LogicalBytes < intent.Logical || inventory.Entries == 0 {
+		return c.Fail(c.StoreIntegrityError, "physical free-intent exceeds retained inventory")
+	}
+	remaining := make([]FileReceipt, 0, len(inventory.Files)-1)
+	for _, file := range inventory.Files {
+		if file.Path != intent.Path {
+			remaining = append(remaining, file)
+		}
+	}
+	inventory.ChargedBytes -= intent.Charged
+	inventory.AllocatedBytes -= intent.Allocated
+	inventory.LogicalBytes -= intent.Logical
+	inventory.Entries--
+	inventory.Files = remaining
+	raw, err := json.Marshal(inventory)
+	if err != nil {
+		return err
+	}
+	if err = admitReceiptMutation(l.root, raw); err != nil {
+		return err
+	}
+	status := "RETAINED"
+	if inventory.Entries == 0 && len(inventory.Files) == 0 {
+		status = "RELEASED"
+	}
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE quota_allocations SET status=?,retained_bytes=?,retained_entries=?,receipt=?,free_before=0,free_after=? WHERE id=? AND status='FREE_PENDING' AND receipt=? AND free_before=?", status, inventory.ChargedBytes, inventory.Entries, raw, available, allocation.ID, allocation.Receipt, intent.Before)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return c.Fail(c.StaleAuthority, "physical free allocation changed before receipt commit")
+	}
+	result, err = tx.ExecContext(ctx, "DELETE FROM quota_free_intents WHERE allocation_id=? AND path=? AND file_digest=? AND file_identity=? AND free_before=?", allocation.ID, intent.Path, intent.Digest, intent.Identity, intent.Before)
+	if err != nil {
+		return err
+	}
+	changed, err = result.RowsAffected()
+	if err != nil || changed != 1 {
+		return c.Fail(c.StaleAuthority, "physical free intent changed before receipt commit")
+	}
+	return tx.Commit()
 }
 
 func (l *Ledger) withReadLock(ctx context.Context, fn func() error) error {
@@ -1039,7 +1710,12 @@ func (l *Ledger) withReadLock(ctx context.Context, fn func() error) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(fn(), lock.Close())
+	if err = l.verifyPinnedMetadata(); err != nil {
+		return errors.Join(err, lock.Close())
+	}
+	operationErr := fn()
+	metadataErr := l.verifyPinnedMetadata()
+	return errors.Join(operationErr, metadataErr, lock.Close())
 }
 
 func capacityQuery(ctx context.Context, db *sql.DB, limits Limits) (Capacity, error) {
@@ -1167,6 +1843,10 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 		if err != nil {
 			return err
 		}
+		volumeIdentity, err := fileguard.VolumeIdentity(root)
+		if err != nil {
+			return err
+		}
 		rows, err := l.db.QueryContext(ctx, "SELECT id,status,receipt,free_before FROM quota_allocations WHERE status IN ('RETAINED','FREE_PENDING') AND receipt IS NOT NULL AND target_root=?", rootPath)
 		if err != nil {
 			return err
@@ -1175,8 +1855,9 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 			id, status string
 			before     uint64
 			inv        Inventory
+			intent     *freeIntent
 		}
-		matches := []candidate{}
+		candidates := []candidate{}
 		for rows.Next() {
 			var item candidate
 			var raw []byte
@@ -1185,13 +1866,13 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 				rows.Close()
 				return err
 			}
-			if freeBefore < 0 || strictJSON(raw, &item.inv) != nil || item.inv.RootIdentity != rootIdentity {
+			if freeBefore < 0 || strictJSON(raw, &item.inv) != nil || item.inv.RootIdentity != rootIdentity || item.inv.VolumeIdentity != volumeIdentity || filepath.Clean(item.inv.RootPath) != filepath.Clean(rootPath) {
 				continue
 			}
 			item.before = uint64(freeBefore)
 			for _, receipt := range item.inv.Files {
 				if receipt.Path == relative && receipt.Digest == digest && receipt.LogicalBytes == uint64(logicalBytes) {
-					matches = append(matches, candidate{item.id, item.status, item.before, item.inv})
+					candidates = append(candidates, item)
 					break
 				}
 			}
@@ -1199,13 +1880,13 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
-		if len(matches) == 0 {
+		if len(candidates) == 0 {
 			return nil
 		}
-		if len(matches) != 1 {
+		if len(candidates) != 1 {
 			return c.Fail(c.StoreIntegrityError, "physical free receipt is ambiguous")
 		}
-		match := matches[0]
+		match := candidates[0]
 		var receipt FileReceipt
 		for _, file := range match.inv.Files {
 			if file.Path == relative {
@@ -1216,7 +1897,27 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 		if receipt.Identity == "" {
 			return c.Fail(c.StoreIntegrityError, "physical allocation receipt lacks inode binding")
 		}
-		var freeBefore = match.before
+		intent, hasIntent, err := l.readFreeIntent(ctx, match.id)
+		if err != nil {
+			return err
+		}
+		if hasIntent {
+			if match.status != "FREE_PENDING" || !sameReceipt(receipt, receiptFromIntent(intent)) || intent.Root != rootIdentity || intent.Volume != volumeIdentity || intent.Before != match.before {
+				return c.Fail(c.StoreIntegrityError, "physical free intent differs from the retained file receipt")
+			}
+			match.intent = &intent
+		} else if match.status == "FREE_PENDING" {
+			// Older ledgers stored only a volume baseline. The caller's exact
+			// retained file receipt upgrades that legacy intent without guessing
+			// which member was in flight.
+			legacy := freeIntent{Path: receipt.Path, Digest: receipt.Digest, Identity: receipt.Identity, Logical: receipt.LogicalBytes, Allocated: receipt.Allocated, Charged: receipt.ChargedBytes, Before: match.before, Volume: volumeIdentity, Root: rootIdentity}
+			if err = l.beginFreeIntent(ctx, match.id, legacy); err != nil {
+				return err
+			}
+			match.intent = &legacy
+		} else if match.status != "RETAINED" {
+			return c.Fail(c.StoreIntegrityError, "physical allocation is not retained for release")
+		}
 		info, statErr := root.Lstat(filepath.FromSlash(relative))
 		if statErr == nil {
 			measured, measureErr := measureFile(root, relative)
@@ -1226,92 +1927,62 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 			if measured.Identity != receipt.Identity || measured.Digest != receipt.Digest || measured.LogicalBytes != receipt.LogicalBytes || measured.Allocated != receipt.Allocated || measured.ChargedBytes != receipt.ChargedBytes {
 				return c.Fail(c.StaleBase, "physical free receipt inode or content changed")
 			}
-			freeBefore, err = fileguard.AvailableBytes(root)
-			if err != nil {
+			if match.status == "RETAINED" {
+				freeBefore, freeErr := fileguard.AvailableBytes(root)
+				if freeErr != nil {
+					return freeErr
+				}
+				newIntent := freeIntent{Path: receipt.Path, Digest: receipt.Digest, Identity: receipt.Identity, Logical: receipt.LogicalBytes, Allocated: receipt.Allocated, Charged: receipt.ChargedBytes, Before: freeBefore, Volume: volumeIdentity, Root: rootIdentity}
+				if err = l.beginFreeIntent(ctx, match.id, newIntent); err != nil {
+					return err
+				}
+				match.intent = &newIntent
+			}
+			deleted, removeErr := fileguard.RemoveBoundIdentity(root, filepath.FromSlash(relative), info, digest, logicalBytes, limit)
+			if removeErr != nil {
+				return removeErr
+			}
+			if deleted {
+				removed = true
+			}
+			if err = fileguard.SyncParents(root, filepath.Dir(filepath.FromSlash(relative))); err != nil {
 				return err
 			}
-			if err = l.setFreePending(ctx, match.id, freeBefore); err != nil {
-				return err
-			}
-			// Persisting the intent can allocate ledger/WAL pages on the same
-			// volume. Establish the deletion baseline after that write, then
-			// persist it while updating the already allocated ledger row.
-			freeBefore, err = fileguard.AvailableBytes(root)
-			if err != nil {
-				return err
-			}
-			if err = l.setFreePending(ctx, match.id, freeBefore); err != nil {
-				return err
-			}
-			if _, err = fileguard.RemoveBoundIdentity(root, filepath.FromSlash(relative), info, digest, logicalBytes, limit); err != nil {
-				return err
-			}
-			removed = true
 		} else if errors.Is(statErr, os.ErrNotExist) {
 			if match.status != "FREE_PENDING" {
 				return nil
 			}
-			parent := filepath.Dir(filepath.FromSlash(relative))
-			if err = fileguard.SyncParents(root, parent); err != nil {
+			if match.intent == nil {
+				return c.Fail(c.StoreIntegrityError, "physical free intent member identity is missing")
+			}
+			if err = syncExistingParents(root, filepath.FromSlash(relative)); err != nil {
 				return err
 			}
 		} else {
 			return statErr
 		}
-		if err = fileguard.SyncParents(root, filepath.Dir(filepath.FromSlash(relative))); err != nil {
-			return err
-		}
-		available, err := fileguard.AvailableBytes(root)
+		reconciled, err := l.reconcileFreePendingLocked(ctx)
 		if err != nil {
 			return err
 		}
-		if receipt.Allocated > 0 && (receipt.Allocated > math.MaxUint64-freeBefore || available < freeBefore+receipt.Allocated) {
-			// Unlink and capacity reclamation are separate outcomes. NTFS resident
-			// streams and open mappings may not return a whole free-space unit.
-			// Deletion may finish while FREE_PENDING keeps every byte charged.
-			return nil
+		if reconciled.ReclaimedFiles > 0 {
+			removed = true
 		}
-		remainingFiles := make([]FileReceipt, 0, len(match.inv.Files)-1)
-		for _, item := range match.inv.Files {
-			if item.Path != relative {
-				remainingFiles = append(remainingFiles, item)
-			}
-		}
-		if match.inv.ChargedBytes < receipt.ChargedBytes || match.inv.AllocatedBytes < receipt.Allocated || match.inv.LogicalBytes < receipt.LogicalBytes || match.inv.Entries < 1 {
-			return c.Fail(c.StoreIntegrityError, "physical free receipt exceeds retained inventory")
-		}
-		match.inv.ChargedBytes -= receipt.ChargedBytes
-		match.inv.AllocatedBytes -= receipt.Allocated
-		match.inv.LogicalBytes -= receipt.LogicalBytes
-		match.inv.Entries--
-		match.inv.Files = remainingFiles
-		remainingRaw, err := json.Marshal(match.inv)
-		if err != nil {
-			return err
-		}
-		status := "RETAINED"
-		if len(remainingFiles) == 0 && match.inv.Entries == 0 {
-			status = "RELEASED"
-		}
-		result, err := l.db.ExecContext(ctx, "UPDATE quota_allocations SET status=?,retained_bytes=?,retained_entries=?,receipt=?,free_after=? WHERE id=? AND status='FREE_PENDING'", status, match.inv.ChargedBytes, match.inv.Entries, remainingRaw, available, match.id)
-		if err != nil {
-			return err
-		}
-		changed, err := result.RowsAffected()
-		if err != nil || changed != 1 {
-			return c.Fail(c.StaleAuthority, "physical free intent changed during receipt")
-		}
-		removed = true
 		return nil
 	})
 	return removed, err
 }
 
-func (l *Ledger) setFreePending(ctx context.Context, id string, before uint64) error {
-	if before > math.MaxInt64 {
+func (l *Ledger) beginFreeIntent(ctx context.Context, id string, intent freeIntent) error {
+	if !validID(id) || !validRelativeReceiptPath(intent.Path) || !c.ValidDigest(intent.Digest) || !c.ValidDigest(intent.Identity) || !c.ValidDigest(intent.Root) || !c.ValidDigest(intent.Volume) || intent.Charged < intent.Logical || intent.Charged < intent.Allocated || intent.Before > math.MaxInt64 || intent.Logical > math.MaxInt64 || intent.Allocated > math.MaxInt64 || intent.Charged > math.MaxInt64 {
 		return c.Fail(c.UnsupportedCapability, "free-space receipt exceeds bounded counter")
 	}
-	result, err := l.db.ExecContext(ctx, "UPDATE quota_allocations SET status='FREE_PENDING',free_before=? WHERE id=? AND status IN ('RETAINED','FREE_PENDING')", before, id)
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE quota_allocations SET status='FREE_PENDING',free_before=? WHERE id=? AND status IN ('RETAINED','FREE_PENDING')", intent.Before, id)
 	if err != nil {
 		return err
 	}
@@ -1319,7 +1990,11 @@ func (l *Ledger) setFreePending(ctx context.Context, id string, before uint64) e
 	if err != nil || changed != 1 {
 		return c.Fail(c.StaleAuthority, "physical allocation no longer admits a free intent")
 	}
-	return nil
+	_, err = tx.ExecContext(ctx, "INSERT INTO quota_free_intents(allocation_id,path,file_digest,file_identity,logical_bytes,allocated_bytes,charged_bytes,free_before,volume_identity,root_identity) VALUES(?,?,?,?,?,?,?,?,?,?)", id, intent.Path, intent.Digest, intent.Identity, intent.Logical, intent.Allocated, intent.Charged, intent.Before, intent.Volume, intent.Root)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func outstandingForVolumeTx(tx *sql.Tx, volume string) (uint64, error) {

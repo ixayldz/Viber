@@ -70,15 +70,16 @@ func privacyOperationWithFault(ctx context.Context, authority PrivacyAuthority, 
 	return &privacyOwner{root: root, lease: lease, name: name, operation: &authority}, nil
 }
 func registerRestoredScope(ctx context.Context, authority PrivacyAuthority, instance RuntimeInstance, target string) error {
-	root, err := openPrivacyRoot(authority)
+	restored, err := Open(ctx, target)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
-	lock, err := privacyLock(ctx, root)
-	if err != nil {
-		return err
+	if restored.privacy == nil {
+		err = c.Fail(c.StaleAuthority, "restored owner did not attach the current privacy authority")
+	} else if expected, _ := c.CanonicalV1(authority); string(expected) != string(mustCanonical(*restored.privacy)) {
+		err = c.Fail(c.StaleAuthority, "restored owner attached another privacy authority")
+	} else if restored.instance != instance {
+		err = c.Fail(c.StaleAuthority, "restored owner runtime changed during final publication")
 	}
-	defer lock.Close()
-	return publishPrivacyScope(root, privacyScope{InstanceID: instance.ID, Directory: target, PhysicalRoot: instance.PhysicalRoot})
+	return errors.Join(err, restored.Close())
 }

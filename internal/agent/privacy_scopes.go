@@ -12,6 +12,7 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -110,50 +111,64 @@ func readPrivacyScopes(root *os.Root) ([]privacyScope, string, error) {
 	digest, err := c.Digest(result)
 	return result, digest, err
 }
-func openDeletionStore(ctx context.Context, scope privacyScope, authority PrivacyAuthority) (*store.Store, *artifact.Archive, error) {
+func openDeletionStore(ctx context.Context, scope privacyScope, authority PrivacyAuthority) (*store.Store, *artifact.Archive, *resource.Ledger, error) {
 	root, err := os.OpenRoot(scope.Directory)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	physical, err := fileguard.DirectoryIdentity(root)
 	root.Close()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if physical != scope.PhysicalRoot {
-		return nil, nil, c.Fail(c.StaleBase, "managed restored store root was replaced")
+		return nil, nil, nil, c.Fail(c.StaleBase, "managed restored store root was replaced")
 	}
 	journal, err := store.Open(ctx, scope.Directory)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	raw, err := journal.PrivacyAuthority(ctx)
 	expected, _ := c.CanonicalV1(authority)
 	if err == nil && string(raw) != string(expected) {
 		err = c.Fail(c.StaleAuthority, "managed restored store lost its privacy authority pin")
 	}
+	var ledger *resource.Ledger
+	if err == nil {
+		binding, bindingErr := journal.PhysicalQuotaBinding(ctx)
+		if bindingErr != nil {
+			err = bindingErr
+		} else if binding == nil || binding.AuthorityID != authority.ID || binding.Directory != authority.Directory || binding.PhysicalRoot != authority.PhysicalRoot {
+			err = c.Fail(c.StaleAuthority, "managed restored store lost its physical quota authority pin")
+		} else {
+			ledger, err = resource.OpenPinned(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, resource.DefaultLimits(), binding.LedgerID)
+			if err == nil {
+				err = journal.AttachPhysicalQuota(ledger)
+			}
+		}
+	}
 	if err != nil {
-		journal.Close()
-		return nil, nil, err
+		return nil, nil, nil, errors.Join(err, journal.Close(), ledger.Close())
 	}
 	archive, err := artifact.Open(filepath.Join(scope.Directory, "artifacts"))
 	if err != nil {
-		journal.Close()
-		return nil, nil, err
+		return nil, nil, nil, errors.Join(err, journal.Close(), ledger.Close())
 	}
-	return journal, archive, nil
+	if err = archive.BindPhysicalQuota(ledger); err != nil {
+		return nil, nil, nil, errors.Join(err, archive.Close(), journal.Close(), ledger.Close())
+	}
+	return journal, archive, ledger, nil
 }
 func deletionStorePlan(ctx context.Context, scope privacyScope, authority PrivacyAuthority, task string, deleted map[string]DeletionCommand) (DeletionStore, bool, error) {
 	result := DeletionStore{Scope: scope, Objects: []artifact.Object{}}
-	journal, archive, err := openDeletionStore(ctx, scope, authority)
+	journal, archive, ledger, err := openDeletionStore(ctx, scope, authority)
 	if errors.Is(err, os.ErrNotExist) {
 		return result, false, nil
 	}
 	if err != nil {
 		return result, false, err
 	}
-	defer journal.Close()
-	defer archive.Close()
+	defer func() { _ = errors.Join(archive.Close(), journal.Close(), ledger.Close()) }()
 	states, err := journal.Replay(ctx, "")
 	if err != nil {
 		return result, false, err
@@ -213,14 +228,14 @@ func deletionStorePlan(ctx context.Context, scope privacyScope, authority Privac
 	return result, true, err
 }
 func purgeDeletionStore(ctx context.Context, bound DeletionStore, authority PrivacyAuthority, command DeletionCommand) (resultErr error) {
-	journal, archive, err := openDeletionStore(ctx, bound.Scope, authority)
+	journal, archive, ledger, err := openDeletionStore(ctx, bound.Scope, authority)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, archive.Close(), journal.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, archive.Close(), journal.Close(), ledger.Close()) }()
 	states, err := journal.Replay(ctx, command.Plan.TaskID)
 	if err != nil {
 		return err

@@ -551,6 +551,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if err != nil {
 		return m, err
 	}
+	manifestRaw := append([]byte{}, raw...)
 	if err = c.DecodeStrict(raw, &m); err != nil {
 		return m, err
 	}
@@ -685,6 +686,15 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if _, err = createRuntimeInstance(stagePath); err != nil {
 		return m, err
 	}
+	if m.SchemaVersion == 2 {
+		instance, instanceErr := openRestoreRuntimeInstance(stagePath)
+		if instanceErr != nil {
+			return m, instanceErr
+		}
+		if err = initializePrivacyRestoreStage(ctx, *m.PrivacyAuthority, m, manifestRaw, backup, stagePath, target, instance); err != nil {
+			return m, err
+		}
+	}
 	restored, err := Open(ctx, stagePath)
 	if err != nil {
 		return m, err
@@ -699,6 +709,9 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	}
 	if checkErr == nil {
 		checkErr = disjointRoots(target, roots)
+	}
+	if checkErr == nil && m.SchemaVersion == 2 {
+		checkErr = preparePrivacyRestoreTarget(ctx, *m.PrivacyAuthority, stagePath, target, restored.instance, restored.Journal)
 	}
 	checkErr = errors.Join(checkErr, restored.Close())
 	if checkErr != nil {
@@ -722,10 +735,35 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if err = ctx.Err(); err != nil {
 		return m, err
 	}
+	if err = fileguard.RenameNoReplace(parent, stageName, filepath.Base(target)); err != nil {
+		return m, err
+	}
 	if m.SchemaVersion == 2 {
 		if err = registerRestoredScope(ctx, *m.PrivacyAuthority, restored.instance, target); err != nil {
 			return m, err
 		}
 	}
-	return m, fileguard.RenameNoReplace(parent, stageName, filepath.Base(target))
+	return m, nil
+}
+
+func openRestoreRuntimeInstance(directory string) (RuntimeInstance, error) {
+	var instance RuntimeInstance
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return instance, err
+	}
+	defer root.Close()
+	physical, err := fileguard.DirectoryIdentity(root)
+	if err != nil {
+		return instance, err
+	}
+	raw, err := fileguard.ReadRegular(root, runtimeInstanceFile, 1024)
+	if err != nil || c.DecodeStrict(raw, &instance) != nil || instance.SchemaVersion != 1 || !validPrivacyInstanceID(instance.ID) || instance.PhysicalRoot != physical {
+		return RuntimeInstance{}, c.Fail(c.StoreIntegrityError, "restore runtime instance is invalid")
+	}
+	canonical, err := c.CanonicalV1(instance)
+	if err != nil || string(canonical) != string(raw) {
+		return RuntimeInstance{}, c.Fail(c.StoreIntegrityError, "restore runtime instance is noncanonical")
+	}
+	return instance, nil
 }

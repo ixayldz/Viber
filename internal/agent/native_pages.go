@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/learning"
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/outline"
 	"github.com/ixayldz/Viber/internal/policy"
@@ -70,6 +71,9 @@ func readToolParameters(name string) json.RawMessage {
 	return raw
 }
 func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Policy) (pageArgs, pageCursor, error) {
+	return parsePageWithRanking(call, candidate, layers, "")
+}
+func parsePageWithRanking(call model.Call, candidate workspace.Capture, layers []policy.Policy, rankingToken string) (pageArgs, pageCursor, error) {
 	var args pageArgs
 	if err := c.DecodeStrict(call.Arguments, &args); err != nil {
 		return args, pageCursor{}, err
@@ -152,6 +156,12 @@ func parsePage(call model.Call, candidate workspace.Capture, layers []policy.Pol
 			}
 		}
 	}
+	if rankingToken != "" {
+		scope, err = c.Digest(struct{ Base, Ranking string }{scope, rankingToken})
+		if err != nil {
+			return args, pageCursor{}, err
+		}
+	}
 	cursor := pageCursor{SchemaVersion: 1, Kind: call.Name, Candidate: candidate.Snapshot.Digest, Scope: scope, Position: args.Offset}
 	if args.Cursor == "" {
 		return args, cursor, nil
@@ -200,7 +210,29 @@ func nativeReadPage(ctx context.Context, candidate workspace.Capture, layers []p
 	return nativeReadPageWithCache(ctx, candidate, layers, state, call, nil)
 }
 func nativeReadPageWithCache(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, state c.TaskState, call model.Call, cache *retrieval.Cache) (any, error) {
-	args, cursor, err := parsePage(call, candidate, layers)
+	return nativeReadPageWithRanking(ctx, candidate, layers, state, call, cache, nil)
+}
+func nativeReadPageWithRanking(ctx context.Context, candidate workspace.Capture, layers []policy.Policy, state c.TaskState, call model.Call, cache *retrieval.Cache, ranking *learning.Binding) (any, error) {
+	var decision *learning.Decision
+	token := ""
+	if ranking != nil && call.Name == "fs_search" {
+		var supplied pageArgs
+		if err := c.DecodeStrict(call.Arguments, &supplied); err != nil {
+			return nil, err
+		}
+		if supplied.Mode == "ranked" {
+			current, err := ranking.Current(candidate.Snapshot.Digest, supplied.Query)
+			if err != nil {
+				return nil, err
+			}
+			decision = &current
+			token, err = c.Digest(current)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	args, cursor, err := parsePageWithRanking(call, candidate, layers, token)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +386,21 @@ func nativeReadPageWithCache(ctx context.Context, candidate workspace.Capture, l
 		}{1, "UNTRUSTED_SOURCE", candidate.Snapshot.Digest, "CAPTURED_POLICY_SCOPE_WITH_EXPLICIT_EXCLUSIONS", items[cursor.Position:end], extent, c.ReadCondition{Path: args.Directory, Kind: "LISTING", Digest: digest}}, nil
 	case "fs_search":
 		if args.Mode == "ranked" {
-			return rankedReadPage(ctx, candidate, layers, action, args, cursor, cache, c.HashBytes([]byte(state.TaskID)))
+			result, err := rankedReadPageWithRanking(ctx, candidate, layers, action, args, cursor, cache, c.HashBytes([]byte(state.TaskID)), ranking, decision)
+			if err != nil {
+				return nil, err
+			}
+			if decision != nil {
+				current, err := ranking.Current(candidate.Snapshot.Digest, args.Query)
+				if err != nil {
+					return nil, err
+				}
+				fresh, err := c.Digest(current)
+				if err != nil || fresh != token {
+					return nil, c.Fail(c.StaleAuthority, "advisory ranking selection changed while preparing the page")
+				}
+			}
+			return result, nil
 		}
 		if args.Query == "" || len(args.Query) > 256 || !utf8.ValidString(args.Query) {
 			return nil, c.Fail(c.InvalidArgument, "bounded UTF-8 literal query required")

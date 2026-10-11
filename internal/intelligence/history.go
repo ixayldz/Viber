@@ -182,5 +182,16 @@ func ValidateCoChanges(report CoChangeReport, history workspace.GitHistory, sour
 	if actual != expected {
 		return c.Fail(c.StoreIntegrityError, "co-change report digest mismatch")
 	}
+	limit := len(report.Results)
+	if limit == 0 {
+		limit = 1
+	}
+	rebuilt, err := RankCoChanges(history, source, report.TargetPath, limit)
+	if err != nil {
+		return err
+	}
+	if rebuilt.ReportDigest != expected {
+		return c.Fail(c.StoreIntegrityError, "co-change ranking does not match captured history")
+	}
 	return nil
 }

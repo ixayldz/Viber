@@ -38,9 +38,11 @@ viber privacy-checkpoint --store /private/store --json
 
 Checkpoint bakımı için family owner'larını durdurun. Lossless projection; dedup, pending deletion, UNKNOWN, managed-copy, attempt, consent ve watermark kayıtlarını taşır. Tüm kayıtlı owner SQLite pin'leri PREPARED→ACTIVE geçer; current anchor yayımlanmadan kaynak journal silinmez. Sonra exact kaynak aralığı için immutable retirement receipt yayımlanır ve bound inode/byte silmesi yapılır. Eksik kaynak, yalnız current anchor ve receipt doğrulanırsa kabul edilir. Checkpoint/catalog geçmişi bounded olarak tutulur; bütün metadata'nın sınırsız kullanımını veya otomatik owner katalog temizliğini vaat etmez.
 
-Store restore/move veya kayıp family owner'ı checkpoint pin/catalog geçişini engelleyebilir. Metadata/owner dosyalarını elle silmek recovery değildir. Checkpoint sonrası yeni owner/restore rebase profilinin tam kabulü halen ayrı iştir.
+Yeni owner ve fresh restore, current checkpoint pin'ine bağlanır. Restore, kaynak anchor soyunu ve exact registered staging kimliğini doğrulayarak destination SQLite pin'ini rebase eder; işlem kesilirse aynı owned staging kaydından devam eder. Bir task silinirken sibling task'ların export kopyaları korunur. Live operation lease veya yarım restore stage varken checkpoint engellenir. Kayıp family owner'ı hâlâ checkpoint/catalog geçişini engelleyebilir; metadata/owner dosyalarını elle silmek recovery değildir. Eski checkpoint/catalog retirement ayrı kalan iştir.
 
 Ortak fiziksel ledger, authority/DB kimliğine bağlıdır. Yazıcı reserve→WRITING→measured RETAINED akışını kullanır; kesilmiş yazı üst sınırı charged kalır. Snapshot, CAS/materialization, backup/export ve evaluator bundle bu yola bağlanır. Üst evaluator allocation alt yazıcıları kapsar. Dosyanın silinmesi, byte'ların gerçekten serbest kalmasıyla aynı olay değildir: open mapping veya NTFS resident stream nedeniyle free-space kanıtı yetersizse FREE_PENDING charged kalır. Mutable bütün metadata/fence lifecycle ve tüm writer profillerinin toplam kabulü yalnız bu broker'ın varlığıyla kapanmaz.
+
+FREE_PENDING için exact member ve free-space tabanı durable intent olarak saklanır; yeniden açılışta ve kapasite kabulünde tekrar ölçülür. Silme ve yeterli fiziksel alan dönüşü birlikte kanıtlanmadan charge düşmez. Retained seed, fiziksel kimliğin yanında canonical root yoluna bağlanır; Linux'ta silinmiş başka bir dizinin inode'u tekrar kullanıldığında eski receipt yeni dizine uygulanmaz. Receipt/WAL/checkpoint kontrol alanı için ayrı metadata admission vardır.
 
 ## Görevler, provider akışı ve keşif
 
@@ -87,3 +89,26 @@ Samples schema 1, en fazla 256 adet `SFT`, `PREFERENCE`, `PROCESS`, `CONTEXT`, `
 Consent schema 1; `task_id`, `task_seq`, `document_digest`, `candidate_digest`, exact samples bytes SHA-256 olan `samples_digest`, `license`, `provenance_digest`, en fazla 24 saat ileride UTC `expires_at` ve `acknowledgment="I_REVIEWED_EXACT_PAYLOAD_AND_LICENSE_FOR_LOCAL_TRAINING_EXPORT"` alanlarını içerir. Güncel task/document/source/payload eşleşmiyorsa output yaratılmaz. İzin modeli config opt-in ve bu exact-payload consent'in ikisini de gerektirir. Lisans/provenance operatör beyanıdır; bağımsız doğrulama değildir.
 
 Manifest kaliteyi kaynak task'tan kaydeder; başarılı check veya kullanıcı incelemesinden gold label çıkarmaz. Samples ve manifest fiziksel kotaya ve managed privacy lineage'a kaydolur. Task deletion ve retention purge bu yerel türevi de kapsar. Başka yere elle kopyalanmış içerik üzerinde yönetilen silme iddiası yoktur.
+
+## Source-bound sıralama eğitimi
+
+```sh
+viber rank-policy init --registry /private/ranking --json
+viber rank-policy train --registry /private/ranking --id project-search --version 1 --license MIT --dataset dev.json --dataset-sha EXACT_DEV_FILE_SHA --json
+viber rank-policy evaluate --registry /private/ranking --definition reviewed-definition.json --dataset holdout.json --dataset-sha EXACT_HOLDOUT_FILE_SHA --json
+viber rank-policy status --registry /private/ranking --json
+```
+
+Train, DEV etiketlerinde 16 bounded BM25/trigram ağırlık çiftini gerçekten çalıştırır. Sonuçtaki definition JSON'unu ayrı dosyaya kaydedip inceleyin. Evaluate, aynı source/protocol'e bağlı bağımsız HOLDOUT sorgularını gerçekten çalıştırır; DEV sorgusunun normalize edilmiş eşini, farklı ağırlık beyanını ve tekrarlanan evaluation assignment'ı reddeder. Tekil immutable receipt, executable/source/dataset digest'leri ve MRR/latency ölçümleri saklanır. Etiketler operatörün incelenmiş beyanıdır; bağımsız ürün kalite kabulü değildir.
+
+`select` exact definition/evaluation SHA ile SHADOW, CANARY veya ACTIVE seçer. ACTIVE açık `I_REVIEWED_HELDOUT_LABELS_AND_APPROVE_ADVISORY_RANKING_ONLY` onayı ister. `disable` kill switch'tir; eski exact receipt yeniden seçilerek rollback yapılır. Kullanım `run --ranking-registry /private/ranking` ile açıkça etkinleştirilir. Öğrenilen ağırlıklar policy, kaynak kapsamı, literal arama, doğrulama veya yazı yetkisini değiştirmez. Cursor mevcut seçim revision'ına bağlanır; seçim değişmişse hazırlanmış sayfa verilmez.
+
+## Sürümlü danışman skill'ler
+
+`skills source|propose|evaluate|activate|rollback|revoke|expire|status|load` komutları ayrı registry ve trusted evaluator public key policy'siyle çalışır. Propose exact içerik/lisansın dış registry'ye bilinçli kopyalanmasını gerektirir; evaluate yalnız güvenilen imzalı, source/version/protocol'e bağlı receipt kabul eder. Task, project ve ayrı onaylı generic scope desteklenir. `run --skills-registry DIR --skills-trust-policy FILE` verilmezse kapalıdır. Model `skill_advice` ile mevcut scope'taki exact version'ı okuyabilir; eski kaynak, revoked skill veya değişmiş trust revision reddedilir. Skill metni araç/verification yetkisi vermez. Registry operatörün ayrı yönettiği kopyadır; task deletion başka yerdeki bu açıkça alınmış kopyayı sildiğini iddia etmez.
+
+## Yeni repository üretimi
+
+`repo-blueprint` exact source capture ve incelenmiş blueprint'ten immutable plan üretir. `repo-generate` bu planın digest'ine ve exact dosya bytes JSON'una bağlanarak yalnız yeni ve kaynak/store ile ayrık dizine yayımlar. Path alias, symlink, existing target ve değişmiş source reddedilir. Hook, generated code veya dependency kurulumunu host'ta çalıştırmaz. Protected check config verilirse check origin bağlanır; check çalıştırılmadan PASS üretilmez. Publication sonrası validation binding hatası oluşursa yayımlanan dizinin receipt'i ve `validation_error` birlikte gösterilir.
+
+MCP stdio package ve duplex Docker broker initialize→exact tools/list→tek tools/call görüşmesini, output bounds ve transcript provenance'ını uygular. Bu commit'te Session/CLI entegrasyonu henüz tamamlanmadığı için hazır bir son kullanıcı extension özelliği olarak sunulmaz. Windows native delivery helper da tek başına live apply kabulü değildir.

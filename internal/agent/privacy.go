@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -51,6 +52,22 @@ type DeletionResult struct {
 	ManagedCopies  int    `json:"managed_copies"`
 	ExternalCopies string `json:"external_copies"`
 	MediaErasure   string `json:"physical_media_erasure"`
+}
+
+func restoreCopyIsCurrentOwner(copy ManagedCopy, scopes []privacyScope) bool {
+	if copy.Kind != "RESTORE_STAGE" || copy.RestoreTarget == "" || filepath.Clean(copy.Directory) != filepath.Clean(copy.RestoreTarget) {
+		return false
+	}
+	for _, scope := range scopes {
+		if scope.InstanceID != copy.RestoreInstanceID || filepath.Clean(scope.Directory) != filepath.Clean(copy.Directory) || scope.PhysicalRoot != copy.PhysicalRoot {
+			continue
+		}
+		if copy.RestoreAnchor == "" {
+			return scope.CheckpointAnchor == "" && scope.RestoreBinding == ""
+		}
+		return scope.CheckpointAnchor == copy.RestoreAnchor && scope.RestoreBinding == copy.RestoreBinding
+	}
+	return false
 }
 
 func deletionDigest(plan DeletionPlan) string {
@@ -238,6 +255,13 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	}
 	for _, copy := range view.Copies {
 		if sort.SearchStrings(copy.Tasks, task) < len(copy.Tasks) && copy.Tasks[sort.SearchStrings(copy.Tasks, task)] == task {
+			// A finalized restore target is an owner store and is purged through
+			// its per-task DeletionStore receipt below. Treating the whole SQLite
+			// root as a generic copy would both erase sibling tasks and make an
+			// ordinary owner-open generation bump stale the preview.
+			if copy.Kind == "RESTORE_STAGE" && restoreCopyIsCurrentOwner(copy, scopes) {
+				continue
+			}
 			bound, err := captureManagedAllocation(ctx, copy)
 			if err != nil {
 				return plan, err
@@ -412,22 +436,21 @@ func (s *Session) deleteContentLocked(ctx context.Context, command DeletionComma
 			}
 		}
 		for _, bound := range plan.Stores {
-			journal, archive, err := openDeletionStore(ctx, bound.Scope, *s.privacy)
+			journal, archive, ledger, err := openDeletionStore(ctx, bound.Scope, *s.privacy)
 			if err != nil {
 				return result, err
 			}
 			id := "privacy-scope-" + c.HashBytes([]byte(command.CommandID+":"+bound.Scope.PhysicalRoot))
 			for _, internalID := range []string{id, id + "-purged"} {
 				if _, _, _, found, lookupErr := journal.CommandReceipt(ctx, internalID); lookupErr != nil || found {
-					archive.Close()
-					journal.Close()
+					_ = errors.Join(archive.Close(), journal.Close(), ledger.Close())
 					if lookupErr != nil {
 						return result, lookupErr
 					}
 					return result, c.Fail(c.CommandIDConflict, "restored deletion namespace already used")
 				}
 			}
-			if err = errors.Join(archive.Close(), journal.Close()); err != nil {
+			if err = errors.Join(archive.Close(), journal.Close(), ledger.Close()); err != nil {
 				return result, err
 			}
 		}

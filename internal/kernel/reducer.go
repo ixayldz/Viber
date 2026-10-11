@@ -165,6 +165,37 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 				return next, c.Fail(c.InvalidArgument, "invalid durable session update")
 			}
 			next.DocumentDigest = p.DocumentDigest
+		case "DeliveryEffectRecorded":
+			effect := p.DeliveryEffect
+			if event.Actor != "kernel" || effect == nil || next.Execution != c.Terminated || next.InputBarrier || len(next.PendingInputIDs) > 0 || next.Deletion != nil || !c.ValidDigest(p.DocumentDigest) || p.SnapshotDigest != effect.CandidateDigest {
+				return next, c.Fail(c.PolicyDenied, "delivery effect requires a bound terminal task and durable package")
+			}
+			if p.SpecVersion != 0 || p.PolicyEpoch != 0 || p.State != "" || p.Outcome != "" || p.Quality != "" || p.Fulfillment != "" || p.RequiredObligations != 0 || p.InputID != "" || p.InputDigest != "" || p.InputBytes != 0 || p.QueueID != "" || p.Goal != nil || p.Deletion != nil || p.Verification != nil || p.Tokens != nil || p.Resources != nil {
+				return next, c.Fail(c.InvalidArgument, "delivery effect event contains unrelated authority")
+			}
+			digest, err := c.Digest(*effect)
+			if err != nil || p.Reason != digest {
+				return next, c.Fail(c.StoreIntegrityError, "delivery effect event digest mismatch")
+			}
+			if effect.Status == c.DeliveryUnknown {
+				if effect.SourceTaskSeq != next.TaskSeq || effect.SourceDocument != next.DocumentDigest || effect.SpecVersion != next.SpecVersion || effect.PolicyEpoch != next.PolicyEpoch || effect.Generation != next.KernelGeneration || effect.CandidateDigest != next.CandidateDigest || event.KernelGeneration != next.KernelGeneration {
+					return next, c.Fail(c.StaleAuthority, "delivery intent no longer matches the current terminal task")
+				}
+			} else if event.KernelGeneration != next.KernelGeneration {
+				return next, c.Fail(c.StaleAuthority, "delivery receipt requires the current kernel generation")
+			}
+			if err := effect.Validate(); err != nil {
+				return next, err
+			}
+			if p.Reason == "" {
+				return next, c.Fail(c.InvalidArgument, "delivery effect reason digest required")
+			}
+			updated, err := applyDeliveryEffect(next.DeliveryEffects, *effect)
+			if err != nil {
+				return next, err
+			}
+			next.DeliveryEffects = updated
+			next.DocumentDigest = p.DocumentDigest
 		case "CandidateRecorded":
 			if event.Actor != "kernel" || next.Execution != c.Running || next.InputBarrier || !c.ValidDigest(p.DocumentDigest) || !c.ValidDigest(p.SnapshotDigest) {
 				return next, c.Fail(c.PolicyDenied, "candidate publication requires active authority")
@@ -423,6 +454,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 	if p.Deletion != nil && event.Type != "TaskContentDeleted" && event.Type != "TaskDeletionPurged" {
 		return next, c.Fail(c.PolicyDenied, "content deletion only allowed in explicit deletion events")
 	}
+	if p.DeliveryEffect != nil && event.Type != "DeliveryEffectRecorded" {
+		return next, c.Fail(c.PolicyDenied, "delivery effect only allowed in its explicit durable event")
+	}
 	if p.Verification != nil && event.Type != "VerifiedResultFinalized" && event.Type != "VerificationAssessed" {
 		return next, c.Fail(c.PolicyDenied, "verification authority only allowed in guarded final transaction")
 	}
@@ -462,6 +496,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 }
 
 func StrictSuccess(s c.TaskState) bool {
+	for _, effect := range s.DeliveryEffects {
+		if effect.Status == c.DeliveryUnknown {
+			return false
+		}
+	}
 	return s.Deletion == nil && s.Execution == c.Terminated && s.Outcome == c.Finished && s.Quality == c.Verified && s.Fulfillment == c.Satisfied && s.OpenRequiredObligations == 0 && !s.InputBarrier && len(s.PendingInputIDs) == 0
 }
 func InvocationExit(s c.TaskState, interrupted bool) int {

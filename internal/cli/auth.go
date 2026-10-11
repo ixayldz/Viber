@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/ixayldz/Viber/internal/auth"
@@ -86,7 +88,7 @@ func runAuth(args []string, out, errout io.Writer) int {
 	}
 	store, err := auth.Open(*directory, action == "login")
 	if errors.Is(err, os.ErrNotExist) && (action == "status" || action == "profiles") {
-		return statusAuth(out, auth.View{SchemaVersion: 1, Provider: "chatgpt", Profiles: []auth.ProfileView{}, ManageUsage: "https://chatgpt.com/settings/usage"})
+		return printAuthView(out, auth.View{SchemaVersion: 1, Provider: "chatgpt", Profiles: []auth.ProfileView{}, ManageUsage: "https://chatgpt.com/settings/usage"}, *jsonMode)
 	}
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
@@ -100,6 +102,9 @@ func runAuth(args []string, out, errout io.Writer) int {
 	defer client.Close()
 	switch action {
 	case "login":
+		if !*jsonMode {
+			fmt.Fprintln(errout, "Continue with ChatGPT in your browser. Choose your account/workspace and review plan usage permission, then return here. Ctrl+C cancels sign-in.")
+		}
 		err = client.Login(ctx, store, *profile, func(url string) error { return openAuthBrowser(ctx, url) })
 	case "select":
 		if *profile == "" {
@@ -121,6 +126,10 @@ func runAuth(args []string, out, errout io.Writer) int {
 		if err != nil {
 			return report(out, errout, err, *jsonMode)
 		}
+		if !*jsonMode {
+			fmt.Fprintf(out, "Local sign-out complete. Remote revocation confirmed: %t. Manage permissions at https://chatgpt.com/settings/usage\n", confirmed)
+			return printAuthView(out, store.View(), false)
+		}
 		return statusAuth(out, struct {
 			Status                    auth.View `json:"status"`
 			RemoteRevocationConfirmed bool      `json:"remote_revocation_confirmed"`
@@ -129,7 +138,41 @@ func runAuth(args []string, out, errout io.Writer) int {
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	return statusAuth(out, store.View())
+	return printAuthView(out, store.View(), *jsonMode)
+}
+
+func printAuthView(out io.Writer, view auth.View, jsonMode bool) int {
+	if jsonMode {
+		return statusAuth(out, view)
+	}
+	if len(view.Profiles) == 0 {
+		_, err := fmt.Fprintln(out, "No ChatGPT account connected. Run: viber auth login")
+		if err != nil {
+			return 4
+		}
+		return 0
+	}
+	for _, profile := range view.Profiles {
+		status := "sign-in required"
+		if profile.Connected {
+			status = "connected; plan permission required"
+		}
+		if profile.Connected && profile.PlanUsage {
+			status = "connected; ChatGPT plan usage enabled"
+		}
+		active := ""
+		if profile.Active {
+			active = " · active"
+		}
+		if _, err := fmt.Fprintf(out, "%s · %s%s\n", strconv.QuoteToASCII(profile.ID), status, active); err != nil {
+			return 4
+		}
+	}
+	_, err := fmt.Fprintln(out, "Available models: viber auth models --json\nUsage settings: https://chatgpt.com/settings/usage")
+	if err != nil {
+		return 4
+	}
+	return 0
 }
 func statusAuth(out io.Writer, value any) int {
 	if err := jsonWrite(out, value); err != nil {
