@@ -4,15 +4,15 @@ Mevcut kanal **engineering snapshot**; `doctor.release_ready=false`. Kararlı ü
 
 ## İndirme ve doğrulama
 
-Güncel [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9) yayımlandı. Exact source `9f089972af6ffd5c4ae153bcd6d288c6e90894d9`; [12 native CI/paket/provenance işi](https://github.com/ixayldz/Viber/actions/runs/38122778794) SUCCESS. Aşağıdaki hedefi seçin; sekiz asset'in GitHub oturumu olmadan indirme/checksum readback'i ve altı OIDC subject'in exact source provenance doğrulaması geçti. Üç native rapor taze archive kurulumu, ilk görev ve manuel kaldırma sırasında dış store'un korunmasını ölçer.
+Güncel [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-f1b323d437e953411649db6fec2532a20095a524) yayımlandı. Exact source `f1b323d437e953411649db6fec2532a20095a524`; [12 native CI/paket/provenance işi](https://github.com/ixayldz/Viber/actions/runs/38127788489) SUCCESS. Aşağıdaki hedefi seçin; sekiz asset'in GitHub oturumu olmadan indirme/checksum readback'i ve altı OIDC subject'in exact source provenance doğrulaması geçti. Üç native rapor taze archive kurulumu, ilk görev ve manuel kaldırma sırasında dış store'un korunmasını ölçer.
 
 | Sistem | İndirilecek asset |
 |---|---|
-| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-windows-amd64.zip) |
-| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-linux-amd64.tar.gz) |
-| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-9f089972af6ffd5c4ae153bcd6d288c6e90894d9/viber-9f089972af6f-darwin-arm64.tar.gz) |
+| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-windows-amd64.zip) |
+| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-linux-amd64.tar.gz) |
+| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-darwin-arm64.tar.gz) |
 
-Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. Bu yayının [normal tag workflow'u](https://github.com/ixayldz/Viber/actions/runs/38124117014) create/upload/readback/publication kabulünü geçti. Önceki sürümlerin başarısızlık ve recovery kayıtları [VALIDATION](VALIDATION.md) içinde korunur.
+Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. Bu yayının [normal tag workflow'u](https://github.com/ixayldz/Viber/actions/runs/38129279040) create/upload/readback/publication kabulünü geçti. Önceki sürümlerin başarısızlık ve recovery kayıtları [VALIDATION](VALIDATION.md) içinde korunur.
 
 [GitHub Actions](https://github.com/ixayldz/Viber/actions/workflows/ci.yml) içinde exact commit'e ait başarılı `core` run'ını açın. Foundation'ın yanında üç `packages` işi ve `attest-packages` da SUCCESS olmalıdır. Bu akış yalnız bu repo'nun `main` push'unda signing yapar; PR/fork paketleri bu güven zincirine girmez.
 
