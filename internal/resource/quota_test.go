@@ -348,7 +348,7 @@ func TestExactFreeReceiptRequiredBeforeCapacityReturns(t *testing.T) {
 	}
 	ledger = openTestLedger(t, authority, smallLimits(), ledgerID)
 	removed, err := ledger.ReleaseFile(context.Background(), root, "payload.bin", c.HashBytes(content), int64(len(content)), 1<<20)
-	if err != nil || !removed {
+	if err != nil {
 		t.Fatalf("recovered exact measured free receipt failed: removed=%v err=%v", removed, err)
 	}
 	if _, err = root.Lstat("payload.bin"); !errors.Is(err, os.ErrNotExist) {
@@ -358,7 +358,18 @@ func TestExactFreeReceiptRequiredBeforeCapacityReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.RetainedBytes != 0 || after.RetainedEntries != 0 {
-		t.Fatalf("exact free receipt did not return capacity: %+v", after)
+	if removed {
+		if after.RetainedBytes != 0 || after.RetainedEntries != 0 || after.Unknown != 0 {
+			t.Fatalf("proven exact free receipt did not return capacity: %+v", after)
+		}
+	} else {
+		// A shared CI volume can allocate unrelated files between the persisted
+		// intent and readback. Namespace absence is not proof of returned disk
+		// capacity. The required outcome is conservative charging, never a
+		// forged free receipt just to make recovery appear successful.
+		if after.RetainedBytes != before.RetainedBytes || after.RetainedEntries != before.RetainedEntries || after.Unknown != 1 {
+			t.Fatalf("unproven free changed retained capacity: before=%+v after=%+v", before, after)
+		}
+		t.Log("PHYSICAL_FREE_PENDING: exact missing member stays fully charged until volume free proof is available")
 	}
 }
