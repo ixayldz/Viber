@@ -10,7 +10,7 @@ env:
   GOTOOLCHAIN: local
 jobs:
   test:
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +50,11 @@ jobs:
         run: |
           mkdir -p evidence
           set -o pipefail
-          go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/native-test-shards.py | tee evidence/tests.jsonl
+          else
+            go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
+          fi
           vault_args=()
           if [[ "$RUNNER_OS" != Windows ]]; then vault_args+=(--vault-failure); fi
           python scripts/verify-test-results.py evidence/tests.jsonl --privacy --retrieval --delivery "${vault_args[@]}"

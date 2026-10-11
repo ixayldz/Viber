@@ -102,7 +102,9 @@ func TestPrivacyCheckpointReusesOwnerThroughEquivalentDirectorySpelling(t *testi
 	}
 	relative, err := filepath.Rel(cwd, s.directory)
 	if err != nil {
-		t.Fatal(err)
+		// Windows hosted checkout and temporary fixtures can be on separate
+		// volumes. An absolute /./ spelling still exercises owner canonicalization.
+		relative = filepath.Dir(s.directory) + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(s.directory)
 	}
 	scope := privacyScope{InstanceID: s.instance.ID, Directory: canonical, PhysicalRoot: s.instance.PhysicalRoot}
 	called := false
