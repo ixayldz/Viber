@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 const quotaDiagnosticLimit = 64 << 10
@@ -84,7 +86,7 @@ func writeQuotaTreeDiagnostic(measured Inventory, admitted map[string]FileReceip
 }
 
 func quotaDiagnosticName(name string) string {
-	if len(name) > 4096 || !validRelativeReceiptPath(name) {
+	if len(name) > 4096 || !utf8.ValidString(name) || name == "." || !filepath.IsLocal(name) || strings.ContainsAny(name, "\\:\x00") || filepath.ToSlash(filepath.Clean(name)) != name {
 		return "<invalid-relative-path>"
 	}
 	return filepath.ToSlash(name)
