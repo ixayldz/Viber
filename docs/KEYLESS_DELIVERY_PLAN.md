@@ -32,6 +32,8 @@ Kabul: dirty/staged/untracked baseline; mapped/open writer; namespace/path repla
 
 Check discovery ve revision protected dependency closure'a bağlanır; framework self-report trusted observer olmaz. TS/JS ve Python test/config/source discovery; lexical fallback için explicit coverage. V0–V5 her sınıf ayrı observer/verdict/unsupported sınırı taşır. AST/LSP graph exact source/protocol/version/cutoff ve unresolved edge coverage ile kurulur. Runtime trace/coverage yalnız conservative selection; required checks'i azaltmaz.
 
+Go AST outline alt dilimi kaynak byte'larını standard parser ile parse eder; package declarations/method/generic/Unicode/exact spans ve current policy/cursor admission'ı taşır. Bounded token/nesting/symbol profile ve syntax/semantic coverage ayrıdır. Host import/LSP/compiler çalışmaz. Bu read-only araç metadata lifecycle'a bağımlı değildir; full reference graph/dependency closure ve TS/JS/Python AST/LSP backend kapanışı sayılmaz. İlk native kabul ve exact-SHA follow-up VALIDATION'da tutulur.
+
 Kabul: forged PASS, check weakening, malicious discovery/config, stale dependency, incomplete discovery, flaky rerun, framework mismatch, source change ve hidden oracle leak. Test plan revision kullanıcı input/goal/check origin bağlarını korur.
 
 ### 5. Supervisor ve kullanıcı akışı — FR-12/19/20/22/23/25, NFR-04/08/10

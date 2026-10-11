@@ -29,7 +29,13 @@ def gh(*args):
     if result.returncode or len(result.stdout) > 64 << 20:
         diagnostic = result.stderr.decode(errors="replace")
         status = re.search(r"HTTP ([0-9]{3})", diagnostic)
-        portable.fail(f"GitHub {args[0]} operation failed: exit={result.returncode} http={status.group(1) if status else 'NONE'}; raw response withheld; any draft is retained")
+        operation = args[0]
+        if operation == "api":
+            method = args[args.index("--method") + 1] if "--method" in args else "GET"
+            route = args[1].split("?", 1)[0]
+            if re.fullmatch(r"(?:https://uploads.github.com/)?repos/ixayldz/Viber/[A-Za-z0-9_./-]+", route):
+                operation += " " + method + " " + route
+        portable.fail(f"GitHub {operation} failed: exit={result.returncode} http={status.group(1) if status else 'NONE'}; raw response withheld; any draft is retained")
     return result.stdout
 
 
@@ -42,6 +48,19 @@ def api_body(path, method, body, output):
     request = output / "release-request.json"
     request.write_bytes(portable.canonical(body))
     return portable.strict_json(gh("api", path, "--method", method, "--input", str(request)))
+
+
+def create_draft(tag, revision, notes, output):
+    # Release target_commitish is ignored for an existing tag, but explicitly
+    # supplying an older workflow-changing SHA can require workflows:write.
+    # Never request that authority. Require the exact pre-existing tag again;
+    # omit this unused field, and retain the final pre-publication tag guard.
+    current = api(f"repos/{REPO}/git/ref/tags/{tag}")
+    if current.get("object", {}).get("type") != "commit" or current["object"].get("sha") != revision:
+        portable.fail("exact existing tag required before release creation")
+    release = api_body(f"repos/{REPO}/releases", "POST", {"tag_name": tag, "name": "Viber engineering " + revision[:12], "body": notes, "draft": True, "prerelease": True, "make_latest": "false"}, output)
+    validate_draft(release, tag, notes, [])
+    return release
 
 
 def validate_draft(release, tag, notes, paths):
@@ -265,9 +284,7 @@ Keep stores outside the program directory. Install/update by selecting a fresh v
         pages = api(f"repos/{REPO}/releases?per_page=100", pages=True)
         if any(row.get("tag_name") == args.tag for page in pages for row in page):
             portable.fail("existing release/draft requires explicit exact-ID recovery; no overwrite")
-        release = api_body(f"repos/{REPO}/releases", "POST", {"tag_name": args.tag, "target_commitish": revision, "name": "Viber engineering " + revision[:12], "body": notes.read_text(encoding="utf-8"), "draft": True, "prerelease": True, "make_latest": "false"}, output)
-        if type(release.get("id")) is not int or release["id"] < 1 or release.get("draft") is not True or release.get("tag_name") != args.tag:
-            portable.fail("created draft ID mismatch; any draft retained")
+        release = create_draft(args.tag, revision, notes.read_text(encoding="utf-8"), output)
         for path in paths:
             gh("api", f"https://uploads.github.com/repos/{REPO}/releases/{release['id']}/assets?name={path.name}", "--method", "POST", "--header", "Content-Type: application/octet-stream", "--input", str(path))
         release = api(f"repos/{REPO}/releases/{release['id']}")

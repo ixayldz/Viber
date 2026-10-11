@@ -67,6 +67,9 @@ EXPECTED_TEST_PACKAGES = {
     "TestApplicationMigrationValidatesBackupAndPreservesFullHistory": "github.com/ixayldz/Viber/internal/agent",
     "TestAvailableBytesRemainsBoundToRenamedHandleWhenOldPathIsAFile": "github.com/ixayldz/Viber/internal/fileguard",
     "TestBodyEvidencePrecedesPathAndMultipleIndependentSpansSurvive": "github.com/ixayldz/Viber/internal/retrieval",
+    "TestGoASTBindsGroupedGenericUnicodeAndMethodDeclarationsToActualBytes": "github.com/ixayldz/Viber/internal/outline",
+    "TestGoASTRejectsMalformedSourceAndParserWorkExhaustion": "github.com/ixayldz/Viber/internal/outline",
+    "TestNativeGoOutlineUsesSyntaxHintsAndRejectsStaleOrDisallowedScope": "github.com/ixayldz/Viber/internal/agent",
     "TestCLIMigrationAndRestoreOfOldAndNewFormats": "github.com/ixayldz/Viber/internal/cli",
     "TestContextEffectivenessRelevanceAndExactSources": "github.com/ixayldz/Viber/internal/retrieval",
     "TestDeletionAuthorityLossAndConcurrentRestoredOwnerFailClosed": "github.com/ixayldz/Viber/internal/agent",
@@ -172,6 +175,9 @@ if args.delivery:
     }
 if args.retrieval:
     required |= {
+        "TestGoASTBindsGroupedGenericUnicodeAndMethodDeclarationsToActualBytes",
+        "TestGoASTRejectsMalformedSourceAndParserWorkExhaustion",
+        "TestNativeGoOutlineUsesSyntaxHintsAndRejectsStaleOrDisallowedScope",
         "TestContextEffectivenessRelevanceAndExactSources",
         "TestRealRepositoryOwnerRetrievalRecallSpansAndWarmInvalidation",
         "TestOwnerSearchReusesIndexButRechecksPolicyAndBytes",

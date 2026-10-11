@@ -232,13 +232,17 @@ func nativeReadPageWithCache(ctx context.Context, candidate workspace.Capture, l
 			return nil, err
 		}
 		extracted.Symbols = extracted.Symbols[cursor.Position:end]
+		trust := "UNTRUSTED_LEXICAL_HINT"
+		if extracted.Extractor == "GO_AST_V1" {
+			trust = "UNTRUSTED_SYNTAX_HINT"
+		}
 		return struct {
 			Outline   outline.Result  `json:"outline"`
 			Candidate string          `json:"candidate"`
 			Trust     string          `json:"trust"`
 			Coverage  pageCoverage    `json:"coverage"`
 			Read      c.ReadCondition `json:"read_condition"`
-		}{extracted, candidate.Snapshot.Digest, "UNTRUSTED_LEXICAL_HINT", extent, c.ReadCondition{Path: args.Path, Kind: "FILE", Digest: c.HashBytes(raw)}}, nil
+		}{extracted, candidate.Snapshot.Digest, trust, extent, c.ReadCondition{Path: args.Path, Kind: "FILE", Digest: c.HashBytes(raw)}}, nil
 	case "fs_read":
 		action.Path = args.Path
 		if err = policy.Admit(layers, action); err != nil {

@@ -186,6 +186,29 @@ def main():
                 count += 1
             else:
                 raise AssertionError("invalid installation proof admitted: " + name)
+        original = release.api, release.api_body
+        try:
+            for failure in (None, "foreign SHA", "annotated tag", "missing object"):
+                calls = []
+                def fake_api(path, pages=False):
+                    assert path == f"repos/{release.REPO}/git/ref/tags/engineering-{REV}"
+                    return {} if failure == "missing object" else {"object": {"type": "tag" if failure == "annotated tag" else "commit", "sha": "b" * 40 if failure == "foreign SHA" else REV}}
+                def fake_body(path, method, body, output):
+                    assert path == f"repos/{release.REPO}/releases" and method == "POST"
+                    assert "target_commitish" not in body and body["tag_name"] == "engineering-" + REV
+                    assert body["draft"] is True and body["prerelease"] is True and body["make_latest"] == "false"
+                    calls.append(method)
+                    return {"id": 41, "tag_name": body["tag_name"], "body": body["body"], "draft": True, "prerelease": True, "assets": []}
+                release.api, release.api_body = fake_api, fake_body
+                try:
+                    release.create_draft("engineering-" + REV, REV, "exact notes", parent)
+                except ValueError:
+                    assert failure is not None and not calls, failure
+                else:
+                    assert failure is None and calls == ["POST"], failure
+                count += 1
+        finally:
+            release.api, release.api_body = original
         print(f"PASS: {count} engineering publication trust contracts; no native inference/signature/GitHub write acceptance")
     finally:
         release.portable.remove_private_tree(parent, cache, "release-contract-")

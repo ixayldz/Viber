@@ -1,5 +1,5 @@
-// Package outline emits source-bound lexical hints. It is deliberately not a
-// semantic resolver: unsupported syntax and hidden declarations remain UNKNOWN.
+// Package outline emits source-bound lexical or parsed declaration hints.
+// It does not resolve references, load dependencies, or grant verification.
 package outline
 
 import (
@@ -22,13 +22,14 @@ type Symbol struct {
 	Line  int    `json:"line"`
 }
 type Result struct {
-	SchemaVersion int      `json:"schema_version"`
-	Path          string   `json:"path"`
-	SourceDigest  string   `json:"source_digest"`
-	Language      string   `json:"language"`
-	Extractor     string   `json:"extractor"`
-	Coverage      string   `json:"semantic_coverage"`
-	Symbols       []Symbol `json:"symbols"`
+	SchemaVersion  int      `json:"schema_version"`
+	Path           string   `json:"path"`
+	SourceDigest   string   `json:"source_digest"`
+	Language       string   `json:"language"`
+	Extractor      string   `json:"extractor"`
+	Coverage       string   `json:"semantic_coverage"`
+	SyntaxCoverage string   `json:"syntax_coverage"`
+	Symbols        []Symbol `json:"symbols"`
 }
 
 var pythonDecl = regexp.MustCompile(`(?m)^[ \t]*(?:async[ \t]+)?(def|class)[ \t]+([a-zA-Z_][a-zA-Z_0-9]*)`)
@@ -95,12 +96,14 @@ func mask(raw []byte, python bool) []byte {
 	return out
 }
 func Extract(name string, raw []byte) (Result, error) {
-	result := Result{SchemaVersion: 1, Path: name, SourceDigest: c.HashBytes(raw), Extractor: "LEXICAL_V1", Coverage: "UNKNOWN_SEMANTIC_RESOLUTION", Symbols: []Symbol{}}
+	result := Result{SchemaVersion: 1, Path: name, SourceDigest: c.HashBytes(raw), Extractor: "LEXICAL_V1", Coverage: "UNKNOWN_SEMANTIC_RESOLUTION", SyntaxCoverage: "LEXICAL_DECLARATION_HINTS_ONLY", Symbols: []Symbol{}}
 	if !policy.SafePath(name) || len(raw) > 2<<20 || !utf8.Valid(raw) {
 		return result, c.Fail(c.UnsupportedCapability, "outline requires captured UTF-8 source within 2 MiB")
 	}
 	var re *regexp.Regexp
 	switch strings.ToLower(path.Ext(name)) {
+	case ".go":
+		return extractGo(result, raw)
 	case ".py":
 		result.Language = "python"
 		re = pythonDecl
@@ -112,6 +115,7 @@ func Extract(name string, raw []byte) (Result, error) {
 		re = scriptDecl
 	default:
 		result.Language = "unsupported"
+		result.SyntaxCoverage = "UNSUPPORTED"
 		return result, nil
 	}
 	matches := re.FindAllSubmatchIndex(mask(raw, result.Language == "python"), 4097)

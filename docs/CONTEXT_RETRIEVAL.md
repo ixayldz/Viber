@@ -47,3 +47,17 @@ Independent observer çıktısı aynı policy nedeniyle modelden gizlidir; inten
 Her çalıştırma benzersiz .cache/context-benchmark-* dizinine environment, JSONL golden test ve allocation benchmark çıktısı yazar. Cold index+query, standalone warm query ve gerçek owner warm araması (policy/hash/cache/hydration dahil) ayrıdır. 66 dosyalık sentetik corpus'un 6 önceden ilan edilmiş identifier/error/substring/feature/Unicode relevance etiketi recall@3 ile ölçülür. Üretim repository kaynaklarında bağımsız ilan edilen 6 declaration etiketi recall@5, exact span validity ve source değişimiyle cache reddi ölçülür. Owner benchmark OS process-wide peak resident counter'ını da bildirir; bu test runner/capture/setup dahil toplamdır, yalnız cache'e atfedilmez ve referans donanım kabulü değildir. Sonuç byte-span validity ve stale/policy rejection ayrı testlerdir. 480064-byte noisy build log fixture'ında tail-only kesit erken root error'ı kaçırırken intent selection exact root span'ı 512-byte bütçede korur.
 
 Bu corpus coverage/pilot p95 veya model coding task başarı oranı değildir. Gerçek provider anahtarı, abonelik kabulü veya gerçek repo performans eşiği bu testlerle tamamlanmış sayılmaz.
+
+## Yakalanmış kaynağın outline'ı
+
+`fs_outline` mevcut candidate ve current path policy üzerinden, kaynak dosyasının ham byte'larına bağlı sayfalı bildirim verir:
+
+```json
+{"path":"internal/example.go","limit":20}
+```
+
+Go runtime dilimi `GO_AST_V1` kullanır: standard Go parser yalnız yakalanmış UTF-8 byte'larını parse eder; import yüklemez, host path açmaz, generator/LSP/compiler çalıştırmaz. Package-scope grouped type/var/const, generic type/function ve method isimleri çıkarılır. Local declarations, fields, reference/call graph, type resolution, dependency closure ve build tags kapsamı çıkarılmaz. `syntax_coverage=PARSED_PACKAGE_DECLARATIONS_ONLY`, `semantic_coverage=UNKNOWN_SEMANTIC_RESOLUTION`, `trust=UNTRUSTED_SYNTAX_HINT` olarak ayrı bildirilir. Syntax geçerliliği type correctness veya check/goal PASS üretmez.
+
+Symbol ID source hash/path/extractor/kind/name/exact byte span'a bağlıdır. Unicode ve CRLF korunur. `//line` directive içindeki dosya/line metni source span veya gerçek line'a yetki vermez. Source en fazla 2 MiB; lexer 65,536 token, nesting/consecutive unary operator 256 ve emitted symbol 4,096 sınırına tabidir. Malformed syntax `UNSUPPORTED_CAPABILITY`, parser work exhaustion `BUDGET_LIMIT_REACHED`; incomplete parse supported outline diye döndürülmez. Cursor mevcut candidate/policy/path'a bağlıdır; path/policy değişince reddedilir.
+
+TS/JS/Python `LEXICAL_V1` ve `syntax_coverage=LEXICAL_DECLARATION_HINTS_ONLY` kullanmaya devam eder; semantic resolution UNKNOWN kalır. Unsupported language `syntax_coverage=UNSUPPORTED` bildirir. Go AST diliminin exact revision native kabulü VALIDATION'da ayrıca kaydedilir; ilk public `1f145f6` archive'ı bu yeni Go feature'ını içermez. Tam AST/LSP/semantic graph PRD kapsamı bu outline dilimiyle kapanmaz.

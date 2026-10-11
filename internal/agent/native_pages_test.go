@@ -284,3 +284,45 @@ func TestNativeOutlinePagesBindExactSourcePolicyAndCandidate(t *testing.T) {
 		t.Fatal("cross-path outline cursor accepted")
 	}
 }
+
+func TestNativeGoOutlineUsesSyntaxHintsAndRejectsStaleOrDisallowedScope(t *testing.T) {
+	capture, layers, state := capturedPages(t, map[string][]byte{"src/module.go": []byte("package sample\n//line /foreign/path.go:900\nfunc First() {}\nvar Second = 2\n"), "other.go": []byte("package other\nfunc Hidden() {}")})
+	first := pageResult(t, capture, layers, state, "fs_outline", map[string]any{"path": "src/module.go", "limit": 1})
+	var page struct {
+		Trust    string          `json:"trust"`
+		Coverage pageCoverage    `json:"coverage"`
+		Read     c.ReadCondition `json:"read_condition"`
+		Outline  struct {
+			Extractor string `json:"extractor"`
+			Syntax    string `json:"syntax_coverage"`
+			Semantic  string `json:"semantic_coverage"`
+			Symbols   []struct {
+				Name string `json:"name"`
+				Line int    `json:"line"`
+			} `json:"symbols"`
+		} `json:"outline"`
+	}
+	if err := json.Unmarshal(first, &page); err != nil || page.Trust != "UNTRUSTED_SYNTAX_HINT" || page.Outline.Extractor != "GO_AST_V1" || page.Outline.Syntax != "PARSED_PACKAGE_DECLARATIONS_ONLY" || page.Outline.Semantic != "UNKNOWN_SEMANTIC_RESOLUTION" || len(page.Outline.Symbols) != 1 || page.Outline.Symbols[0].Name != "First" || page.Outline.Symbols[0].Line != 3 || page.Read.Digest != c.HashBytes(capture.Contents["src/module.go"]) || !page.Coverage.HasMore {
+		t.Fatalf("Go outline binding: %s %v", first, err)
+	}
+	cursor := page.Coverage.Next
+	next := pageResult(t, capture, layers, state, "fs_outline", map[string]any{"path": "src/module.go", "limit": 1, "cursor": cursor})
+	if err := json.Unmarshal(next, &page); err != nil || page.Outline.Symbols[0].Name != "Second" || page.Coverage.HasMore {
+		t.Fatalf("Go outline paging: %s %v", next, err)
+	}
+	restricted := append([]policy.Policy(nil), layers...)
+	restricted[0].Paths = []string{"other.go"}
+	raw, _ := json.Marshal(map[string]any{"path": "src/module.go", "limit": 1})
+	if _, err := nativeReadPage(context.Background(), capture, restricted, state, model.Call{Name: "fs_outline", Arguments: raw}); err == nil {
+		t.Fatal("Go AST bypassed source policy")
+	}
+	raw, _ = json.Marshal(map[string]any{"path": "other.go", "limit": 1, "cursor": cursor})
+	if _, err := nativeReadPage(context.Background(), capture, layers, state, model.Call{Name: "fs_outline", Arguments: raw}); err == nil {
+		t.Fatal("Go AST reused a cross-path cursor")
+	}
+	layers[0].Epoch, state.PolicyEpoch = 2, 2
+	raw, _ = json.Marshal(map[string]any{"path": "src/module.go", "limit": 1, "cursor": cursor})
+	if _, err := nativeReadPage(context.Background(), capture, layers, state, model.Call{Name: "fs_outline", Arguments: raw}); err == nil {
+		t.Fatal("Go AST reused a stale policy cursor")
+	}
+}

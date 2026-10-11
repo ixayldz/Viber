@@ -19,7 +19,7 @@ func Tools() []model.Tool {
 		{Name: "candidate_propose", Description: "Propose exact bytes for an isolated candidate. Every write needs a FILE or ABSENT read condition. Never touches the live workspace or Git index.", Parameters: json.RawMessage(`{"type":"object","properties":{"read_set":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["FILE","ABSENT","LISTING"]},"digest":{"type":"string"}},"required":["path","kind","digest"],"additionalProperties":false}},"changes":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"before_digest":{"type":"string"},"after_bytes":{"type":["string","null"]},"delete":{"type":"boolean"}},"required":["path","before_digest","after_bytes","delete"],"additionalProperties":false}}},"required":["read_set","changes"],"additionalProperties":false}`)},
 	}
 	tools = append(tools, planTools()...)
-	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound TS/JS/Python lexical declaration hints. Names/spans are captured-byte references; semantic resolution remains UNKNOWN. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
+	tools = append(tools, model.Tool{Name: "fs_outline", Description: "Page source-bound Go AST package declarations or TS/JS/Python lexical hints. Exact names/spans bind captured bytes; syntax coverage is explicit and semantic resolution remains UNKNOWN. No imports, compiler or host source is loaded. Unsupported languages emit explicit fallback status.", Parameters: readToolParameters("fs_outline")})
 	tools = append(tools, historyTools()...)
 	return append(tools, checkTools()...)
 }
