@@ -73,6 +73,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	f := flags("run", errout)
 	root := f.String("root", ".", "live source root")
 	userConfigFile := f.String("user-config", "", "secret-free global config; default OS user config directory")
+	operatorPolicyFile := f.String("operator-policy", "", "absolute operator restriction profile outside project; revision changes invalidate task admissions")
 	directory := f.String("store", "", "private session store outside source")
 	task := f.String("task", "", "task ID (default random)")
 	fixtureFile := f.String("fixture", "", "offline model fixture JSON")
@@ -121,7 +122,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	if configErr != nil {
 		return report(out, errout, c.Fail(c.InvalidArgument, "source root unavailable"), *jsonMode)
 	}
-	resolvedConfig, configErr := loadRunConfig(configSource, *userConfigFile)
+	resolvedConfig, configErr := loadRunConfigAuthority(configSource, *userConfigFile, *operatorPolicyFile)
 	if configErr != nil {
 		return report(out, errout, configErr, *jsonMode)
 	}

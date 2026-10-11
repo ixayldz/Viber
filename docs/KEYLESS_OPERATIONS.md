@@ -1,0 +1,89 @@
+# Anahtarsız çalışma yüzeyleri
+
+Bu kılavuz 11 Ekim orkestrasyon değişikliklerinin komutlarını anlatır. Önceki `engineering-f1b323d…` paketi bu yeni komutları içermez. Yeni exact-source paket ancak kendi CI/installer/provenance kabulü tamamlandıktan sonra yayımlanır. Stable readiness ayrı PRD kapısıdır.
+
+## Yönetilen kurulum
+
+İlk bootstrap binary'sini doğrulanmış portable paketten ayrı bir dizine açın. `package install` aynı byte snapshot'ında GitHub provenance'ını repo/workflow/ref/full SHA ile doğrular; checksum tek başına yeterli değildir. `--gh` PATH yerine operatörün seçtiği GitHub CLI'nin tam yoludur.
+
+```powershell
+$program = Join-Path $env:LOCALAPPDATA 'ViberApps\managed'
+$archive = 'C:\Downloads\viber-SHA-windows-amd64.zip'
+$revision = 'PAKETIN_TAM_40_KARAKTER_COMMIT_SHA_DEGERI'
+$ghBinary = 'C:\Program Files\GitHub CLI\gh.exe'
+.\viber.exe package install --prefix $program --archive $archive --source-sha $revision --gh $ghBinary --json
+.\viber.exe package status --prefix $program --json
+.\viber.exe package run --prefix $program -- version
+```
+
+Store'ları prefix dışında tutun. Yönetilen launcher, child komutunun açık `--store` yolunu kaydeder; yeni store'u child'dan önce hazırlar. Sonraki install/rollback/uninstall, kayıtlı store'ların tamamının fiziksel kimliğini doğrular ve OS owner kilitlerini alır. Aktif owner kilidi alınamıyorsa sürüm geçişi reddedilir. Doğrudan binary ile kullanılan başka store'ları `--store` ile ayrıca kaydedin; launcher bilmediği store'ların quiescence'ını iddia etmez.
+
+```powershell
+.\viber.exe package install --prefix $program --archive $archive --source-sha $revision --gh $ghBinary --store C:\ViberData\project --json
+.\viber.exe package rollback --prefix $program --revision ONCEDEN_KURULMUS_TAM_SHA --json
+.\viber.exe package deactivate --prefix $program --json
+.\viber.exe package uninstall --prefix $program --json
+```
+
+Rollback yalnız önceden doğrulanmış kurulum kaydı bulunan ve mevcut store/reducer sözleşmesiyle uyumlu sürümü seçer. Schema migration/downgrade yapmaz. Deactivate seçimden çıkarır ve dosyaları saklar. Uninstall exact inventory ve kalıcı retirement kaydıyla yalnız program dosyalarını siler; kesintiden sonra aynı komutla devam eder. Değişmiş/eklenmiş dosyaları silme yetkisi saymaz. Audit/seçim/store kayıtları kalır. Retire edilmiş aynı revision'ı yeniden kurmak için yeni prefix kullanın. Windows'ta uninstall için çalışan bootstrap prefix dışında olmalıdır.
+
+Üç native CI işi actual provenance ile yeni paketi kurmak, ilk offline görevi çalıştırmak, aynı revision reinstall/rollback ve owned uninstall'da dış store'un korunduğunu ölçmek için eklendi. Bu çalışma ağacı için CI kabulü henüz çalıştırılmadı. İki farklı revision upgrade, OS sertifika/notarization veya gerçek model başarısı bu kabulün kapsamı değildir.
+
+## Gizlilik checkpoint'i ve fiziksel kota
+
+```sh
+viber privacy-capacity --store /private/store --json
+viber privacy-checkpoint --store /private/store --json
+```
+
+Checkpoint bakımı için family owner'larını durdurun. Lossless projection; dedup, pending deletion, UNKNOWN, managed-copy, attempt, consent ve watermark kayıtlarını taşır. Tüm kayıtlı owner SQLite pin'leri PREPARED→ACTIVE geçer; current anchor yayımlanmadan kaynak journal silinmez. Sonra exact kaynak aralığı için immutable retirement receipt yayımlanır ve bound inode/byte silmesi yapılır. Eksik kaynak, yalnız current anchor ve receipt doğrulanırsa kabul edilir. Checkpoint/catalog geçmişi bounded olarak tutulur; bütün metadata'nın sınırsız kullanımını veya otomatik owner katalog temizliğini vaat etmez.
+
+Store restore/move veya kayıp family owner'ı checkpoint pin/catalog geçişini engelleyebilir. Metadata/owner dosyalarını elle silmek recovery değildir. Checkpoint sonrası yeni owner/restore rebase profilinin tam kabulü halen ayrı iştir.
+
+Ortak fiziksel ledger, authority/DB kimliğine bağlıdır. Yazıcı reserve→WRITING→measured RETAINED akışını kullanır; kesilmiş yazı üst sınırı charged kalır. Snapshot, CAS/materialization, backup/export ve evaluator bundle bu yola bağlanır. Üst evaluator allocation alt yazıcıları kapsar. Dosyanın silinmesi, byte'ların gerçekten serbest kalmasıyla aynı olay değildir: open mapping veya NTFS resident stream nedeniyle free-space kanıtı yetersizse FREE_PENDING charged kalır. Mutable bütün metadata/fence lifecycle ve tüm writer profillerinin toplam kabulü yalnız bu broker'ın varlığıyla kapanmaz.
+
+## Görevler, provider akışı ve keşif
+
+```sh
+viber goal-queue TASK --store /private/store --json
+viber goal-queue TASK --store /private/store --command-file goal.json --json
+viber attach TASK --store /private/store --provider-deltas --follow --json
+viber check-discover --root /source/project --json
+viber repo-history --root /source/project --allow-local-history --cutoff 2026-10-10T00:00:00Z --target src/app.go --json
+```
+
+Goal queue prompt steering'den ayrıdır; sabit child kimliği, parent document/source binding ve durable activation intent tutar. Child ayrı görevdir; parent içeriğinden türeyen kopyalar privacy lineage'a yazılır. Ayrıntılar: [goal/stream sözleşmesi](SUPERVISOR_QUEUE_STREAM.md).
+
+Provider delta cursor'u task event cursor'u değildir. Geçici ring'de kayıp varsa explicit gap/current state bildirilir; `--resync` bilinçli ilerletir. Delta, kalite/completion kanıtı değildir.
+
+Check discovery framework/config/test/import ipuçları çıkarır, dependency closure'u yetkili protected scopes ile karşılaştırır. Repository kodunu çalıştırmaz ve yeni doğrulama yetkisi vermez. History yalnız cutoff'tan sonraki commitleri dışlayan bounded first-parent path metadata'sıdır; commit mesajı/kimliği çıkarılmaz. Packed/alternate/shallow/graft/replace veya eksik nesne PARTIAL/UNKNOWN kalır. Local embedding için `--semantic-query`, `--allow-local-embedding`, `--embedding-model`, `--embedding-revision` açıkça seçilir. Loopback endpoint'in cloud proxy olmadığı bağımsız attestation ile kanıtlanmış sayılmaz.
+
+## Operatör kısıtlamaları ve deney kaydı
+
+`run --operator-policy ABSOLUTE_PATH` source dışında, operatör tarafından seçilmiş bounded JSON'a bağlanır. Schema/revision, privacy restrictions ve optional allowed_effects digest'i task'ta tutulur. Dosya kaybı, aynı revision değişikliği veya yeni revision yeni işlemleri reddeder; aktif inference iptal edilir. Tarihsel replay erişimi korunur. Yeniden yetkilendirme yeni bound task gerektirir. Bu local profile centrally authenticated enterprise admin policy değildir.
+
+```sh
+viber eval-register --store /private/store --protocol protocol.json --dataset /frozen/dataset --assets assets.json --output /new/registration --json
+viber eval-registration-inspect --registration /new/registration --json
+viber eval-candidate TASK --store /private/store --recipe hidden.json --output /new/result --registration /new/registration --arm baseline --repeat 1 --json
+```
+
+Dataset asset inventory, condition/build/source/recipe ve single-use STARTED kaydı dispatch öncesi bağlanır. Interrupted assignment başarılı tekrar diye sunulmaz. Inspector sonucu owner'ın retained kayıtlarından üretir. Post-hoc candidate raporu preregistered hale gelmez. Bağımsız model cohort, holdout/pilot, reference p95 ve adoption kabulü ayrı kalır; [eval kılavuzu](EVALUATION.md).
+
+## Güvenli teslim
+
+`apply TASK --store PATH --output NEW_PATH` güncel üç yönlü merge ve per-file preflight paketi üretir. Bu backend mevcut/mmap writer'ları teknik olarak dışlayamadığı için live source yazmaz; `target_written=false`, `UNSUPPORTED_STRONG_EXCLUSIVITY` veya conflict bildirir. `restore` applied receipt olmayan görevde sahiplikli undo iddia etmez. Bu fallback canlı apply özelliğinin tam kabulü değildir.
+
+## Ayrı izinli yerel eğitim export'u
+
+```sh
+viber training-export TASK --store /private/store --output /new/training --consent consent.json --samples reviewed-samples.json --json
+```
+
+Önce görevin kullanıcı config'inde `restrictions.training_export=true` seçilir. Project config izin veremez; project veya current operator reddi kullanıcı opt-in'ini daraltır. Telemetry izni eğitim izni değildir. Export ağa bağlanmaz, provider çağırmaz ve otomatik ham trajectory/context toplamaz.
+
+Samples schema 1, en fazla 256 adet `SFT`, `PREFERENCE`, `PROCESS`, `CONTEXT`, `PLANNER` veya `ROUTER` kaydı içerir. Her kayıt `input`, `target` ve yalnız preference için `rejected` JSON'udur. Toplam 1 MiB, her alan 64 KiB ile sınırlıdır. Kullanıcı exact dosyanın içeriğini ve kaynak kullanım haklarını inceler. Heuristic tarama keyfi JSON'un bütün sırlarını bulma garantisi vermediği için otomatik secret-safe etiketi üretilmez; yalnız bilinçli incelenmiş içeriği dışa aktarın.
+
+Consent schema 1; `task_id`, `task_seq`, `document_digest`, `candidate_digest`, exact samples bytes SHA-256 olan `samples_digest`, `license`, `provenance_digest`, en fazla 24 saat ileride UTC `expires_at` ve `acknowledgment="I_REVIEWED_EXACT_PAYLOAD_AND_LICENSE_FOR_LOCAL_TRAINING_EXPORT"` alanlarını içerir. Güncel task/document/source/payload eşleşmiyorsa output yaratılmaz. İzin modeli config opt-in ve bu exact-payload consent'in ikisini de gerektirir. Lisans/provenance operatör beyanıdır; bağımsız doğrulama değildir.
+
+Manifest kaliteyi kaynak task'tan kaydeder; başarılı check veya kullanıcı incelemesinden gold label çıkarmaz. Samples ve manifest fiziksel kotaya ve managed privacy lineage'a kaydolur. Task deletion ve retention purge bu yerel türevi de kapsar. Başka yere elle kopyalanmış içerik üzerinde yönetilen silme iddiası yoktur.

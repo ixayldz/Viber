@@ -82,6 +82,65 @@ func TestPromptQueueIsDurableAndActivationIsAtomicBarrier(t *testing.T) {
 		t.Fatal(string(raw), err)
 	}
 }
+
+func TestGoalQueueCreatesSeparateSnapshotBoundChildAndRecoversAfterRestore(t *testing.T) {
+	ctx := context.Background()
+	s, opts, _ := startFixture(t, []Turn{{Text: "goal result", UsageKnown: true}}, false)
+	defer s.Close()
+	before, _, err := s.Load(ctx, opts.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := s.GoalControl(ctx, GoalCommand{CommandID: "goal-add-one", TaskID: opts.TaskID, Action: "add", ChildTaskID: "goal-child-one", Text: "Inspect the captured source independently."})
+	if err != nil || len(queued.GoalQueue) != 1 || queued.GoalQueue[0].Status != "QUEUED" || len(queued.PromptQueue) != len(before.PromptQueue) || queued.InputBarrier || queueIndependentState(queued) != queueIndependentState(before) {
+		t.Fatal("goal scheduling became steering or changed current authority", queued, err)
+	}
+	state, item, err := s.BeginGoalActivation(ctx, GoalCommand{CommandID: "goal-activate-one", TaskID: opts.TaskID, Action: "activate", GoalID: "goal-add-one"})
+	if err != nil || item.Status != "ACTIVATING" {
+		t.Fatal("durable activation intent missing", state, item, err)
+	}
+	child, err := s.CreateGoalTask(ctx, opts.TaskID, item)
+	if err != nil || child.TaskID != "goal-child-one" || child.Execution != c.Ready {
+		t.Fatal("separate child was not admitted", child, err)
+	}
+	activated, err := s.CommitGoalActivation(ctx, opts.TaskID, item, child)
+	if err != nil || len(activated.GoalQueue) != 1 || activated.GoalQueue[0].Status != "ACTIVATED" || activated.GoalQueue[0].ChildTaskSeq != child.TaskSeq || activated.GoalQueue[0].ChildDocumentDigest != child.DocumentDigest {
+		t.Fatal("child binding receipt missing", activated, err)
+	}
+	retried, err := s.CreateGoalTask(ctx, opts.TaskID, activated.GoalQueue[0])
+	if err != nil || !reflect.DeepEqual(child, retried) {
+		t.Fatal("stable child reconciliation created a different task", retried, err)
+	}
+	if _, err = s.GoalControl(ctx, GoalCommand{CommandID: "goal-add-two", TaskID: opts.TaskID, Action: "add", ChildTaskID: "goal-child-two", Text: "A second independently scheduled task."}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := s.GoalControl(ctx, GoalCommand{CommandID: "goal-cancel-two", TaskID: opts.TaskID, Action: "cancel", GoalID: "goal-add-two"})
+	if err != nil || len(cancelled.GoalQueue) != 2 || cancelled.GoalQueue[1].Status != "CANCELLED" {
+		t.Fatal("queued goal cancellation was not durable", cancelled, err)
+	}
+	backup := filepath.Join(t.TempDir(), "backup")
+	if _, err = s.Backup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restored")
+	if _, err = RestoreBackup(ctx, backup, target); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenExisting(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	goals, err := restored.GoalQueue(ctx, opts.TaskID)
+	if err != nil || len(goals) != 2 || goals[0].Schedule.Status != "ACTIVATED" || goals[1].Schedule.Status != "CANCELLED" {
+		t.Fatal("goal lifecycle was not durable across restore", goals, err)
+	}
+	loadedChild, _, err := restored.Load(ctx, "goal-child-one")
+	if err != nil || loadedChild.DocumentDigest != child.DocumentDigest {
+		t.Fatal("immutable child origin did not survive restore", loadedChild, err)
+	}
+}
+
 func TestKernelPublicationCanRetryOnlyQueueCursorChanges(t *testing.T) {
 	ctx := context.Background()
 	s, opts, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, false)

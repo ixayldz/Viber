@@ -11,6 +11,9 @@ import (
 // Global preferences are outside source. Project preferences are untrusted
 // and restrictions are intersected with user/CLI intent, never authority grants.
 func loadRunConfig(source, userPath string) (*config.Resolved, error) {
+	return loadRunConfigAuthority(source, userPath, "")
+}
+func loadRunConfigAuthority(source, userPath, operatorPath string) (*config.Resolved, error) {
 	explicitUser := userPath != ""
 	if userPath == "" {
 		directory, err := os.UserConfigDir()
@@ -44,9 +47,19 @@ func loadRunConfig(source, userPath string) (*config.Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	if user == nil && project == nil {
+	if user == nil && project == nil && operatorPath == "" {
 		return nil, nil
 	}
 	result, err := config.Resolve(user, project)
+	if err != nil {
+		return nil, err
+	}
+	if operatorPath != "" {
+		reference, bindErr := config.BindAuthority(operatorPath, source)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		result.Authority = &reference
+	}
 	return &result, err
 }

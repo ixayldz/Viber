@@ -9,6 +9,7 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 )
 
 // SnapshotInfo binds logical journal contents, not mutable owner generation.
@@ -57,6 +58,57 @@ func (s *Store) SnapshotInfo(ctx context.Context) (SnapshotInfo, error) {
 func (s *Store) SnapshotDatabase(ctx context.Context, directory string) (SnapshotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var allocation resource.Allocation
+	if s.physical != nil {
+		_, covered, err := s.physical.EnclosingReservation(ctx, directory)
+		if err != nil {
+			return SnapshotInfo{}, err
+		}
+		if !covered {
+			requestDigest := c.HashBytes([]byte("store-snapshot:" + filepath.Clean(directory)))
+			allocation, err = s.physical.Reserve(ctx, resource.Request{Writer: "store", Family: "SNAPSHOT", RequestDigest: requestDigest, TargetRoot: directory, UpperBytes: 2*(256<<20) + (1 << 20), UpperEntries: 2, Class: resource.Payload})
+			if err != nil {
+				return SnapshotInfo{}, err
+			}
+			if err = allocation.Begin(ctx); err != nil {
+				return SnapshotInfo{}, err
+			}
+		}
+	}
+	return s.snapshotDatabaseLocked(ctx, directory, allocation)
+}
+
+// SnapshotDatabaseUpperBytes reports the bounded VACUUM INTO output envelope
+// before a caller creates its bundle directory.
+func (s *Store) SnapshotDatabaseUpperBytes(ctx context.Context) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pages, pageSize int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
+		return 0, err
+	}
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, err
+	}
+	if pages < 0 || pageSize < 1 || pages > (256<<20)/pageSize {
+		return 0, c.Fail(c.UnsupportedCapability, "database exceeds backup profile")
+	}
+	return uint64(pages * pageSize), nil
+}
+
+// SnapshotDatabaseReserved writes the SQLite snapshot inside an already
+// admitted larger bundle. The outer reservation must cover this directory and
+// its final receipt covers the whole bundle after publication.
+func (s *Store) SnapshotDatabaseReserved(ctx context.Context, directory string, allocation resource.Allocation) (SnapshotInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.physical != nil && !allocation.Covers(directory) {
+		return SnapshotInfo{}, c.Fail(c.StaleAuthority, "backup snapshot is outside its shared physical reservation")
+	}
+	return s.snapshotDatabaseLocked(ctx, directory, resource.Allocation{})
+}
+
+func (s *Store) snapshotDatabaseLocked(ctx context.Context, directory string, allocation resource.Allocation) (SnapshotInfo, error) {
 	info, err := s.snapshotInfoLocked(ctx)
 	if err != nil {
 		return info, err
@@ -100,6 +152,13 @@ func (s *Store) SnapshotDatabase(ctx context.Context, directory string) (Snapsho
 	err = errors.Join(err, f.Close())
 	if err == nil {
 		err = fileguard.SyncParents(root, ".")
+	}
+	if err == nil && allocation.ID != "" {
+		inventory, measureErr := resource.Measure(root, true)
+		if measureErr != nil {
+			return info, measureErr
+		}
+		err = allocation.Commit(ctx, inventory)
 	}
 	return info, err
 }

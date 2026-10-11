@@ -83,6 +83,7 @@ func TestPrivacyWorkJournalSaturationStillPublishesRealDeletionIntent(t *testing
 		record.Previous = view.Tail
 		raw, _ := c.CanonicalV1(record)
 		view.Sequence++
+		view.RecordCount++
 		view.Tail = c.HashBytes(raw)
 	}
 	countBefore, err := privacyMetadataBytes(root)

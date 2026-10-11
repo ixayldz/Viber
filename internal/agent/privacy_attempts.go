@@ -45,7 +45,7 @@ func (s *Session) registerAttemptLineage(ctx context.Context, options AttemptOpt
 	if err != nil {
 		return err
 	}
-	bound := privacyAttempt{Scope: privacyScope{s.instance.ID, directory, s.instance.PhysicalRoot}, ParentTask: options.ParentTask, ParentSequence: parent.TaskSeq, ParentDocument: parent.DocumentDigest, ChildTask: options.NewTask, RequestDigest: digest}
+	bound := privacyAttempt{Scope: privacyScope{InstanceID: s.instance.ID, Directory: directory, PhysicalRoot: s.instance.PhysicalRoot}, ParentTask: options.ParentTask, ParentSequence: parent.TaskSeq, ParentDocument: parent.DocumentDigest, ChildTask: options.NewTask, RequestDigest: digest}
 	if err = bound.validate(); err != nil {
 		return err
 	}

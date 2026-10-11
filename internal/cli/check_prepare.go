@@ -4,17 +4,20 @@ import (
 	"flag"
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/discovery"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/verify"
+	"github.com/ixayldz/Viber/internal/workspace"
 	"io"
 	"os"
 	"path/filepath"
 )
 
 type operatorChecks struct {
-	SchemaVersion int                `json:"schema_version"`
-	Plan          verify.CheckPlan   `json:"plan"`
-	Runtime       agent.CheckRuntime `json:"runtime"`
+	SchemaVersion   int                `json:"schema_version"`
+	Plan            verify.CheckPlan   `json:"plan"`
+	Runtime         agent.CheckRuntime `json:"runtime"`
+	SourceDiscovery *discovery.Report  `json:"source_discovery,omitempty"`
 }
 
 func bindOperatorChecks(input operatorChecks) (operatorChecks, error) {
@@ -79,6 +82,8 @@ func runCheckPrepare(args []string, out, errout io.Writer) int {
 	f.SetOutput(errout)
 	inputFile := f.String("file", "", "explicit operator check recipe JSON")
 	outputFile := f.String("output", "", "fresh private bound configuration file")
+	rootPath := f.String("root", "", "source root for fresh closure validation")
+	discoveryFile := f.String("discovery", "", "source discovery report JSON to revalidate against --root")
 	if err := f.Parse(args); err != nil {
 		return 4
 	}
@@ -88,6 +93,42 @@ func runCheckPrepare(args []string, out, errout io.Writer) int {
 	input, err := readOperatorChecks(*inputFile)
 	if err != nil {
 		return report(out, errout, err, true)
+	}
+	var sourceCapture workspace.Capture
+	if *rootPath != "" {
+		sourceCapture, err = workspace.CaptureDirectory(*rootPath, workspace.DefaultLimits())
+		if err != nil {
+			return report(out, errout, err, true)
+		}
+	}
+	if *discoveryFile != "" {
+		if *rootPath == "" || input.SourceDiscovery != nil {
+			return report(out, errout, c.Fail(c.InvalidArgument, "--discovery requires --root and no embedded report"), true)
+		}
+		var sourceReport discovery.Report
+		if err = readJSON(*discoveryFile, &sourceReport); err != nil {
+			return report(out, errout, c.Fail(c.InvalidArgument, "invalid source discovery report"), true)
+		}
+		input.SourceDiscovery = &sourceReport
+	}
+	if *rootPath == "" && input.SourceDiscovery != nil {
+		return report(out, errout, c.Fail(c.InvalidArgument, "a source discovery report requires --root freshness validation"), true)
+	}
+	if *rootPath != "" {
+		if input.SourceDiscovery == nil {
+			sourceReport, discoverErr := discovery.Discover(sourceCapture)
+			if discoverErr != nil {
+				return report(out, errout, discoverErr, true)
+			}
+			input.SourceDiscovery = &sourceReport
+		}
+		if verify.HasTestChecks(input.Plan) {
+			if err = verify.RequireDiscoveredClosure(input.Plan, *input.SourceDiscovery, sourceCapture); err != nil {
+				return report(out, errout, err, true)
+			}
+		} else if err = discovery.Validate(*input.SourceDiscovery, sourceCapture); err != nil {
+			return report(out, errout, err, true)
+		}
 	}
 	absolute, err := fileguard.ResolveProspective(*outputFile)
 	if err != nil {
@@ -109,12 +150,19 @@ func runCheckPrepare(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, true)
 	}
 	digest := c.HashBytes(raw)
+	var discoveryDigest, coverage string
+	if input.SourceDiscovery != nil {
+		discoveryDigest = input.SourceDiscovery.ReportDigest
+		coverage = input.SourceDiscovery.Coverage.Overall
+	}
 	if err = jsonWrite(out, struct {
-		SchemaVersion int    `json:"schema_version"`
-		Digest        string `json:"digest"`
-		Checks        int    `json:"checks"`
-		Observers     int    `json:"observer_suites"`
-	}{1, digest, len(input.Plan.Checks), len(input.Runtime.ObserverSuites)}); err != nil {
+		SchemaVersion         int    `json:"schema_version"`
+		Digest                string `json:"digest"`
+		Checks                int    `json:"checks"`
+		Observers             int    `json:"observer_suites"`
+		SourceDiscoveryDigest string `json:"source_discovery_digest,omitempty"`
+		DiscoveryCoverage     string `json:"source_discovery_coverage,omitempty"`
+	}{1, digest, len(input.Plan.Checks), len(input.Runtime.ObserverSuites), discoveryDigest, coverage}); err != nil {
 		return 4
 	}
 	return 0

@@ -192,7 +192,7 @@ func TestStreamingLocalHTTPWaitsForTerminalAndCancellationRetainsRawPrefix(t *te
 			release := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				w.Header().Set("Content-Type", "application/x-ndjson")
-				io.WriteString(w, `{"model":"fixture-model","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"fs_read","arguments":{"path":"a.txt"}}}]},"done":false}`+"\n")
+				io.WriteString(w, `{"model":"fixture-model","message":{"role":"assistant","content":"visible ","tool_calls":[{"function":{"name":"fs_read","arguments":{"path":"a.txt"}}}]},"done":false}`+"\n")
 				w.(http.Flusher).Flush()
 				close(chunkSent)
 				select {
@@ -209,6 +209,7 @@ func TestStreamingLocalHTTPWaitsForTerminalAndCancellationRetainsRawPrefix(t *te
 			}
 			defer client.Close()
 			received := make(chan struct{})
+			observed := make(chan string, 4)
 			transport := client.http.Transport
 			defer transport.(*http.Transport).CloseIdleConnections()
 			client.http.Transport = transportFunc(func(request *http.Request) (*http.Response, error) {
@@ -220,7 +221,7 @@ func TestStreamingLocalHTTPWaitsForTerminalAndCancellationRetainsRawPrefix(t *te
 			})
 			request := requestFixture()
 			request.Stream = true
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(WithDeltaObserver(context.Background(), func(text string) { observed <- text }))
 			defer cancel()
 			type completed struct {
 				result Result
@@ -237,6 +238,14 @@ func TestStreamingLocalHTTPWaitsForTerminalAndCancellationRetainsRawPrefix(t *te
 			case <-received:
 			case <-time.After(time.Second):
 				t.Fatal("client did not receive stream prefix")
+			}
+			select {
+			case delta := <-observed:
+				if delta != "visible " {
+					t.Fatal("unexpected provider progress projection", delta)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("decoded visible text did not reach the ephemeral observer")
 			}
 			select {
 			case <-done:

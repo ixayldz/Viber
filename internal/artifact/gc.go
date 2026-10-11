@@ -71,6 +71,17 @@ func (a *Archive) RemoveOrphan(object Object) (bool, error) {
 	if !os.SameFile(before, current) || !current.Mode().IsRegular() {
 		return false, c.Fail(c.Conflict, "GC object replaced")
 	}
+	if a.physical != nil {
+		removed, releaseErr := a.physical.ReleaseFile(context.Background(), a.root, name, object.Digest, object.Size, 64<<20)
+		if releaseErr != nil {
+			return false, releaseErr
+		}
+		if !removed {
+			return false, c.Fail(c.StoreIntegrityError, "GC object has no exact shared physical free receipt")
+		}
+		a.workUsed = max(int64(0), a.workUsed-object.Size)
+		return true, nil
+	}
 	if err = a.root.Remove(name); err != nil {
 		return false, err
 	}

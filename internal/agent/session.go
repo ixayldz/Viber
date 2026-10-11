@@ -21,10 +21,12 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	"github.com/ixayldz/Viber/internal/config"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/discovery"
 
 	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/plan"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/retrieval"
 	"github.com/ixayldz/Viber/internal/runner"
 	"github.com/ixayldz/Viber/internal/store"
@@ -69,49 +71,51 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
-	EvaluationOrigin      *privacyAttempt          `json:"evaluation_origin,omitempty"`
-	MergedDelivery        *MergedDeliveryOrigin    `json:"merged_delivery_origin,omitempty"`
-	NativeCleanupAttempts []string                 `json:"native_cleanup_receipts,omitempty"`
-	GoalCoverage          *verify.ReviewedCoverage `json:"goal_coverage,omitempty"`
-	VerificationReport    string                   `json:"verification_report,omitempty"`
-	Config                *config.Resolved         `json:"retained_config,omitempty"`
-	ResourcePolicy        *c.ResourcePolicy        `json:"store_resource_policy,omitempty"`
-	Compactions           []CompactionRef          `json:"compactions,omitempty"`
-	Pins                  []ContextPin             `json:"context_pins,omitempty"`
-	ProfileHistory        []RuntimeProfileRef      `json:"profile_history,omitempty"`
-	AttemptOrigin         *AttemptOrigin           `json:"attempt_origin,omitempty"`
-	TaskKind              string                   `json:"task_kind,omitempty"`
-	MaxRepairs            int                      `json:"max_repairs,omitempty"`
-	RepairAttempts        int                      `json:"repair_attempts,omitempty"`
-	FinalArtifactDigest   string                   `json:"final_artifact_digest,omitempty"`
-	CheckRuntime          *CheckRuntime            `json:"check_runtime,omitempty"`
-	CheckRuns             []CheckRunRef            `json:"check_runs,omitempty"`
-	StoreTokens           *c.TokenLimits           `json:"store_token_limits,omitempty"`
-	Runtime               *LocalRuntime            `json:"runtime,omitempty"`
-	Plan                  *plan.State              `json:"plan,omitempty"`
-	Protection            *verify.CheckOrigin      `json:"protected_check_origin,omitempty"`
-	Context               *ContextAudit            `json:"context,omitempty"`
-	Requests              []UserRequest            `json:"requests,omitempty"`
-	SchemaVersion         int                      `json:"schema_version"`
-	TaskID                string                   `json:"task_id"`
-	Spec                  c.TaskSpec               `json:"spec"`
-	Baseline              artifact.Ref             `json:"baseline"`
-	Candidate             artifact.Ref             `json:"candidate"`
-	Messages              []model.Message          `json:"messages"`
-	ToolCursor            int64                    `json:"tool_cursor"`
-	PendingReplies        []model.Reply            `json:"pending_replies"`
-	Budget                Budget                   `json:"budget"`
-	AllowUnverified       bool                     `json:"allow_unverified"`
-	Autonomy              string                   `json:"autonomy"`
-	FixtureDigest         string                   `json:"fixture_digest"`
-	FixtureCursor         int64                    `json:"fixture_cursor"`
-	Pending               *Pending                 `json:"pending"`
-	UnknownEffect         bool                     `json:"unknown_effect"`
-	Blocker               string                   `json:"blocker"`
-	FinalSummary          string                   `json:"final_summary"`
-	FinalReady            bool                     `json:"final_ready"`
-	LastNoDispatch        bool                     `json:"last_no_dispatch,omitempty"`
-	LastResponseBlob      string                   `json:"last_response_blob"`
+	EvaluationAssignment  *EvaluationAssignmentBinding `json:"evaluation_assignment,omitempty"`
+	EvaluationOrigin      *privacyAttempt              `json:"evaluation_origin,omitempty"`
+	MergedDelivery        *MergedDeliveryOrigin        `json:"merged_delivery_origin,omitempty"`
+	GoalOrigin            *GoalOrigin                  `json:"goal_origin,omitempty"`
+	NativeCleanupAttempts []string                     `json:"native_cleanup_receipts,omitempty"`
+	GoalCoverage          *verify.ReviewedCoverage     `json:"goal_coverage,omitempty"`
+	VerificationReport    string                       `json:"verification_report,omitempty"`
+	Config                *config.Resolved             `json:"retained_config,omitempty"`
+	ResourcePolicy        *c.ResourcePolicy            `json:"store_resource_policy,omitempty"`
+	Compactions           []CompactionRef              `json:"compactions,omitempty"`
+	Pins                  []ContextPin                 `json:"context_pins,omitempty"`
+	ProfileHistory        []RuntimeProfileRef          `json:"profile_history,omitempty"`
+	AttemptOrigin         *AttemptOrigin               `json:"attempt_origin,omitempty"`
+	TaskKind              string                       `json:"task_kind,omitempty"`
+	MaxRepairs            int                          `json:"max_repairs,omitempty"`
+	RepairAttempts        int                          `json:"repair_attempts,omitempty"`
+	FinalArtifactDigest   string                       `json:"final_artifact_digest,omitempty"`
+	CheckRuntime          *CheckRuntime                `json:"check_runtime,omitempty"`
+	CheckRuns             []CheckRunRef                `json:"check_runs,omitempty"`
+	StoreTokens           *c.TokenLimits               `json:"store_token_limits,omitempty"`
+	Runtime               *LocalRuntime                `json:"runtime,omitempty"`
+	Plan                  *plan.State                  `json:"plan,omitempty"`
+	Protection            *verify.CheckOrigin          `json:"protected_check_origin,omitempty"`
+	Context               *ContextAudit                `json:"context,omitempty"`
+	Requests              []UserRequest                `json:"requests,omitempty"`
+	SchemaVersion         int                          `json:"schema_version"`
+	TaskID                string                       `json:"task_id"`
+	Spec                  c.TaskSpec                   `json:"spec"`
+	Baseline              artifact.Ref                 `json:"baseline"`
+	Candidate             artifact.Ref                 `json:"candidate"`
+	Messages              []model.Message              `json:"messages"`
+	ToolCursor            int64                        `json:"tool_cursor"`
+	PendingReplies        []model.Reply                `json:"pending_replies"`
+	Budget                Budget                       `json:"budget"`
+	AllowUnverified       bool                         `json:"allow_unverified"`
+	Autonomy              string                       `json:"autonomy"`
+	FixtureDigest         string                       `json:"fixture_digest"`
+	FixtureCursor         int64                        `json:"fixture_cursor"`
+	Pending               *Pending                     `json:"pending"`
+	UnknownEffect         bool                         `json:"unknown_effect"`
+	Blocker               string                       `json:"blocker"`
+	FinalSummary          string                       `json:"final_summary"`
+	FinalReady            bool                         `json:"final_ready"`
+	LastNoDispatch        bool                         `json:"last_no_dispatch,omitempty"`
+	LastResponseBlob      string                       `json:"last_response_blob"`
 }
 type Session struct {
 	retentionFault          func(string) error
@@ -120,6 +124,7 @@ type Session struct {
 	privacyInitFault        func(string) error
 	publicationMu           sync.RWMutex
 	privacy                 *PrivacyAuthority
+	PhysicalQuota           *resource.Ledger
 	privacyOwner            *privacyOwner
 	retrievalCache          *retrieval.Cache
 	instance                RuntimeInstance
@@ -204,12 +209,47 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 		session.Close()
 		return nil, err
 	}
+	if session.privacy != nil {
+		pin, pinErr := journal.PhysicalQuotaBinding(ctx)
+		if pinErr != nil {
+			session.Close()
+			return nil, pinErr
+		}
+		expectedLedgerID := ""
+		if pin != nil {
+			if pin.AuthorityID != session.privacy.ID || pin.Directory != session.privacy.Directory || pin.PhysicalRoot != session.privacy.PhysicalRoot {
+				session.Close()
+				return nil, c.Fail(c.StaleAuthority, "owner physical quota pin differs from current privacy authority")
+			}
+			expectedLedgerID = pin.LedgerID
+		}
+		ledger, ledgerErr := resource.OpenPinned(resource.Authority{ID: session.privacy.ID, Directory: session.privacy.Directory, PhysicalRoot: session.privacy.PhysicalRoot}, resource.DefaultLimits(), expectedLedgerID)
+		if ledgerErr != nil {
+			session.Close()
+			return nil, ledgerErr
+		}
+		session.PhysicalQuota = ledger
+		binding := store.PhysicalQuotaBinding{SchemaVersion: 1, AuthorityID: session.privacy.ID, Directory: session.privacy.Directory, PhysicalRoot: session.privacy.PhysicalRoot, LedgerID: ledger.LedgerID}
+		if err = journal.BindPhysicalQuota(ctx, binding); err == nil {
+			err = journal.AttachPhysicalQuota(ledger)
+		}
+		if err == nil {
+			err = archive.BindPhysicalQuota(ledger)
+		}
+		if err != nil {
+			session.Close()
+			return nil, err
+		}
+	}
 	return session, nil
 }
 func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close(), s.privacyOwner.Close())
+	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close(), s.PhysicalQuota.Close(), s.privacyOwner.Close())
 }
 func newID(prefix string) string {
 	var nonce [16]byte
@@ -267,6 +307,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	}
 	if doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion || doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task {
 		return state, doc, c.Fail(c.StoreIntegrityError, "durable task document binding mismatch")
+	}
+	if err = s.validateGoalOrigin(context.Background(), doc); err != nil {
+		return state, doc, err
 	}
 	if err = s.validateNativeCleanup(doc); err != nil {
 		return state, doc, err
@@ -400,28 +443,31 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
-	evaluationOrigin  *privacyAttempt
-	mergedDelivery    *MergedDeliveryOrigin
-	evaluationCapture *workspace.Capture
-	GoalReview        *verify.GoalReview
-	Config            *config.Resolved
-	ResourcePolicy    *c.ResourcePolicy
-	AttemptOrigin     *AttemptOrigin
-	inheritedSpec     *c.TaskSpec
-	TaskKind          string
-	MaxRepairs        int
-	CheckRuntime      *CheckRuntime
-	StoreTokens       *c.TokenLimits
-	Runtime           *LocalRuntime
-	CheckPlan         []byte
-	Root              string
-	Prompt            []byte
-	Git               bool
-	TaskID            string
-	Budget            Budget
-	Autonomy          string
-	AllowUnverified   bool
-	Fixture           []byte
+	evaluationOrigin     *privacyAttempt
+	evaluationAssignment *EvaluationAssignmentBinding
+	mergedDelivery       *MergedDeliveryOrigin
+	evaluationCapture    *workspace.Capture
+	GoalOrigin           *GoalOrigin
+	GoalReview           *verify.GoalReview
+	Config               *config.Resolved
+	ResourcePolicy       *c.ResourcePolicy
+	AttemptOrigin        *AttemptOrigin
+	inheritedSpec        *c.TaskSpec
+	TaskKind             string
+	MaxRepairs           int
+	CheckRuntime         *CheckRuntime
+	StoreTokens          *c.TokenLimits
+	Runtime              *LocalRuntime
+	CheckPlan            []byte
+	CheckDiscovery       *discovery.Report
+	Root                 string
+	Prompt               []byte
+	Git                  bool
+	TaskID               string
+	Budget               Budget
+	Autonomy             string
+	AllowUnverified      bool
+	Fixture              []byte
 }
 
 func (s *Session) Create(ctx context.Context, options StartOptions) (c.TaskState, error) {
@@ -436,6 +482,9 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
 	}
+	if options.GoalOrigin != nil && (options.GoalOrigin.validate() != nil || options.GoalOrigin.ChildTaskID != options.TaskID || options.GoalOrigin.GoalDigest != c.HashBytes(options.Prompt)) {
+		return c.TaskState{}, c.Fail(c.InvalidArgument, "scheduled child origin does not match task input")
+	}
 	if err := s.contentAvailable(options.TaskID); err != nil {
 		return c.TaskState{}, err
 	}
@@ -449,7 +498,21 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if strings.HasPrefix(options.TaskID, "eval-") && options.evaluationOrigin == nil {
 		return c.TaskState{}, c.Fail(c.PolicyDenied, "eval task namespace is reserved for separate evaluators")
 	}
+	if options.evaluationAssignment != nil && (options.evaluationOrigin == nil || options.evaluationAssignment.Validate() != nil) {
+		return c.TaskState{}, c.Fail(c.PolicyDenied, "registered assignment binding requires an independent evaluator owner")
+	}
 	allocationOrigin := options.AttemptOrigin
+	if options.GoalOrigin != nil {
+		if options.AttemptOrigin != nil || options.evaluationOrigin != nil {
+			return c.TaskState{}, c.Fail(c.InvalidArgument, "a task must have exactly one derivation origin")
+		}
+		g := options.GoalOrigin
+		digest, digestErr := c.Digest(*g)
+		if digestErr != nil {
+			return c.TaskState{}, digestErr
+		}
+		allocationOrigin = &AttemptOrigin{ParentTask: g.ParentTask, ParentSequence: g.ParentTaskSeq, ParentDocument: g.ParentDocumentDigest, RequestDigest: digest}
+	}
 	if options.evaluationOrigin != nil {
 		a := options.evaluationOrigin
 		allocationOrigin = &AttemptOrigin{ParentTask: a.ParentTask, ParentSequence: a.ParentSequence, ParentDocument: a.ParentDocument, RequestDigest: a.RequestDigest}
@@ -499,6 +562,9 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 		if err = options.Config.Validate(); err != nil {
 			return c.TaskState{}, err
 		}
+		if err = options.Config.AdmitEffect("snapshot.read"); err != nil {
+			return c.TaskState{}, err
+		}
 		if options.Runtime != nil {
 			if err = options.Config.AdmitProvider(options.Runtime.Provider, options.Runtime.Provider != "ollama"); err != nil {
 				return c.TaskState{}, err
@@ -517,6 +583,9 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	}
 	if err != nil {
 		return c.TaskState{}, err
+	}
+	if options.GoalOrigin != nil && base.Snapshot.Digest != options.GoalOrigin.SourceSnapshotDigest {
+		return c.TaskState{}, c.Fail(c.StaleAuthority, "scheduled child source snapshot changed before creation")
 	}
 	ref, err := s.Archive.Put(options.TaskID, base)
 	if err != nil {
@@ -542,7 +611,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err != nil {
 		return c.TaskState{}, err
 	}
-	protected, err := verify.BuildCheckOrigin(options.TaskID, base, rawDigest, plan)
+	protected, err := verify.BuildCheckOriginWithDiscovery(options.TaskID, base, rawDigest, plan, options.CheckDiscovery)
 	if err != nil {
 		return c.TaskState{}, err
 	}
@@ -561,9 +630,10 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	doc := Document{Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	doc.MergedDelivery = options.mergedDelivery
 	doc.EvaluationOrigin = options.evaluationOrigin
+	doc.EvaluationAssignment = options.evaluationAssignment
 	if options.GoalReview != nil {
 		reviewed, reviewErr := verify.ReviewCoverage(doc.Spec, doc.Protection.Plan, checkSetDigest(doc), *options.GoalReview)
 		if reviewErr != nil {
@@ -617,7 +687,8 @@ func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
 	if remote {
 		providers = []string{doc.Runtime.Provider}
 	}
-	return []policy.Policy{{DeniedPaths: taskSensitivePaths(doc), RemoteInference: remote, Providers: providers, SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: effects, Paths: []string{"**"}}}
+	layers := []policy.Policy{{DeniedPaths: taskSensitivePaths(doc), RemoteInference: remote, Providers: providers, SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: effects, Paths: []string{"**"}}}
+	return append(layers, operatorLayer(state, doc)...)
 }
 func (s *Session) stop(ctx context.Context, state c.TaskState, doc Document, reason string, execution c.ExecutionState) (c.TaskState, error) {
 	doc.Blocker = reason
@@ -872,7 +943,9 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 			// time. Deadline loss remains UNKNOWN until an actual receipt exists.
 			deadline := started.Add(time.Duration(doc.Budget.MaxActiveMillis-initialActive) * time.Millisecond)
 			inferCtx, cancelInfer := context.WithDeadline(ctx, deadline)
-			result, callErr = client.Complete(inferCtx, request)
+			authorizedCtx, finishAuthority := guardOperatorContext(inferCtx, doc)
+			result, callErr = client.Complete(authorizedCtx, request)
+			finishAuthority()
 			cancelInfer()
 		}
 		doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()

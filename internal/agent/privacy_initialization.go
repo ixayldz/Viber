@@ -127,6 +127,58 @@ func openPendingPrivacy(authority PrivacyAuthority) (*os.Root, error) {
 	return root, nil
 }
 
+type privacyQuotaAnchor struct {
+	SchemaVersion    int    `json:"schema_version"`
+	AuthorityID      string `json:"authority_id"`
+	PhysicalRoot     string `json:"physical_root"`
+	LedgerID         string `json:"ledger_id"`
+	DatabaseIdentity string `json:"database_identity"`
+}
+
+func validatePrivacyQuotaAnchor(root *os.Root, genesis []byte) error {
+	raw, err := fileguard.ReadRegular(root, "physical-quota.anchor", 4096)
+	if err != nil {
+		return err
+	}
+	var authority PrivacyAuthority
+	var anchor privacyQuotaAnchor
+	if c.DecodeStrict(genesis, &authority) != nil || authority.validate() != nil ||
+		c.DecodeStrict(raw, &anchor) != nil || anchor.SchemaVersion != 1 ||
+		anchor.AuthorityID != authority.ID || anchor.PhysicalRoot != authority.PhysicalRoot ||
+		!privacyLowerHex(anchor.LedgerID, 32) || !c.ValidDigest(anchor.DatabaseIdentity) {
+		return c.Fail(c.StoreIntegrityError, "physical quota anchor binding is invalid")
+	}
+	canonical, err := c.CanonicalV1(anchor)
+	if err != nil || string(canonical) != string(raw) {
+		return c.Fail(c.StoreIntegrityError, "physical quota anchor is not canonical")
+	}
+	database, err := root.Open("physical-quota.sqlite")
+	if err != nil {
+		return c.Fail(c.StaleAuthority, "physical quota anchor has no database")
+	}
+	identity, identityErr := fileguard.FileIdentity(database)
+	closeErr := database.Close()
+	if err = errors.Join(identityErr, closeErr); err != nil {
+		return err
+	}
+	if identity != anchor.DatabaseIdentity {
+		return c.Fail(c.StaleAuthority, "physical quota database identity differs from its anchor")
+	}
+	return nil
+}
+
+func privacyLowerHex(value string, size int) bool {
+	if len(value) != size {
+		return false
+	}
+	for _, r := range value {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
+}
+
 // Only allocation-owned initialization bytes may exist before binding. Audit
 // the whole bounded inventory before removing an interrupted genesis temp.
 func preparePendingPrivacy(root *os.Root, genesis []byte) error {
@@ -146,6 +198,7 @@ func preparePendingPrivacy(root *os.Root, genesis []byte) error {
 		return c.Fail(c.BudgetLimitReached, "pending privacy inventory exceeds initialization bound")
 	}
 	temps := map[string][]byte{}
+	quotaAnchor, quotaDatabase := false, false
 	for _, entry := range entries {
 		name := entry.Name()
 		switch name {
@@ -179,6 +232,20 @@ func preparePendingPrivacy(root *os.Root, genesis []byte) error {
 			if err = fileguard.RegularPath(root, name, false); err != nil {
 				return err
 			}
+		case "physical-quota.anchor":
+			if err = validatePrivacyQuotaAnchor(root, genesis); err != nil {
+				return err
+			}
+			quotaAnchor = true
+		case "physical-quota.sqlite":
+			if err = fileguard.RegularPath(root, name, false); err != nil {
+				return err
+			}
+			quotaDatabase = true
+		case "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock":
+			if err = fileguard.RegularPath(root, name, false); err != nil {
+				return err
+			}
 		default:
 			if !strings.HasPrefix(name, ".publish-") || !safeCopyPath("SUPPORT", name) {
 				return c.Fail(c.StoreIntegrityError, "foreign file in pending privacy allocation")
@@ -192,6 +259,9 @@ func preparePendingPrivacy(root *os.Root, genesis []byte) error {
 			}
 			temps[name] = raw
 		}
+	}
+	if quotaAnchor && !quotaDatabase {
+		return c.Fail(c.StaleAuthority, "physical quota anchor has no database")
 	}
 	for name, raw := range temps {
 		if _, err = fileguard.RemoveBound(root, name, c.HashBytes(raw), int64(len(raw)), 4096); err != nil {

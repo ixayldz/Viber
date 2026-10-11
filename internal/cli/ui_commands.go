@@ -35,6 +35,8 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 		id = value.CommandID
 	case agent.RetentionOptions:
 		id = value.CommandID
+	case agent.GoalCommand:
+		id = value.CommandID
 	}
 	task := u.task
 	if action == "retention-run" || action == "privacy-capacity" || action == "privacy-reserve-replenish" || action == "privacy-operation-retire" {
@@ -190,7 +192,7 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	case "/quit", "/detach":
 		return "UI detached; background task continues.", true, nil
 	case "/help":
-		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; queue add does not change scope. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Entire shared backups can be removed, including other tasks' restore paths; advancing the system UTC clock can trigger expiry early. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
+		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /goal [add CHILD_ID TEXT|cancel ID|activate ID|recover ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; /queue adds future steering on this task, while /goal schedules a separate child task from the captured source snapshot. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Entire shared backups can be removed, including other tasks' restore paths; advancing the system UTC clock can trigger expiry early. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")
@@ -322,6 +324,8 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		return string(result), false, err
 	case "/queue":
 		return u.queue(ctx, arg)
+	case "/goal":
+		return u.goal(ctx, arg)
 	case "/read":
 		matches, err := u.call(ctx, "source-list", agent.Observation{Kind: "source-list", Query: arg, Limit: 64})
 		if err != nil {
@@ -391,4 +395,43 @@ func (u uiSession) queue(ctx context.Context, arg string) (string, bool, error) 
 	}
 	raw, err := u.call(ctx, "queue-control", command)
 	return "Queue command " + id + ": " + string(raw), false, err
+}
+
+func (u uiSession) goal(ctx context.Context, arg string) (string, bool, error) {
+	if arg == "" {
+		raw, err := u.call(ctx, "goal-list", nil)
+		return string(raw), false, err
+	}
+	action, value, _ := strings.Cut(arg, " ")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false, c.Fail(c.InvalidArgument, "goal action needs a child ID, goal ID, or text")
+	}
+	id, err := resolveCommandID("")
+	if err != nil {
+		return "", false, err
+	}
+	command := agent.GoalCommand{CommandID: id, TaskID: u.task, Action: action}
+	switch action {
+	case "add":
+		child, text, found := strings.Cut(value, " ")
+		text = strings.TrimSpace(text)
+		if !found || child == "" || text == "" {
+			return "", false, c.Fail(c.InvalidArgument, "goal add syntax is /goal add CHILD_ID TEXT")
+		}
+		command.ChildTaskID = child
+		command.Text, err = u.bindMentions(ctx, text)
+		if err != nil {
+			return "", false, err
+		}
+	case "cancel", "activate", "recover":
+		if strings.ContainsAny(value, " \t\r\n") {
+			return "", false, c.Fail(c.InvalidArgument, "goal action accepts one goal ID")
+		}
+		command.GoalID = value
+	default:
+		return "", false, c.Fail(c.InvalidArgument, "goal action must add/cancel/activate/recover")
+	}
+	raw, err := u.call(ctx, "goal-control", command)
+	return "Goal command " + id + ": " + string(raw), false, err
 }

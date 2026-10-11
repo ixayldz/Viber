@@ -343,7 +343,14 @@ func TestEvaluationPrivacyForeignReportAndOwnerReplacementFailClosed(t *testing.
 	}
 	original, err = OpenExisting(ctx, original.directory)
 	if err != nil {
-		t.Fatal(err)
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+			t.Fatal(err)
+		}
+		if _, statErr := os.Stat(filepath.Join(bundle, "owned-original", "state.sqlite")); statErr != nil {
+			t.Fatal("replacement owner admission removed original owned journal", statErr)
+		}
+		return // Admission may reject the replaced scope before deletion preview.
 	}
 	if _, err = original.DeletionPreview(ctx, options.TaskID); err == nil {
 		t.Fatal("replacement evaluator owner supplied deletion authority")

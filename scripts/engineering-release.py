@@ -20,7 +20,7 @@ spec = importlib.util.spec_from_file_location("portable", Path(__file__).with_na
 portable = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(portable)
 REPO = "ixayldz/Viber"
-JOBS = {"rootless", "docker", "foundation", "attest-packages"} | {f"test ({os}-latest)" for os in ("ubuntu", "windows", "macos")} | {f"vault ({os}-latest)" for os in ("ubuntu", "macos")} | {f"packages ({os}-latest)" for os in ("ubuntu", "windows", "macos")}
+JOBS = {"rootless", "docker", "foundation", "attest-packages", "attest-installation"} | {f"test ({os}-latest)" for os in ("ubuntu", "windows", "macos")} | {f"vault ({os}-latest)" for os in ("ubuntu", "macos")} | {f"packages ({os}-latest)" for os in ("ubuntu", "windows", "macos")} | {f"installed-packages ({os}-latest)" for os in ("ubuntu", "windows", "macos")}
 PLATFORMS = {"windows-latest": "windows/amd64", "ubuntu-latest": "linux/amd64", "macos-latest": "darwin/arm64"}
 
 
@@ -117,7 +117,7 @@ def validate_run(run, jobs, revision):
             or run.get("head_repository", {}).get("full_name") != REPO or run.get("pull_requests")):
         portable.fail("exact native main-push CI acceptance required")
     if len(jobs) != len(JOBS) or {job.get("name") for job in jobs} != JOBS or any(job.get("status") != "completed" or job.get("conclusion") != "success" for job in jobs):
-        portable.fail("all twelve native/provenance jobs must succeed; skipped jobs deny publication")
+        portable.fail("all sixteen native/installer/provenance jobs must succeed; skipped jobs deny publication")
 
 
 def accepted_run(revision):
@@ -248,11 +248,35 @@ def publish(args):
             portable.fail("distribution/native archive proof mismatch")
         install = descriptor.get("archive_install_smoke")
         validate_install(install, PLATFORMS[os])
+        # Managed installation is a later, separately attested native job.
+        installation_name = f"installation-{os}-{revision}"
+        installation_artifacts = [a for a in artifacts if a.get("name") == installation_name]
+        if (len(installation_artifacts) != 1 or installation_artifacts[0].get("expired") is not False
+                or not 0 < installation_artifacts[0].get("size_in_bytes", 0) <= 64 << 10):
+            portable.fail("missing or invalid managed installation acceptance artifact")
+        installation_folder = output / (os + "-installation")
+        gh("run", "download", str(run["id"]), "-R", REPO, "--name", installation_name, "--dir", str(installation_folder))
+        if set(p.name for p in installation_folder.iterdir()) != {"installation.json"}:
+            portable.fail("unexpected managed installation proof members")
+        installation_raw = portable.read_regular(installation_folder, "installation.json", 64 << 10)
+        provenance(installation_folder / "installation.json", revision)
+        managed = portable.strict_json(installation_raw)
+        if (managed.get("schema_version") != 1 or managed.get("source_revision") != revision
+                or managed.get("platform") != PLATFORMS[os] or managed.get("status") != "PASS"
+                or managed.get("archive_sha256") != digest or managed.get("actual_oidc_verification") is not True
+                or managed.get("external_store_preserved") is not True or managed.get("owned_uninstall") is not True
+                or managed.get("release_ready") is not False
+                or managed.get("installed_first_task") != "OFFLINE_FIXTURE_UNVERIFIED_EXIT_2"
+                or managed.get("scope") != "EXACT_SOURCE_INSTALL_REINSTALL_SAME_REVISION_ROLLBACK_UNINSTALL; NO_CROSS_VERSION_UPGRADE_OR_SIGNING_CLAIM"):
+            portable.fail("managed installation source/archive/scope binding mismatch")
+        installation_asset = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-installation.json"
+        (assets / installation_asset).write_bytes(installation_raw)
         proof_name = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-distribution.json"
         (assets / proof_name).write_bytes(descriptor_raw)
         (assets / archive_name).write_bytes(raw)
         inventory.append({"path": archive_name, "sha256": digest, "bytes": len(raw), "platform": PLATFORMS[os], "native_smoke": native, "archive_install_smoke": install,
-                          "attested_distribution": {"path": proof_name, "sha256": hashlib.sha256(descriptor_raw).hexdigest(), "bytes": len(descriptor_raw)}})
+                          "attested_distribution": {"path": proof_name, "sha256": hashlib.sha256(descriptor_raw).hexdigest(), "bytes": len(descriptor_raw)},
+                          "attested_installation": {"path": installation_asset, "sha256": hashlib.sha256(installation_raw).hexdigest(), "bytes": len(installation_raw)}})
     manifest = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": revision, "tag": args.tag, "native_ci_run": run["id"], "provenance_verified": True, "platform_certificate_signing": "NOT_ACCEPTED", "assets": inventory}
     (assets / "release.json").write_bytes(portable.canonical(manifest))
     sums = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(assets.iterdir()))
@@ -260,13 +284,15 @@ def publish(args):
     notes = output / "notes.md"
     notes.write_text(f"""Engineering snapshot — not a production/stable release. PRD A–D release gates remain CLOSED; doctor.release_ready=false.
 
-Exact source: `{revision}`. All twelve [native CI/provenance jobs]({run['html_url']}) succeeded. Windows amd64, Linux amd64 and macOS arm64 packages contain the binary, MIT/dependency licenses, CycloneDX SBOM and offline first-task fixtures. No Go compiler or model API key is needed for the sample. The sample deliberately returns exit2/UNVERIFIED and preserves source files.
+Exact source: `{revision}`. All sixteen [native CI/installer/provenance jobs]({run['html_url']}) succeeded. Windows amd64, Linux amd64 and macOS arm64 packages contain the binary, MIT/dependency licenses, CycloneDX SBOM and offline first-task fixtures. No Go compiler or model API key is needed for the sample. The sample deliberately returns exit2/UNVERIFIED and preserves source files.
 
 Verify the downloaded archive before extracting/executing:
 ```sh
 gh attestation verify ARCHIVE -R {REPO} --signer-workflow {REPO}/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest {revision}
 ```
 The platform's `*-distribution.json` asset is also attested with the same command. It binds archive bytes to native fresh-archive first-task/manual-uninstall acceptance: PATH empty, Git undiscovered, source preserved and external task store preserved. This scope does not measure automated updates, rollback or certificate signing.
+
+The separately attested `*-installation.json` records native managed installation with actual OIDC verification, first offline task, same-revision reinstall/rollback and owned uninstall. Cross-version upgrades and platform certificate signing are outside this proof.
 
 Build provenance is not Windows Authenticode/macOS notarization or coding quality. Checksums alone do not authenticate a publisher. [Installation/update/rollback/uninstall](https://github.com/{REPO}/blob/{revision}/docs/INSTALL.md) · [Capabilities and open PRD acceptance](https://github.com/{REPO}/blob/{revision}/docs/CAPABILITIES.md).
 

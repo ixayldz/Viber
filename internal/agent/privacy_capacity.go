@@ -10,6 +10,7 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/diskguard"
+	"github.com/ixayldz/Viber/internal/fileguard"
 )
 
 const privacyRecordLimit = 2048
@@ -102,6 +103,90 @@ func privacyMetadataBytes(root *os.Root) (int64, error) {
 		}
 		total += entry.Size()
 	}
+	checkpointBytes, err := privacyCheckpointBytes(root)
+	if err != nil {
+		return 0, err
+	}
+	if checkpointBytes > privacyMetadataLimit-total {
+		return 0, c.Fail(c.BudgetLimitReached, "privacy checkpoint allocation exceeds metadata bound")
+	}
+	total += checkpointBytes
+	return total, nil
+}
+
+func privacyCheckpointBytes(root *os.Root) (int64, error) {
+	info, err := root.Lstat(privacyCheckpointDirectory)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, c.Fail(c.StoreIntegrityError, "privacy checkpoint root is not a directory")
+	}
+	directory, err := root.Open(privacyCheckpointDirectory)
+	if err != nil {
+		return 0, err
+	}
+	names, err := directory.Readdirnames(8)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	err = errors.Join(err, directory.Close())
+	if err != nil {
+		return 0, err
+	}
+	if len(names) > 7 {
+		return 0, c.Fail(c.BudgetLimitReached, "privacy checkpoint root inventory exceeds its bound")
+	}
+	allowed := map[string]bool{"current.json": true, "current.next": true, "intent.json": true, "data": true, "anchors": true, "retired": true}
+	var total int64
+	for _, name := range names {
+		if !allowed[name] {
+			return 0, c.Fail(c.StoreIntegrityError, "foreign privacy checkpoint member")
+		}
+		if name == "data" || name == "anchors" || name == "retired" {
+			child, openErr := root.Open(filepath.Join(privacyCheckpointDirectory, name))
+			if openErr != nil {
+				return 0, openErr
+			}
+			entries, readErr := child.Readdir(int(privacyCheckpointAnchorLimit + 1))
+			if errors.Is(readErr, io.EOF) {
+				readErr = nil
+			}
+			readErr = errors.Join(readErr, child.Close())
+			if readErr != nil {
+				return 0, readErr
+			}
+			if int64(len(entries)) > privacyCheckpointAnchorLimit {
+				return 0, c.Fail(c.BudgetLimitReached, "privacy checkpoint object quota exceeded")
+			}
+			for _, entry := range entries {
+				base := strings.TrimSuffix(entry.Name(), ".json")
+				if !strings.HasSuffix(entry.Name(), ".json") || !c.ValidDigest(base) || !entry.Mode().IsRegular() || entry.Size() < 1 || entry.Size() > privacyCheckpointFileLimit-total {
+					return 0, c.Fail(c.StoreIntegrityError, "invalid privacy checkpoint object inventory")
+				}
+				if _, readErr = fileguard.ReadRegular(root, filepath.Join(privacyCheckpointDirectory, name, entry.Name()), privacyCheckpointFileLimit); readErr != nil {
+					return 0, readErr
+				}
+				total += entry.Size()
+			}
+			continue
+		}
+		limit := int64(1 << 20)
+		if name == "current.json" || name == "current.next" {
+			limit = 4096
+		}
+		raw, readErr := fileguard.ReadRegular(root, filepath.Join(privacyCheckpointDirectory, name), limit)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil || int64(len(raw)) > privacyMetadataLimit-total {
+			return 0, errors.Join(readErr, c.Fail(c.BudgetLimitReached, "privacy checkpoint metadata exceeds its bound"))
+		}
+		total += int64(len(raw))
+	}
 	return total, nil
 }
 
@@ -125,6 +210,7 @@ type PrivacyMetadataStatus struct {
 	WorkCatalogLimit     int      `json:"work_owner_catalog_limit"`
 	SchemaVersion        int      `json:"schema_version"`
 	Records              int64    `json:"journal_records"`
+	Sequence             int64    `json:"journal_sequence"`
 	RecordLimit          int64    `json:"record_limit"`
 	WorkRecordLimit      int64    `json:"work_record_limit"`
 	JournalBytes         int64    `json:"journal_bytes"`
@@ -159,7 +245,7 @@ func (s *Session) PrivacyMetadataCapacity(ctx context.Context) (*PrivacyMetadata
 	if err != nil {
 		return nil, err
 	}
-	result := &PrivacyMetadataStatus{SchemaVersion: 1, Records: view.Sequence, RecordLimit: privacyRecordLimit, WorkRecordLimit: privacyWorkRecordLimit, JournalBytes: bytes, ByteLimit: privacyMetadataLimit, WorkByteLimit: privacyWorkMetadataLimit, TargetReserveBytes: diskguard.ReserveBytes, LowWaterBytes: diskguard.LowWaterBytes, WorkProbeBytes: 4096, ObservationOnly: true}
+	result := &PrivacyMetadataStatus{SchemaVersion: 1, Records: view.RecordCount, Sequence: view.Sequence, RecordLimit: privacyRecordLimit, WorkRecordLimit: privacyWorkRecordLimit, JournalBytes: bytes, ByteLimit: privacyMetadataLimit, WorkByteLimit: privacyWorkMetadataLimit, TargetReserveBytes: diskguard.ReserveBytes, LowWaterBytes: diskguard.LowWaterBytes, WorkProbeBytes: 4096, ObservationOnly: true}
 	result.CatalogEntries, err = admitPrivacyCatalog(root)
 	if err != nil {
 		return nil, err

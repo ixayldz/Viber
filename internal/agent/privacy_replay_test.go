@@ -97,7 +97,7 @@ func TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision(t *testing.T) {
 			root, authority, _ := privacyRegistryFixture(t)
 			view := privacyView{}
 			first := privacyControlFixtureRecord(t, view)
-			first.Command.Plan.Stores = []DeletionStore{{Scope: privacyScope{authority.ID, root.Name(), authority.PhysicalRoot}, TaskSequence: 1, DocumentDigest: c.HashBytes(nil)}}
+			first.Command.Plan.Stores = []DeletionStore{{Scope: privacyScope{InstanceID: authority.ID, Directory: root.Name(), PhysicalRoot: authority.PhysicalRoot}, TaskSequence: 1, DocumentDigest: c.HashBytes(nil)}}
 			first.Command.Plan.ObjectsDigest = deletionObjectsDigest(first.Command.Plan)
 			first.Command.Plan.Digest = deletionDigest(first.Command.Plan)
 			raw := advancePrivacyFixture(t, &view, first)

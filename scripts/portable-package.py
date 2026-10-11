@@ -367,7 +367,7 @@ def build(args):
         binary = stage / binary_name
         binary.chmod(0o755)
         native = smoke(binary, stage, target)
-        package = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": args.revision, "source_archive_sha256": proof["source_archive_sha256"], "platform": target, "build_go_version": proof["go_version"], "native_smoke": native, "files": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in sorted(content.items())]}
+        package = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": args.revision, "source_archive_sha256": proof["source_archive_sha256"], "platform": target, "build_go_version": proof["go_version"], "store_format_min": 2, "store_format_max": 2, "reducer_version": 1, "native_smoke": native, "files": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in sorted(content.items())]}
         content["package.json"] = canonical(package)
         name = f"viber-{args.revision[:12]}-{target.replace('/', '-')}"
         archive = output / (name + (".zip" if target.startswith("windows/") else ".tar.gz"))

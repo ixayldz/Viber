@@ -21,6 +21,7 @@ const Version = "0.9.0-dev"
 const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
+  viber package install|status|rollback|deactivate|uninstall|run --prefix PATH [--archive FILE --source-sha FULL_SHA --gh ABSOLUTE_GH] [--revision SHA] [--store PATH] [--json] [-- ARGS...]
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
   viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--stream] [--model-timeout-ms N] [--json]
   viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
@@ -29,6 +30,8 @@ Usage:
   viber status|diff|pause|cancel|resume TASK --store PATH [--json]
   viber check-config --runtime FILE [--plan FILE] [--json]
   viber check-prepare --file RECIPE --output FRESH_FILE
+  viber check-discover --root PATH [--json]
+  viber repo-history --root PATH --allow-local-history --cutoff UTC [--json]
   viber context-why|checks|verification|report TASK --store PATH [--json]
   viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]
@@ -48,6 +51,8 @@ Usage:
   viber model-switch TASK --store PATH --command-file FILE [--json]
   viber reconcile-model-risk TASK --store PATH --command-file FILE [--json]
   viber eval-candidate TASK --store PATH --recipe BOUND_HIDDEN_FILE --output NEW_PATH [--json]
+  viber eval-register --store PATH --protocol FILE --dataset DIR --assets FILE --output NEW_PATH [--json]
+  viber eval-registration-inspect --registration DIR [--json]
   viber eval-inspect --bundle PATH [--json]
   viber eval-report-inspect --bundle PATH [--json]
   viber eval-report --protocol FILE --observations JSONL --output NEW_PATH [--json]
@@ -61,12 +66,17 @@ Usage:
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
   viber ui TASK --store PATH
   viber queue TASK --store PATH [--command-file FILE] [--json]
+  viber goal-queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
   viber privacy-capacity --store PATH [--replenish-control-reserve | --retire-operation-leases] [--json]
+  viber privacy-checkpoint --store PATH [--json]
   viber retention [TASK] --store PATH [--keep | --expires-at UTC --acknowledge CONSENT] [--revision N --command-id ID] [--run-due] [--json]
   viber export TASK --store PATH --output NEW_PATH [--json]
+  viber training-export TASK --store PATH --output NEW_PATH --consent FILE --samples FILE [--json]
   viber delivery-preview TASK --store PATH --output NEW_PATH [--json]
   viber delivery-reverify TASK --store PATH --command-file FILE [--json]
+  viber apply TASK --store PATH --output NEW_PATH [--json]
+  viber restore TASK --store PATH [--checkpoint ID] [--json]
   viber detach TASK --store PATH [--command-id ID] [--json]
   viber attach TASK --store PATH [--after TASK_SEQ] [--limit N] [--follow] [--poll-ms N] [--json]
   viber serve-background|owner-status|owner-stop --store PATH [--json]
@@ -141,6 +151,26 @@ func Execute(args []string, out, errout io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "training-export":
+		return runTrainingExport(args[1:], out, errout)
+	case "package":
+		return runPackage(args[1:], out, errout)
+	case "privacy-checkpoint":
+		return runPrivacyCheckpoint(args[1:], out, errout)
+	case "eval-register":
+		return runEvaluationRegister(args[1:], out, errout)
+	case "eval-registration-inspect":
+		return runEvaluationRegistrationInspect(args[1:], out, errout)
+	case "check-discover":
+		return runCheckDiscover(args[1:], out, errout)
+	case "repo-history":
+		return runRepoHistory(args[1:], out, errout)
+	case "goal-queue":
+		return runGoalQueue(args[1:], out, errout)
+	case "apply", "delivery-apply":
+		return runDeliveryApply(args[1:], out, errout)
+	case "restore", "delivery-restore":
+		return runDeliveryRestore(args[1:], out, errout)
 	case "queue":
 		return runQueue(args[1:], out, errout)
 	case "ui":
@@ -221,19 +251,6 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runSteering(args[0], args[1:], out, errout)
 	case "delete", "delete-preview":
 		return runPrivacy(args[0], args[1:], out, errout)
-	case "apply", "restore":
-		jsonMode := false
-		for _, arg := range args {
-			if arg == "--json" {
-				jsonMode = true
-			}
-		}
-		err := c.Fail(c.UnsupportedCapability, "runtime command requires unfinished sandbox/provider/IPC contracts; see implementation plan")
-		report(out, errout, err, jsonMode)
-		if args[0] == "run" || args[0] == "resume" {
-			return 3
-		}
-		return 4
 	default:
 		return report(out, errout, c.Fail(c.InvalidArgument, "unknown command; use viber --help"), false)
 	}

@@ -63,7 +63,7 @@ func sealPreview(preview *MergePreview) error {
 // never returns a partially merged capture. Even READY is an unverified
 // candidate/patch proposal, not admission or an auto-apply guarantee.
 func Preview(ctx context.Context, baseline, candidate, current workspace.Capture) (MergePreview, workspace.Capture, error) {
-	result := MergePreview{SchemaVersion: 1, Algorithm: MergeVersion, Baseline: baseline.Snapshot.Digest, Candidate: candidate.Snapshot.Digest, Target: current.Snapshot.Digest, Status: "READY", Decisions: []MergeDecision{}, Verification: "UNVERIFIED", RequiresReverification: true, Backend: "UNSUPPORTED_STRONG_EXCLUSIVITY; CANDIDATE_PATCH_ONLY"}
+	result := MergePreview{SchemaVersion: 1, Algorithm: MergeVersion, Baseline: baseline.Snapshot.Digest, Candidate: candidate.Snapshot.Digest, Target: current.Snapshot.Digest, Status: "READY", Decisions: []MergeDecision{}, Verification: "UNVERIFIED", RequiresReverification: true, Backend: LiveBackendUnsupported}
 	if err := ctx.Err(); err != nil {
 		return result, workspace.Capture{}, err
 	}

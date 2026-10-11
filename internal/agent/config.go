@@ -28,7 +28,7 @@ func validateTaskConfig(doc Document) error {
 		return err
 	}
 	if doc.Runtime != nil {
-		if err := doc.Config.AdmitProvider(doc.Runtime.Provider, doc.Runtime.Provider != "ollama"); err != nil {
+		if err := doc.Config.AdmitRetainedProvider(doc.Runtime.Provider, doc.Runtime.Provider != "ollama"); err != nil {
 			return c.Fail(c.StoreIntegrityError, "runtime exceeds retained config restrictions")
 		}
 	}

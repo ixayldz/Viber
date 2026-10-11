@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,14 +79,19 @@ type privacyRecord struct {
 	Retention     *privacyRetentionRecord `json:"retention,omitempty"`
 }
 type privacyView struct {
-	Sequence          int64
-	Tail              string
-	Watermark         int64
-	Copies            []ManagedCopy
-	Deletions         map[string]DeletionCommand
-	Attempts          []privacyAttempt
-	Retentions        map[string]privacyRetentionRecord
-	RetentionCommands map[string]privacyRetentionRecord
+	Sequence           int64
+	RecordCount        int64
+	Tail               string
+	Watermark          int64
+	Copies             []ManagedCopy
+	CopySequences      map[string]int64
+	Deletions          map[string]DeletionCommand
+	DeletionSequences  map[string]int64
+	Attempts           []privacyAttempt
+	AttemptSequences   map[string]int64
+	Retentions         map[string]privacyRetentionRecord
+	RetentionSequences map[string]int64
+	RetentionCommands  map[string]privacyRetentionRecord
 }
 
 func (authority PrivacyAuthority) validate() error {
@@ -150,7 +156,18 @@ func privacyLock(ctx context.Context, root *os.Root) (*os.File, error) {
 	}
 }
 func readPrivacy(root *os.Root) (privacyView, error) {
-	view := privacyView{Deletions: map[string]DeletionCommand{}, Copies: []ManagedCopy{}, Retentions: map[string]privacyRetentionRecord{}, RetentionCommands: map[string]privacyRetentionRecord{}}
+	return readPrivacyMode(root, false)
+}
+
+func readPrivacyCheckpointRecoveryView(root *os.Root) (privacyView, error) {
+	return readPrivacyMode(root, true)
+}
+
+func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error) {
+	view, checkpoint, err := readPrivacyCheckpointBaseMode(root, checkpointRecovery)
+	if err != nil {
+		return view, err
+	}
 	dir, err := root.Open("records")
 	if err != nil {
 		return view, err
@@ -174,11 +191,72 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 	// authority digest can be reused by a later read/reopen. Schema bounds cap
 	// these indexes (2048 records; at most 128 restored scopes per intent).
 	copies := map[string]int{}
+	for index, copy := range view.Copies {
+		copies[copy.Directory] = index
+	}
 	attempts := map[struct{ Root, Task string }]bool{}
+	for _, attempt := range view.Attempts {
+		attempts[struct{ Root, Task string }{attempt.Scope.PhysicalRoot, attempt.ChildTask}] = true
+	}
 	reservedDeletionIDs := map[[32]byte]bool{}
+	for _, command := range view.Deletions {
+		for _, id := range deletionCommandIDs(command) {
+			key := sha256.Sum256([]byte(id))
+			if reservedDeletionIDs[key] {
+				return view, c.Fail(c.StoreIntegrityError, "checkpoint deletion namespace collision")
+			}
+			reservedDeletionIDs[key] = true
+		}
+	}
 	var retentionGenesis []byte
 	retentionAuthority := ""
+	if checkpoint != nil {
+		retentionGenesis, err = fileguard.ReadRegular(root, "authority.json", 4096)
+		if err != nil {
+			return view, err
+		}
+		var authority PrivacyAuthority
+		if c.DecodeStrict(retentionGenesis, &authority) != nil || authority.validate() != nil {
+			return view, c.Fail(c.StoreIntegrityError, "checkpoint authority unavailable or invalid")
+		}
+		retentionAuthority, _ = c.Digest(authority)
+	}
+	shadow := map[int64]privacyCheckpointSource{}
+	var retirement *privacyCheckpointRetirement
+	if checkpoint != nil {
+		for _, source := range checkpoint.SourceRecords {
+			shadow[source.Sequence] = source
+		}
+		anchor, anchorDigest, anchorErr := currentPrivacyCheckpointAnchor(root)
+		if anchorErr != nil || anchor == nil {
+			return view, c.Fail(c.StoreIntegrityError, "checkpoint source inventory has no current anchor")
+		}
+		retirement, _, err = readPrivacyCheckpointRetirement(root, *anchor, anchorDigest, *checkpoint)
+		if err != nil {
+			return view, err
+		}
+	}
 	for _, name := range names {
+		sequence, nameErr := strconv.ParseInt(strings.TrimSuffix(name, ".json"), 10, 64)
+		if nameErr == nil && checkpoint != nil && sequence >= 1 && sequence <= checkpoint.Sequence {
+			if sequence <= checkpoint.BaseSequence {
+				return view, c.Fail(c.StoreIntegrityError, "retired privacy journal record reappeared before the current source range")
+			}
+			source, found := shadow[sequence]
+			if !found || name != fmt.Sprintf("%010d.json", sequence) {
+				return view, c.Fail(c.StoreIntegrityError, "unbound privacy checkpoint shadow record")
+			}
+			raw, readErr := fileguard.ReadRegular(root, filepath.Join("records", name), 16<<20)
+			if readErr != nil || int64(len(raw)) != source.Size || c.HashBytes(raw) != source.Digest {
+				return view, c.Fail(c.StoreIntegrityError, "privacy checkpoint source record changed")
+			}
+			total += int64(len(raw))
+			if total > privacyMetadataLimit {
+				return view, c.Fail(c.BudgetLimitReached, "privacy metadata quota exceeded")
+			}
+			delete(shadow, sequence)
+			continue
+		}
 		if name != fmt.Sprintf("%010d.json", view.Sequence+1) {
 			return view, c.Fail(c.StoreIntegrityError, "privacy journal gap or foreign record")
 		}
@@ -209,6 +287,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				copies[record.Copy.Directory] = len(view.Copies)
 				view.Copies = append(view.Copies, *record.Copy)
 			}
+			view.CopySequences[record.Copy.Directory] = record.Sequence
 		case "DELETE_INTENT":
 			if record.Command == nil || record.Copy != nil || record.Attempt != nil || record.Retention != nil || validateDeletionCommand(*record.Command) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "privacy intent invalid")
@@ -237,6 +316,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			}
 			view.Watermark++
 			view.Deletions[command.Plan.TaskID] = command
+			view.DeletionSequences[command.Plan.TaskID] = record.Sequence
 		case "ATTEMPT_LINEAGE":
 			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Retention != nil || record.Attempt.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid durable attempt lineage")
@@ -253,6 +333,7 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 				return view, c.Fail(c.StoreIntegrityError, "attempt was allocated after child deletion")
 			}
 			view.Attempts = append(view.Attempts, *record.Attempt)
+			view.AttemptSequences[privacyAttemptKey(*record.Attempt)] = record.Sequence
 		case "RETENTION_POLICY":
 			if record.Retention == nil || record.Command != nil || record.Copy != nil || record.Attempt != nil || record.Retention.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid retention record")
@@ -281,11 +362,16 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			}
 			view.Retentions[retention.Policy.TaskID] = retention
 			view.RetentionCommands[retention.CommandID] = retention
+			view.RetentionSequences[retention.CommandID] = record.Sequence
 		default:
 			return view, c.Fail(c.StoreIntegrityError, "unknown privacy journal record")
 		}
 		view.Sequence = record.Sequence
 		view.Tail = c.HashBytes(raw)
+		view.RecordCount++
+	}
+	if len(shadow) != 0 && retirement == nil {
+		return view, c.Fail(c.StoreIntegrityError, "privacy checkpoint source inventory is incomplete")
 	}
 	if retentionGenesis != nil {
 		current, err := fileguard.ReadRegular(root, "authority.json", 4096)
@@ -293,12 +379,25 @@ func readPrivacy(root *os.Root) (privacyView, error) {
 			return view, c.Fail(c.StoreIntegrityError, "retention authority changed during replay")
 		}
 	}
+	if !checkpointRecovery {
+		genesis, err := fileguard.ReadRegular(root, "authority.json", 4096)
+		var authority PrivacyAuthority
+		if err != nil || c.DecodeStrict(genesis, &authority) != nil || authority.validate() != nil {
+			return view, c.Fail(c.StoreIntegrityError, "privacy checkpoint authority unavailable or invalid")
+		}
+		pinCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pinErr := validateCurrentPrivacyPinsReadOnly(pinCtx, root, authority)
+		cancel()
+		if pinErr != nil {
+			return view, pinErr
+		}
+	}
 	return view, nil
 }
 func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error {
 	record.SchemaVersion, record.Sequence, record.Previous = 1, view.Sequence+1, view.Tail
-	if record.Sequence > 2048 {
-		return c.Fail(c.BudgetLimitReached, "privacy journal full")
+	if record.Sequence < 1 || record.Sequence > privacyCheckpointAnchorLimit*privacyRecordLimit {
+		return c.Fail(c.BudgetLimitReached, "privacy sequence lineage bound reached")
 	}
 	raw, err := c.CanonicalV1(record)
 	if err != nil {
@@ -314,7 +413,7 @@ func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error 
 		return err
 	}
 	control := record.Type == "DELETE_INTENT"
-	if err = privacyMetadataAdmission(view.Sequence, retained, int64(len(raw))*2, control); err != nil {
+	if err = privacyMetadataAdmission(view.RecordCount, retained, int64(len(raw))*2, control); err != nil {
 		return err
 	}
 	if err = admitPrivacyDisk(root, int64(len(raw))*2, control); err != nil {
@@ -323,7 +422,7 @@ func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error 
 	return fileguard.Publish(root, filepath.Join("records", fmt.Sprintf("%010d.json", record.Sequence)), raw)
 }
 func validateManagedCopy(copy ManagedCopy) error {
-	if (copy.Kind != "BACKUP" && copy.Kind != "RESTORE_STAGE" && copy.Kind != "EXPORT" && copy.Kind != "DELIVERY_PREVIEW" && copy.Kind != "SUPPORT" && copy.Kind != "EVALUATION_REPORT") || !filepath.IsAbs(copy.Directory) || len(copy.Directory) > 2048 || !c.ValidDigest(copy.PhysicalRoot) || len(copy.Files) > backupMaxFiles+1 || len(copy.Tasks) > 4096 {
+	if (copy.Kind != "BACKUP" && copy.Kind != "RESTORE_STAGE" && copy.Kind != "EXPORT" && copy.Kind != "TRAINING_EXPORT" && copy.Kind != "DELIVERY_PREVIEW" && copy.Kind != "SUPPORT" && copy.Kind != "EVALUATION_REPORT") || !filepath.IsAbs(copy.Directory) || len(copy.Directory) > 2048 || !c.ValidDigest(copy.PhysicalRoot) || len(copy.Files) > backupMaxFiles+1 || len(copy.Tasks) > 4096 {
 		return c.Fail(c.StoreIntegrityError, "invalid managed copy")
 	}
 	if copy.Kind == "EVALUATION_REPORT" {
@@ -365,6 +464,9 @@ func safeCopyPath(kind, name string) bool {
 	}
 	if kind == "SUPPORT" {
 		return name == "support.json"
+	}
+	if kind == "TRAINING_EXPORT" {
+		return name == "samples.json" || name == "manifest.json"
 	}
 	if kind == "RESTORE_STAGE" {
 		if name == "state.sqlite" || name == "state.sqlite-wal" || name == "state.sqlite-shm" || name == "owner.lock" || name == "control.reserve" || name == runtimeInstanceFile || name == "artifacts/archive.lock" || name == store.MigrationIntentFile || name == store.MigrationCompleteFile {
@@ -410,6 +512,10 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		return err
 	}
 	defer lock.Close()
+	if err = recoverPrivacyCheckpoint(ctx, root, authority, s.Journal, s.instance, s.directory); err != nil {
+		root.Close()
+		return err
+	}
 	if _, err = readPrivacy(root); err != nil {
 		root.Close()
 		return err
@@ -427,7 +533,7 @@ func (s *Session) attachPrivacy(ctx context.Context) error {
 		return err
 	}
 	name := filepath.Join("owners", s.instance.ID+".lock")
-	scope := privacyScope{s.instance.ID, directory, s.instance.PhysicalRoot}
+	scope := privacyScope{InstanceID: s.instance.ID, Directory: directory, PhysicalRoot: s.instance.PhysicalRoot}
 	if _, err = admitPrivacyCatalog(root, name, filepath.Join("owners", scopeName(scope))); err != nil {
 		root.Close()
 		return err

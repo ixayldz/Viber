@@ -59,6 +59,8 @@ Her demo için yeni store seçin; store kaynak/paket dizininin dışında olmal�
 
 ## Güncelleme, geri dönüş ve kaldırma
 
+11 Ekim çalışma ağacında eklenen yönetilen installer/rollback/uninstall komutları ve exact kabul sınırı [anahtarsız operasyonlar kılavuzundadır](KEYLESS_OPERATIONS.md). Aşağıdaki manuel yol, halen yayımlanmış `f1b323d` paketi için geçerlidir; yeni komutların kabulünü bu eski paketten çıkarmaz.
+
 Yeni archive'ı aynı provenance kontrolünden geçirip farklı sürüm dizinine açın. Aktif çalışmayı pause/settle edin, ilgili store owner'ını kapatın ve yeni binary'ye geçin. Eski dizini saklayın. Aktif kritik task üzerinde otomatik kernel/schema update yapılmaz; bu dağıtım manuel sürüm seçer. Kurulum store'u taşımaz veya migrate etmez.
 
 Store formatı değişiyorsa [README migration/backup yönergelerini](../README.md) kullanın; validated backup ve explicit migration gerekir. Önceki binary'ye geri dönmek store/authority downgrade izni değildir. Incompatible format/policy read-only/fail-closed kalır; metadata'yı elle silerek devam etmeyin.

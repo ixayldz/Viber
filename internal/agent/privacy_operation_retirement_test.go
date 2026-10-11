@@ -344,7 +344,7 @@ func TestPrivacyOperationRetirementRejectsWrongAuthorityScopeAndHardlink(t *test
 				t.Fatal(err)
 			}
 			if variant == "scope" {
-				if err = publishPrivacyScope(root, privacyScope{id, s.directory, s.instance.PhysicalRoot}); err != nil {
+				if err = publishPrivacyScope(root, privacyScope{InstanceID: id, Directory: s.directory, PhysicalRoot: s.instance.PhysicalRoot}); err != nil {
 					t.Fatal(err)
 				}
 			}

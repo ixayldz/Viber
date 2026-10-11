@@ -55,31 +55,67 @@ type AttachmentPage struct {
 	Owner           *ipc.Info         `json:"owner,omitempty"`
 	History         store.HistoryPage `json:"history"`
 	State           c.TaskState       `json:"current_state"`
+	CurrentStateRef CurrentStateRef   `json:"current_state_ref"`
 	Active          bool              `json:"active"`
+	InvocationID    string            `json:"invocation_id,omitempty"`
 	EarliestTaskSeq int64             `json:"earliest_available_task_seq"`
 	ResyncRequired  bool              `json:"resync_required"`
 	EphemeralReplay string            `json:"ephemeral_stream_replay"`
 }
 
 func (o *Owner) AttachPage(ctx context.Context, task string, query Page) (AttachmentPage, error) {
-	result := AttachmentPage{SchemaVersion: 1, Owner: &o.Server.Info, EarliestTaskSeq: 1, EphemeralReplay: "NOT_RETAINED"}
-	page, err := o.Session.Journal.History(ctx, task, query.After, query.Limit)
+	result := AttachmentPage{SchemaVersion: 1, Owner: &o.Server.Info, EphemeralReplay: "NOT_RETAINED"}
+	if task == "" || query.After < 0 || query.Limit < 1 || query.Limit > 256 {
+		return result, c.Fail(c.InvalidArgument, "bounded attachment cursor required")
+	}
+	state, err := o.Session.State(ctx, task)
 	if err != nil {
 		return result, err
 	}
-	for i, record := range page.Records {
-		if record.Event.TaskSeq != query.After+int64(i)+1 {
-			return result, c.Fail(c.StoreIntegrityError, "retained attachment sequence is not contiguous")
+	result.State = state
+	first, err := o.Session.Journal.History(ctx, task, 0, 1)
+	if err != nil {
+		return result, err
+	}
+	if len(first.Records) > 0 {
+		result.EarliestTaskSeq = first.Records[0].Event.TaskSeq
+	} else {
+		result.EarliestTaskSeq = result.State.TaskSeq + 1
+	}
+	if query.After < result.EarliestTaskSeq-1 {
+		result.ResyncRequired = true
+		result.History = store.HistoryPage{SchemaVersion: 1, TaskID: task, After: query.After, Next: query.After, Head: first.Head, HasMore: true, Records: []store.JournalRecord{}}
+	} else {
+		page, pageErr := o.Session.Journal.History(ctx, task, query.After, query.Limit)
+		if pageErr != nil {
+			return result, pageErr
+		}
+		for i, record := range page.Records {
+			if record.Event.TaskSeq != query.After+int64(i)+1 {
+				return result, c.Fail(c.StoreIntegrityError, "retained attachment sequence is not contiguous")
+			}
+		}
+		result.History = page
+	}
+	o.mu.Lock()
+	result.Active = o.active != nil && o.active.task == task
+	if o.active != nil && o.active.task == task {
+		result.InvocationID = o.active.id
+	}
+	if stream := o.streams[task]; stream != nil {
+		result.EphemeralReplay = "AVAILABLE"
+		if result.InvocationID == "" {
+			result.InvocationID = stream.invocation
 		}
 	}
-	result.History = page
+	o.mu.Unlock()
+	// Work can publish between the initial state read and history capture.
+	// Refresh after the page so the advertised snapshot never precedes its head.
 	result.State, err = o.Session.State(ctx, task)
 	if err != nil {
 		return result, err
 	}
-	o.mu.Lock()
-	result.Active = o.active != nil && o.active.task == task
-	o.mu.Unlock()
+	result.CurrentStateRef = CurrentStateRef{TaskID: result.State.TaskID, TaskSeq: result.State.TaskSeq, DocumentDigest: result.State.DocumentDigest}
 	return result, nil
 }
 func (o *Owner) StopSupervisor(ctx context.Context) (SupervisorStatus, error) {

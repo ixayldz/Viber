@@ -32,6 +32,31 @@ type EvaluationSource struct {
 	Scope                 string             `json:"scope"`
 }
 
+// EvaluationAssignmentBinding is persisted in the separate evaluator task
+// before its first native dispatch. It proves which predeclared assignment
+// the owner was created for; it does not attest a model run or holdout.
+type EvaluationAssignmentBinding struct {
+	ProtocolDigest     string `json:"protocol_digest"`
+	RegistrationDigest string `json:"registration_digest"`
+	AssignmentID       string `json:"assignment_id"`
+	Arm                string `json:"arm"`
+	Task               string `json:"task"`
+	Repeat             int    `json:"repeat"`
+	SourceDigest       string `json:"source_digest"`
+	SourceTreeDigest   string `json:"source_tree_digest"`
+	RecipeDigest       string `json:"recipe_digest"`
+	RecipeAssetDigest  string `json:"recipe_asset_digest"`
+	BuildDigest        string `json:"build_digest"`
+	StartReceiptDigest string `json:"start_receipt_digest"`
+}
+
+func (binding EvaluationAssignmentBinding) Validate() error {
+	if !c.ValidDigest(binding.ProtocolDigest) || !c.ValidDigest(binding.RegistrationDigest) || !c.ValidDigest(binding.AssignmentID) || binding.Arm == "" || len(binding.Arm) > 96 || binding.Task == "" || len(binding.Task) > 96 || binding.Repeat < 1 || binding.Repeat > 10 || !c.ValidDigest(binding.SourceDigest) || !c.ValidDigest(binding.SourceTreeDigest) || !c.ValidDigest(binding.RecipeDigest) || !c.ValidDigest(binding.RecipeAssetDigest) || !c.ValidDigest(binding.BuildDigest) || !c.ValidDigest(binding.StartReceiptDigest) {
+		return c.Fail(c.InvalidArgument, "invalid frozen evaluation assignment binding")
+	}
+	return nil
+}
+
 func CapturedTreeDigest(capture workspace.Capture) (string, error) {
 	if err := workspace.VerifyCapture(capture); err != nil {
 		return "", err
@@ -52,6 +77,9 @@ func (s *Session) FreezeEvaluationSource(ctx context.Context, task string, prote
 	var binding EvaluationSource
 	state, doc, err := s.Load(ctx, task)
 	if err != nil {
+		return binding, "", err
+	}
+	if err = currentOperatorEffect(doc, "export"); err != nil {
 		return binding, "", err
 	}
 	if state.Execution != c.Terminated || state.InputBarrier || len(state.PendingInputIDs) != 0 || doc.Pending != nil || doc.UnknownEffect || unresolvedResource(state) != nil || !tokensQuiescent(state) {

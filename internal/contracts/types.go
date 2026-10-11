@@ -148,8 +148,27 @@ type PromptRef struct {
 	Digest string `json:"digest"`
 	Bytes  int64  `json:"bytes"`
 }
+
+// GoalSchedule is a durable request to create a separate child task. It is
+// intentionally distinct from PromptQueue: queued prompts become steering
+// input on this task, while goals create a separately scheduled task from the
+// immutable source state captured when the goal was queued.
+type GoalSchedule struct {
+	ID                   string `json:"id"`
+	Digest               string `json:"digest"`
+	Bytes                int64  `json:"bytes"`
+	ParentTaskSeq        int64  `json:"parent_task_seq"`
+	ParentDocumentDigest string `json:"parent_document_digest"`
+	SourceSnapshotDigest string `json:"source_snapshot_digest"`
+	ChildTaskID          string `json:"child_task_id"`
+	Status               string `json:"status"`
+	ActivationCommandID  string `json:"activation_command_id,omitempty"`
+	ChildTaskSeq         int64  `json:"child_task_seq,omitempty"`
+	ChildDocumentDigest  string `json:"child_document_digest,omitempty"`
+}
 type TaskState struct {
 	Deletion                *TaskDeletion    `json:"content_deletion,omitempty"`
+	GoalQueue               []GoalSchedule   `json:"goal_queue,omitempty"`
 	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
 	Resources               *ResourceAccount `json:"resource_account,omitempty"`
 	Tokens                  *TokenAccount    `json:"token_account,omitempty"`
@@ -187,6 +206,7 @@ type Event struct {
 }
 type EventPayload struct {
 	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
+	Goal                *GoalMutation             `json:"goal,omitempty"`
 	Verification        *VerificationFinalization `json:"verification,omitempty"`
 	QueueID             string                    `json:"queue_id,omitempty"`
 	Resources           *ResourceMutation         `json:"resource_mutation,omitempty"`
@@ -205,6 +225,19 @@ type EventPayload struct {
 	PolicyEpoch         int64                     `json:"policy_epoch,omitempty"`
 	RequiredObligations int                       `json:"required_obligations,omitempty"`
 	Reason              string                    `json:"reason,omitempty"`
+}
+type GoalMutation struct {
+	ID                   string `json:"id"`
+	Digest               string `json:"digest,omitempty"`
+	Bytes                int64  `json:"bytes,omitempty"`
+	ParentTaskSeq        int64  `json:"parent_task_seq,omitempty"`
+	ParentDocumentDigest string `json:"parent_document_digest,omitempty"`
+	SourceSnapshotDigest string `json:"source_snapshot_digest,omitempty"`
+	ChildTaskID          string `json:"child_task_id,omitempty"`
+	ActivationCommandID  string `json:"activation_command_id,omitempty"`
+	ChildTaskSeq         int64  `json:"child_task_seq,omitempty"`
+	ChildDocumentDigest  string `json:"child_document_digest,omitempty"`
+	Reason               string `json:"reason,omitempty"`
 }
 type Entry struct {
 	Path string `json:"path"`

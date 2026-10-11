@@ -230,9 +230,10 @@ func TestNativeRiskRestoreAndManualCloneCannotCleanOriginalRuntime(t *testing.T)
 		clone.Close()
 		t.Fatal("manual runtime identity copy accepted")
 	}
-	view, err := s.NativeRiskInfo(context.Background(), state.TaskID)
-	if err != nil || view.CanFence || !view.InstanceMatches {
-		t.Fatal("old-generation view", err)
+	// The registered restored owner was replaced. Current family admission must
+	// fail closed rather than inspecting a partly forged owner registry.
+	if _, err := s.NativeRiskInfo(context.Background(), state.TaskID); err == nil {
+		t.Fatal("changed registered runtime identity admitted original family access")
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)

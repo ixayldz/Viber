@@ -160,7 +160,7 @@ func Render(s Screen, e Editor, width, height int) string {
 	if len(lines) > height-3 {
 		lines = lines[:height-3]
 	}
-	lines = append(lines, "/help  /status /diff /plan /pause /resume /queue /model /context /evidence /quit", "> "+Safe(string(e.Text)))
+	lines = append(lines, "/help  /status /diff /plan /pause /resume /queue /goal /model /context /evidence /quit", "> "+Safe(string(e.Text)))
 	for i, line := range lines {
 		if len(line) > width {
 			lines[i] = line[:width-3] + "..."

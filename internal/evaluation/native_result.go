@@ -84,6 +84,11 @@ func deriveNativeResultForTask(ctx context.Context, owner *agent.Session, task s
 	if doc.EvaluationOrigin != nil {
 		result.EvaluatorTask = task
 	}
+	if doc.EvaluationAssignment != nil {
+		result.EvidenceMode = RegisteredNativeMode
+		result.RegistrationDigest = doc.EvaluationAssignment.RegistrationDigest
+		result.AssignmentID = doc.EvaluationAssignment.AssignmentID
+	}
 	quiescent := state.Execution == c.Terminated && !state.InputBarrier && len(state.PendingInputIDs) == 0 && doc.Pending == nil && !doc.UnknownEffect && state.Resources != nil && state.Resources.Reserved == (c.ResourceVector{})
 	if state.Resources != nil {
 		for _, r := range state.Resources.Reservations {

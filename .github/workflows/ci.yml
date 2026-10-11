@@ -262,3 +262,62 @@ jobs:
           name: portable-provenance-${{ github.sha }}
           path: ${{ steps.provenance.outputs.bundle-path }}
           if-no-files-found: error
+  installed-packages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'ixayldz/Viber'
+    needs: attest-packages
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: portable-${{ matrix.os }}-${{ github.sha }}
+          path: .cache/installer-download
+      - name: Actual native installer, first task, same revision rollback and owned uninstall
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          $bootstrap=Join-Path (Get-Location) '.cache/installer-bootstrap'
+          if($IsWindows){$bootstrap+='.exe'}
+          go build -trimpath -o $bootstrap ./cmd/viber
+          if($LASTEXITCODE-ne 0){throw 'Native bootstrap build failed'}
+          $archives=@(Get-ChildItem -LiteralPath .cache/installer-download -File | Where-Object {$_.Name.EndsWith('.zip') -or $_.Name.EndsWith('.tar.gz')})
+          if($archives.Count-ne 1){throw 'Exactly one native archive required'}
+          python scripts/installed-package-acceptance.py --bootstrap $bootstrap --archive $archives[0].FullName --revision $env:GITHUB_SHA --output evidence/installation
+          if($LASTEXITCODE-ne 0){throw 'Native managed installer acceptance failed'}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installation-${{ matrix.os }}-${{ github.sha }}
+          path: evidence/installation/installation.json
+          if-no-files-found: error
+  attest-installation:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'ixayldz/Viber'
+    needs: installed-packages
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: installation-*-${{ github.sha }}
+          path: installation
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: installation/**/installation.json

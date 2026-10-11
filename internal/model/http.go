@@ -187,7 +187,12 @@ func (client *Client) Complete(ctx context.Context, r Request) (result Result, c
 	if result.ProviderRequestID == "" {
 		result.ProviderRequestID = response.Header.Get("request-id")
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, client.config.MaxResponseBytes+1))
+	var data []byte
+	if r.Stream {
+		data, err = readProviderStream(ctx, response.Body, client.config.MaxResponseBytes, client.config.Provider)
+	} else {
+		data, err = io.ReadAll(io.LimitReader(response.Body, client.config.MaxResponseBytes+1))
+	}
 	result.Raw = bytes.Clone(data)
 	if err != nil || int64(len(data)) > client.config.MaxResponseBytes {
 		return result, &Failure{Kind: "INCOMPLETE_RESPONSE", UsageUnknown: true, ProviderRequestID: result.ProviderRequestID}

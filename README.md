@@ -1,5 +1,7 @@
 # Viber
 
+Yeni geliştirme komutları için [anahtarsız operasyonlar](docs/KEYLESS_OPERATIONS.md) ve [goal queue/provider stream](docs/SUPERVISOR_QUEUE_STREAM.md) kılavuzları: yönetilen kurulum/rollback/uninstall, metadata checkpoint, framework/history discovery, operatör kısıtlamaları ve preregistered eval. Bu çalışma ağacı değişiklikleri önceki public paketten ayrı kabul edilir.
+
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.
 
 **Mevcut sürüm: 0.9.0-dev — mühendislik önizlemesi. Üretim sürümü değildir.** CLI fixture, yerel Ollama veya ChatGPT aboneliğiyle aynı kalıcı native tool döngüsünü çalıştırır. ChatGPT girişi resmî Sign in with ChatGPT akışını kullanır; API anahtarı gerekmez. Auth/streaming kodu offline güvenlik testlerinden geçti; gerçek hesap kabulü henüz yapılmadı. OpenAI/Anthropic API-key CLI bağlantısı da vardır; gerçek endpoint kabulü beklemektedir. Kullanıcının kaynak bağlı incelemesi ve korunan V4 STDIO senaryoları için bağımsız doğrulama vardır; genel test-framework doğrulaması ve üretim kabulü tamamlanmamıştır.

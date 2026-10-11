@@ -284,6 +284,81 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 					return next, c.Fail(c.StaleRequest, "queued prompt unavailable")
 				}
 			}
+		case "GoalQueued":
+			g := p.Goal
+			if event.Actor != "user" || g == nil || g.ID == "" || len(g.ID) > 128 || g.ID != event.ID || !nonterminal(next.Execution) && next.Execution != c.Terminated || next.Deletion != nil || !c.ValidDigest(g.Digest) || g.Bytes < 1 || g.Bytes > 64<<10 || g.ParentTaskSeq < 1 || g.ParentTaskSeq > next.TaskSeq || !c.ValidDigest(g.ParentDocumentDigest) || !c.ValidDigest(g.SourceSnapshotDigest) || g.ChildTaskID == "" || len(g.ChildTaskID) > 128 || g.ChildTaskID == next.TaskID || g.ActivationCommandID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || len(next.GoalQueue) >= 64 {
+				return next, c.Fail(c.InvalidArgument, "invalid durable goal schedule binding")
+			}
+			for _, old := range next.GoalQueue {
+				if old.ID == g.ID || old.ChildTaskID == g.ChildTaskID {
+					return next, c.Fail(c.CommandIDConflict, "goal or child task ID already scheduled")
+				}
+			}
+			next.GoalQueue = append(next.GoalQueue, c.GoalSchedule{ID: g.ID, Digest: g.Digest, Bytes: g.Bytes, ParentTaskSeq: g.ParentTaskSeq, ParentDocumentDigest: g.ParentDocumentDigest, SourceSnapshotDigest: g.SourceSnapshotDigest, ChildTaskID: g.ChildTaskID, Status: "QUEUED"})
+		case "GoalActivationIntent":
+			g := p.Goal
+			if event.Actor != "user" || g == nil || g.ID == "" || len(g.ID) > 128 || g.ActivationCommandID != event.ID || len(event.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || g.ChildTaskID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || next.Deletion != nil {
+				return next, c.Fail(c.InvalidArgument, "invalid goal activation intent")
+			}
+			found := false
+			for i := range next.GoalQueue {
+				if next.GoalQueue[i].ID != g.ID {
+					continue
+				}
+				if next.GoalQueue[i].Status != "QUEUED" {
+					return next, c.Fail(c.StaleRequest, "goal is not available for activation")
+				}
+				next.GoalQueue[i].Status = "ACTIVATING"
+				next.GoalQueue[i].ActivationCommandID = g.ActivationCommandID
+				found = true
+				break
+			}
+			if !found {
+				return next, c.Fail(c.StaleRequest, "scheduled goal is unavailable")
+			}
+		case "GoalActivated":
+			g := p.Goal
+			if event.Actor != "kernel" || g == nil || g.ID == "" || len(g.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || g.ChildTaskID == "" || len(g.ChildTaskID) > 128 || g.ActivationCommandID == "" || len(g.ActivationCommandID) > 128 || g.ChildTaskSeq < 1 || !c.ValidDigest(g.ChildDocumentDigest) || g.Reason != "" {
+				return next, c.Fail(c.InvalidArgument, "invalid child task activation receipt")
+			}
+			found := false
+			for i := range next.GoalQueue {
+				item := &next.GoalQueue[i]
+				if item.ID != g.ID {
+					continue
+				}
+				if item.Status != "ACTIVATING" || item.ChildTaskID != g.ChildTaskID || item.ActivationCommandID != g.ActivationCommandID {
+					return next, c.Fail(c.StaleRequest, "goal activation no longer matches its durable intent")
+				}
+				item.Status = "ACTIVATED"
+				item.ChildTaskSeq = g.ChildTaskSeq
+				item.ChildDocumentDigest = g.ChildDocumentDigest
+				found = true
+				break
+			}
+			if !found {
+				return next, c.Fail(c.StaleRequest, "goal activation intent is unavailable")
+			}
+		case "GoalCancelled":
+			g := p.Goal
+			if event.Actor != "user" || g == nil || g.ID == "" || len(g.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || g.ChildTaskID != "" || g.ActivationCommandID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || next.Deletion != nil {
+				return next, c.Fail(c.InvalidArgument, "invalid goal cancellation")
+			}
+			found := false
+			for i := range next.GoalQueue {
+				if next.GoalQueue[i].ID != g.ID {
+					continue
+				}
+				if next.GoalQueue[i].Status != "QUEUED" {
+					return next, c.Fail(c.Conflict, "only a queued goal without an activation intent can be cancelled")
+				}
+				next.GoalQueue[i].Status = "CANCELLED"
+				found = true
+				break
+			}
+			if !found {
+				return next, c.Fail(c.StaleRequest, "scheduled goal is unavailable")
+			}
 		case "InputRecorded":
 			if p.QueueID != "" {
 				found := false

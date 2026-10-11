@@ -26,6 +26,29 @@ Protocol JSON aşağıdakileri deney başlamadan belirler:
 - PAIRED_CONTINUATION için her görevin başlangıç checkpoint digest'i.
 - max_latency_ratio_ppm ve max_rework_ratio_ppm. Örneğin 1100000 oranı 1,10 sınırını ifade eder; authoritative JSON ondalık sayı kabul etmez.
 
+## Dondurulmuş asset kaydı ve sabit assignment'lar
+
+`eval-register`, bir protokolü, dataset ağacını ve asset-plan dosyasını yeni bir kayıt dizinine kopyalar. Komut yalnız yerel shared-quota/privacy authority'sini seçmek için mevcut bir `--store` ister; dataset ve çıktı bu store'dan ve privacy authority dizininden ayrı olmalıdır. Çıktı yeni bir dizin olmalı.
+
+Dataset kökünde protokoldeki `dataset_digest` ile byte-byte eşleşen bir `DatasetManifest` bulunur. Manifest, kendisi dışındaki bütün regular dosyaların sıralı yol/hash/byte listesini ve boş olmayan bütün dizinlerin sıralı listesini taşır. `--assets` dosyası schema 1 `AssetPlan` biçimindedir: `dataset_manifest_path` ve protocol'deki evaluator, task ve arm condition digest'lerini dataset içindeki yollara bağlayan `bindings` listesi. Her dosya protocol digest'lerinden en az biriyle bağlanmalıdır; symlink, hardlink, özel dosya, Windows'ta çakışan büyük/küçük harfli yollar, fazladan dosya ve sınır üstü dataset reddedilir. Kayıt, protocol/asset index/assignment paydasını ve asset byte'larını yeni private dizine kopyalar.
+
+~~~powershell
+.\bin\viber.exe eval-register `
+  --store C:\tasks\owner `
+  --protocol C:\eval\protocol.json `
+  --dataset C:\eval\dataset `
+  --assets C:\eval\assets.json `
+  --output C:\eval\registration --json
+
+.\bin\viber.exe eval-registration-inspect --registration C:\eval\registration --json
+~~~
+
+Kayıt yalnızca her task'ın beyan edilen history cutoff'u kapanmışsa ve kayıt zamanı beyan edilen start'tan önceyse oluşturulur. Repo digest'i split'ler arasında tekrar kullanılamaz. Bunlar dosya/protocol metadata denetimleridir; gerçek Git geçmişini, geçmiş cutoff'u veya veri sızıntısının bulunmadığını bağımsız biçimde doğrulamaz. Yerel saat imzasızdır ve kullanıcı dosyaları dışarıdan değiştirebilir; kayıt imza/WORM zaman damgası değildir.
+
+Registered native gözlem için `eval-candidate TASK --store ... --registration ... --arm ID --repeat N --output NEW_PATH` kullanılır. `--recipe` bu modda kabul edilmez; recipe yalnız dondurulmuş acceptance asset'inden okunur. Çalışan executable digest'i protocol evaluator ve arm harness digest'leriyle eşleşmelidir. Runner her assignment için dış kayda bir kez `STARTED` yazar ve aynı arm/task/repeat'in tekrarını reddeder. Evaluator owner'ın ilk durable document'i bu STARTED receipt digest'ini ve assignment'ı taşır; crash sonrası kayıt `INTERRUPTED` kalır ve paydadan çıkarılmaz. Başarılı native output için bundle'ı `eval-inspect --bundle ... --registration ...` ile inceleyin. Bundle tek başına kayıtlı assignment kanıtı sayılmaz.
+
+Bu kayıtlı yol da yalnız Viber'ın generated local fixture'ını çalıştırır; protocol'deki model/profile conditions gerçek inference koşullarına uygulanmaz veya attest edilmez. Lokal dosyalar, saat ve kayıt dizini aynı kullanıcı tarafından düzenlenebildiği için adversarial preregistration doğrulaması sağlamaz. Sonuç `NATIVE_FIXTURE_OBSERVATION_ONLY`; model üstünlüğü, gizli holdout, causal ablation, adoption ya da release kanıtı değildir.
+
 Her JSONL satırı protocol digest ve task/arm/repeat'ten türetilen assignment ID'ye bağlıdır. Aynı assignment ikinci kez verilemez. Bir solution koşusu unsupported, timeout, failed veya missing olduğunda ana paydada kalır. Üç denemeden birinin geçmesi görevin tamamını PASS yapmaz. Primary ve bütün tekrarlar ayrı gösterilir; eşit tekrar sayılarıyla task ortalamalarının eşit ağırlıklı aggregate'i kullanılır.
 
 Kernel VERIFIED/strict success beyanları bağımsız evaluator sonucundan ayrı kaydedilir. Başarısız evaluator sonucu false verified/false success sayılır. UNKNOWN evaluator varsa ilgili yanlış beyan oranı kesin bir sayı gibi verilmez; değerlendirilemeyen claim sayısı ayrıca görünür. Kontroller çözüm başarı sayısını artırmaz.

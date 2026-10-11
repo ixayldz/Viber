@@ -11,6 +11,7 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -295,6 +296,20 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 	if err != nil {
 		return m, err
 	}
+	var allocation resource.Allocation
+	if s.PhysicalQuota != nil {
+		upperBytes, upperEntries, requestDigest, estimateErr := s.backupPhysicalEstimate(ctx, sourceInfo)
+		if estimateErr != nil {
+			return m, estimateErr
+		}
+		allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "BACKUP", RequestDigest: requestDigest, TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+		if err != nil {
+			return m, err
+		}
+		if err = allocation.Begin(ctx); err != nil {
+			return m, err
+		}
+	}
 	root, err := freshPrivate(target)
 	if err != nil {
 		return m, err
@@ -318,7 +333,11 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 	if err = root.Mkdir("database", 0700); err != nil {
 		return m, err
 	}
-	m.Store, err = s.Journal.SnapshotDatabase(ctx, filepath.Join(target, "database"))
+	if s.PhysicalQuota != nil {
+		m.Store, err = s.Journal.SnapshotDatabaseReserved(ctx, filepath.Join(target, "database"), allocation)
+	} else {
+		m.Store, err = s.Journal.SnapshotDatabase(ctx, filepath.Join(target, "database"))
+	}
 	if err != nil {
 		return m, err
 	}
@@ -378,6 +397,9 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 	if err != nil {
 		return m, err
 	}
+	if len(raw) > 8<<20 {
+		return m, c.Fail(c.UnsupportedCapability, "backup manifest exceeds its bounded file profile")
+	}
 	if m.SchemaVersion == 2 {
 		copyID, err := fileguard.DirectoryIdentity(root)
 		if err != nil {
@@ -409,7 +431,90 @@ func (s *Session) backupLocked(ctx context.Context, output string) (BackupManife
 		return m, err
 	}
 	defer parent.Close()
-	return m, fileguard.SyncDirectory(parent, ".")
+	if err = fileguard.SyncDirectory(parent, "."); err != nil {
+		return m, err
+	}
+	if s.PhysicalQuota != nil {
+		inventory, measureErr := resource.Measure(root, true)
+		if measureErr != nil {
+			return m, measureErr
+		}
+		if err = allocation.Commit(ctx, inventory); err != nil {
+			return m, err
+		}
+	}
+	return m, nil
+}
+
+func (s *Session) backupPhysicalEstimate(ctx context.Context, sourceInfo store.SnapshotInfo) (uint64, uint64, string, error) {
+	databaseBytes, err := s.Journal.SnapshotDatabaseUpperBytes(ctx)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	objects, err := s.Archive.Inventory(ctx)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	paths := []BackupFile{{Path: "database/state.sqlite", Digest: sourceInfo.TailHash, Size: int64(databaseBytes)}, {Path: "backup.json", Digest: c.HashBytes([]byte("backup-manifest-envelope")), Size: 8 << 20}}
+	var payloadBytes uint64 = databaseBytes + 8<<20
+	maxTemporary := databaseBytes
+	for _, object := range objects {
+		paths = append(paths, BackupFile{Path: "artifacts/" + object.Path, Digest: object.Digest, Size: object.Size})
+		payloadBytes += uint64(object.Size)
+		if uint64(object.Size) > maxTemporary {
+			maxTemporary = uint64(object.Size)
+		}
+	}
+	if err = s.visitGCMaintenance(ctx, func(name string, raw []byte) error {
+		paths = append(paths, BackupFile{Path: name, Digest: c.HashBytes(raw), Size: int64(len(raw))})
+		payloadBytes += uint64(len(raw))
+		if uint64(len(raw)) > maxTemporary {
+			maxTemporary = uint64(len(raw))
+		}
+		return nil
+	}); err != nil {
+		return 0, 0, "", err
+	}
+	intent, receipt, err := s.Journal.MigrationStatus(ctx)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	if intent != nil && receipt != nil {
+		for name, value := range map[string]any{"metadata/migrations/v1-v2-intent.json": intent, "metadata/migrations/v1-v2-complete.json": receipt} {
+			raw, encodeErr := c.CanonicalV1(value)
+			if encodeErr != nil {
+				return 0, 0, "", encodeErr
+			}
+			paths = append(paths, BackupFile{Path: name, Digest: c.HashBytes(raw), Size: int64(len(raw))})
+			payloadBytes += uint64(len(raw))
+			if uint64(len(raw)) > maxTemporary {
+				maxTemporary = uint64(len(raw))
+			}
+		}
+	}
+	if len(paths) > backupMaxFiles {
+		return 0, 0, "", c.Fail(c.UnsupportedCapability, "backup physical entry estimate exceeds profile")
+	}
+	directories := map[string]bool{}
+	for _, item := range paths {
+		for directory := filepath.ToSlash(filepath.Dir(filepath.FromSlash(item.Path))); directory != "." && directory != ""; directory = filepath.ToSlash(filepath.Dir(directory)) {
+			directories[directory] = true
+		}
+	}
+	if maxTemporary < 64<<20 {
+		maxTemporary = 64 << 20
+	}
+	sort.Slice(paths, func(i, j int) bool { return paths[i].Path < paths[j].Path })
+	upperBytes := payloadBytes + maxTemporary + uint64(len(directories))*4096 + (64 << 10)
+	upperEntries := uint64(len(paths) + len(directories) + 3)
+	canonical, err := c.CanonicalV1(struct {
+		SourceInfo store.SnapshotInfo `json:"source_info"`
+		Paths      []BackupFile       `json:"paths"`
+	}{SourceInfo: sourceInfo, Paths: paths})
+	if err != nil {
+		return 0, 0, "", err
+	}
+	return upperBytes, upperEntries, c.HashBytes(canonical), nil
 }
 
 func readBackupFile(root *os.Root, f BackupFile) ([]byte, error) {

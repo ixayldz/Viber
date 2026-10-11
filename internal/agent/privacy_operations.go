@@ -80,5 +80,5 @@ func registerRestoredScope(ctx context.Context, authority PrivacyAuthority, inst
 		return err
 	}
 	defer lock.Close()
-	return publishPrivacyScope(root, privacyScope{instance.ID, target, instance.PhysicalRoot})
+	return publishPrivacyScope(root, privacyScope{InstanceID: instance.ID, Directory: target, PhysicalRoot: instance.PhysicalRoot})
 }

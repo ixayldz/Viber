@@ -10,12 +10,13 @@ import (
 )
 
 type NativeRegistration struct {
-	Task          string `json:"evaluator_task,omitempty"`
-	SchemaVersion int    `json:"schema_version"`
-	Source        string `json:"source_digest"`
-	Recipe        string `json:"recipe_digest"`
-	Candidate     string `json:"evaluator_candidate"`
-	Scope         string `json:"scope"`
+	Task          string                             `json:"evaluator_task,omitempty"`
+	SchemaVersion int                                `json:"schema_version"`
+	Source        string                             `json:"source_digest"`
+	Recipe        string                             `json:"recipe_digest"`
+	Candidate     string                             `json:"evaluator_candidate"`
+	Scope         string                             `json:"scope"`
+	Assignment    *agent.EvaluationAssignmentBinding `json:"assignment,omitempty"`
 }
 
 func readManifestFiles(root *os.Root, files []OutputFile, expected []string) (map[string][]byte, error) {
@@ -42,6 +43,20 @@ func readManifestFiles(root *os.Root, files []OutputFile, expected []string) (ma
 // ReadNativeResult recomputes the result from the separate durable owner;
 // copying a JSON verdict or integrity manifest alone never supplies evidence.
 func ReadNativeResult(ctx context.Context, path string) (NativeResult, error) {
+	return readNativeResult(ctx, path, "")
+}
+
+// ReadRegisteredNativeResult requires the frozen registration and its
+// external assignment receipts. A bundle alone cannot establish that the
+// assignment was started before native work.
+func ReadRegisteredNativeResult(ctx context.Context, path, registrationDir string) (NativeResult, error) {
+	if registrationDir == "" {
+		return NativeResult{}, c.Fail(c.InvalidArgument, "evaluation registration directory required")
+	}
+	return readNativeResult(ctx, path, registrationDir)
+}
+
+func readNativeResult(ctx context.Context, path, registrationDir string) (NativeResult, error) {
 	var result NativeResult
 	root, err := os.OpenRoot(path)
 	if err != nil {
@@ -55,6 +70,15 @@ func ReadNativeResult(ctx context.Context, path string) (NativeResult, error) {
 	var manifest NativeManifest
 	if err = c.DecodeStrict(raw, &manifest); err != nil {
 		return result, err
+	}
+	if manifest.SchemaVersion == 2 {
+		if registrationDir == "" {
+			return result, c.Fail(c.PolicyDenied, "registered native result requires its registration directory")
+		}
+		return readRegisteredNativeResult(ctx, root, manifest, registrationDir)
+	}
+	if registrationDir != "" {
+		return result, c.Fail(c.PolicyDenied, "registration cannot be applied to a post-hoc native bundle")
 	}
 	if manifest.SchemaVersion != 1 || manifest.EvidenceMode != NativeMode || !c.ValidDigest(manifest.SourceDigest) || !c.ValidDigest(manifest.RecipeDigest) {
 		return result, c.Fail(c.StoreIntegrityError, "invalid native independent manifest")
@@ -120,4 +144,154 @@ func ReadNativeResult(ctx context.Context, path string) (NativeResult, error) {
 		return result, c.Fail(c.StoreIntegrityError, "native verdict does not match durable owner evidence")
 	}
 	return result, nil
+}
+
+func readRegisteredNativeResult(ctx context.Context, root *os.Root, manifest NativeManifest, registrationDir string) (NativeResult, error) {
+	var result NativeResult
+	if manifest.SchemaVersion != 2 || manifest.EvidenceMode != RegisteredNativeMode || !c.ValidDigest(manifest.SourceDigest) || !c.ValidDigest(manifest.RecipeDigest) {
+		return result, c.Fail(c.StoreIntegrityError, "invalid registered native manifest")
+	}
+	files, err := readManifestFiles(root, manifest.Files, []string{"source.json", "registration.json", "result.json", "assignment_receipt.json"})
+	if err != nil {
+		return result, err
+	}
+	if c.HashBytes(files["source.json"]) != manifest.SourceDigest {
+		return result, c.Fail(c.StoreIntegrityError, "registered source manifest binding changed")
+	}
+	var source agent.EvaluationSource
+	if err = c.DecodeStrict(files["source.json"], &source); err != nil {
+		return result, err
+	}
+	if err = validateEvaluationSource(source); err != nil {
+		return result, err
+	}
+	var nativeRegistration NativeRegistration
+	if err = c.DecodeStrict(files["registration.json"], &nativeRegistration); err != nil {
+		return result, err
+	}
+	if nativeRegistration.SchemaVersion != 3 || nativeRegistration.Source != manifest.SourceDigest || nativeRegistration.Recipe != manifest.RecipeDigest || nativeRegistration.Scope != RegisteredNativeMode || nativeRegistration.Task == "" || !c.ValidDigest(nativeRegistration.Candidate) || nativeRegistration.Assignment == nil {
+		return result, c.Fail(c.StoreIntegrityError, "registered native bundle assignment binding changed")
+	}
+	binding := *nativeRegistration.Assignment
+	if err = binding.Validate(); err != nil || binding.SourceDigest != manifest.SourceDigest || binding.RecipeDigest != manifest.RecipeDigest {
+		return result, c.Fail(c.StoreIntegrityError, "registered native owner binding invalid")
+	}
+	registration, err := LoadRegistration(registrationDir)
+	if err != nil {
+		return result, err
+	}
+	if !fileguard.Disjoint(registration.Directory, root.Name()) {
+		return result, c.Fail(c.PolicyDenied, "registration and native result bundle must be disjoint")
+	}
+	assignment, ok := findAssignment(registration, binding.AssignmentID)
+	if !ok || assignment.Arm != binding.Arm || assignment.Task != binding.Task || assignment.Repeat != binding.Repeat || assignment.HarnessDigest != binding.BuildDigest {
+		return result, c.Fail(c.StoreIntegrityError, "assignment is not present in the frozen registration")
+	}
+	recipe, recipeDigest, recipeAsset, err := RegisteredRecipe(registration, assignment.Task)
+	if err != nil {
+		return result, err
+	}
+	if recipeDigest != manifest.RecipeDigest || recipeAsset.Digest != binding.RecipeAssetDigest {
+		return result, c.Fail(c.StoreIntegrityError, "registered recipe binding changed")
+	}
+	startRaw, err := readAssignmentRecordFromPath(registration.Directory, assignmentRecordPath(assignment.ID, "started"))
+	if err != nil {
+		return result, err
+	}
+	var start AssignmentStart
+	if err = c.DecodeStrict(startRaw, &start); err != nil {
+		return result, err
+	}
+	if err = ValidateAssignmentStart(registration, start); err != nil {
+		return result, err
+	}
+	startDigest, err := AssignmentStartDigest(start)
+	bundleDirectory, pathErr := filepath.Abs(root.Name())
+	if pathErr == nil {
+		bundleDirectory, pathErr = filepath.EvalSymlinks(bundleDirectory)
+	}
+	if err != nil || pathErr != nil || binding.StartReceiptDigest != startDigest || start.BundleDirectory != bundleDirectory || start.OwnerTask != nativeRegistration.Task || start.SourceDigest != binding.SourceDigest || start.SourceTreeDigest != binding.SourceTreeDigest || start.RecipeDigest != binding.RecipeDigest || start.RecipeAssetDigest != binding.RecipeAssetDigest || start.BuildDigest != binding.BuildDigest {
+		return result, c.Fail(c.StoreIntegrityError, "native owner does not match its immutable assignment start")
+	}
+	expectedBinding, err := NativeAssignmentBinding(registration, assignment, source, recipeDigest, recipeAsset.Digest, binding.BuildDigest)
+	if err != nil {
+		return result, err
+	}
+	expectedBinding.StartReceiptDigest = startDigest
+	if expectedBinding != binding {
+		return result, c.Fail(c.StoreIntegrityError, "registered source differs from preregistered assignment")
+	}
+	var receipt AssignmentReceipt
+	if err = c.DecodeStrict(files["assignment_receipt.json"], &receipt); err != nil {
+		return result, err
+	}
+	registeredRoot, err := os.OpenRoot(registration.Directory)
+	if err != nil {
+		return result, err
+	}
+	registeredReceiptRaw, readErr := fileguard.ReadRegular(registeredRoot, assignmentRecordPath(assignment.ID, "receipt"), 1<<20)
+	registeredRoot.Close()
+	if readErr != nil {
+		return result, readErr
+	}
+	if c.HashBytes(registeredReceiptRaw) != c.HashBytes(files["assignment_receipt.json"]) {
+		return result, c.Fail(c.StoreIntegrityError, "assignment completion receipt differs from registration ledger")
+	}
+	if receipt.SchemaVersion != 1 || receipt.RegistrationDigest != registration.Manifest.RegistrationDigest || receipt.ProtocolDigest != registration.ProtocolDigest || receipt.AssignmentID != assignment.ID || receipt.StartDigest != c.HashBytes(startRaw) || receipt.OwnerTask != start.OwnerTask || receipt.OwnerTask != nativeRegistration.Task || receipt.OwnerCreatedSequence < 1 || receipt.OwnerTaskSequence <= receipt.OwnerCreatedSequence || !c.ValidDigest(receipt.OwnerCreatedDocument) || !c.ValidDigest(receipt.OwnerDocument) || receipt.ResultDigest != c.HashBytes(files["result.json"]) || !c.ValidDigest(receipt.ResultDigest) || !validQuotaAllocationID(receipt.QuotaAllocationID) {
+		return result, c.Fail(c.StoreIntegrityError, "registered assignment completion receipt invalid")
+	}
+	ownerPath := filepath.Join(root.Name(), "owner")
+	if !fileguard.Disjoint(ownerPath, registration.Directory) {
+		return result, c.Fail(c.PolicyDenied, "registered owner overlaps its frozen registration")
+	}
+	owner, err := agent.OpenExisting(ctx, ownerPath)
+	if err != nil {
+		return result, err
+	}
+	defer owner.Close()
+	createdState, createdDoc, err := owner.Inspect(ctx, receipt.OwnerTask, receipt.OwnerCreatedSequence)
+	if err != nil {
+		return result, err
+	}
+	if createdState.TaskSeq != receipt.OwnerCreatedSequence || createdState.DocumentDigest != receipt.OwnerCreatedDocument || createdDoc.EvaluationAssignment == nil || *createdDoc.EvaluationAssignment != binding {
+		return result, c.Fail(c.StoreIntegrityError, "assignment was not bound in durable evaluator creation")
+	}
+	state, doc, err := owner.Load(ctx, receipt.OwnerTask)
+	if err != nil {
+		return result, err
+	}
+	if state.TaskSeq != receipt.OwnerTaskSequence || state.DocumentDigest != receipt.OwnerDocument || doc.EvaluationAssignment == nil || *doc.EvaluationAssignment != binding || doc.EvaluationOrigin == nil || doc.EvaluationOrigin.ParentTask != source.TaskID || doc.EvaluationOrigin.ParentSequence != source.TaskSequence || doc.EvaluationOrigin.ParentDocument != source.DocumentDigest || doc.Candidate.SnapshotDigest != nativeRegistration.Candidate {
+		return result, c.Fail(c.StoreIntegrityError, "registered source or assignment differs from durable evaluator lineage")
+	}
+	if doc.Protection == nil || doc.CheckRuntime == nil {
+		return result, c.Fail(c.StoreIntegrityError, "registered owner recipe unavailable")
+	}
+	ownerRecipe := NativeRecipe{1, doc.Protection.Plan, *doc.CheckRuntime}
+	if digest, digestErr := c.Digest(ownerRecipe); digestErr != nil || digest != recipeDigest {
+		return result, c.Fail(c.StoreIntegrityError, "registered evaluator recipe differs from frozen acceptance asset")
+	}
+	result, err = deriveNativeResultForTask(ctx, owner, receipt.OwnerTask, source, recipe)
+	if err != nil {
+		return result, err
+	}
+	if result.EvidenceMode != RegisteredNativeMode || result.RegistrationDigest != registration.Manifest.RegistrationDigest || result.AssignmentID != assignment.ID || result.RecipeDigest != manifest.RecipeDigest || result.EvaluatorCandidate != nativeRegistration.Candidate {
+		return result, c.Fail(c.StoreIntegrityError, "registered result differs from durable owner evidence")
+	}
+	computed, err := c.CanonicalV1(result)
+	if err != nil {
+		return result, err
+	}
+	if c.HashBytes(computed) != c.HashBytes(files["result.json"]) {
+		return result, c.Fail(c.StoreIntegrityError, "registered verdict does not match durable owner evidence")
+	}
+	return result, nil
+}
+
+func readAssignmentRecordFromPath(registrationDir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(registrationDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return fileguard.ReadRegular(root, name, 1<<20)
 }

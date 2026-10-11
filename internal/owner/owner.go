@@ -15,6 +15,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/delivery"
 	"github.com/ixayldz/Viber/internal/ipc"
+	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/plan"
 )
 
@@ -51,6 +52,7 @@ type activeRun struct {
 	id        string
 	admission View
 	task      string
+	stream    *providerStream
 	pause     atomic.Bool
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -65,6 +67,9 @@ type Owner struct {
 	mu             sync.Mutex
 	control        sync.Mutex
 	active         *activeRun
+	streams        map[string]*providerStream
+	goalWake       chan struct{}
+	goalDone       chan struct{}
 	serveDone      chan error
 	closeOnce      sync.Once
 	closeErr       error
@@ -85,7 +90,7 @@ func openWithRetentionInterval(ctx context.Context, directory string, session *a
 		return nil, c.Fail(c.InvalidArgument, "owned kernel session required")
 	}
 	ownerCtx, cancel := context.WithCancel(ctx)
-	owner := &Owner{Session: session, ctx: ownerCtx, cancel: cancel, serveDone: make(chan error, 1), retentionDone: make(chan struct{})}
+	owner := &Owner{Session: session, ctx: ownerCtx, cancel: cancel, serveDone: make(chan error, 1), retentionDone: make(chan struct{}), streams: map[string]*providerStream{}, goalWake: make(chan struct{}, 1), goalDone: make(chan struct{})}
 	server, err := ipc.OpenServer(ownerCtx, directory, session.Journal.Generation(), owner.Handle)
 	if err != nil {
 		cancel()
@@ -93,6 +98,7 @@ func openWithRetentionInterval(ctx context.Context, directory string, session *a
 	}
 	owner.Server = server
 	go owner.retentionLoop(interval)
+	go owner.goalLoop()
 	go func() {
 		err := server.Serve()
 		owner.mu.Lock()
@@ -126,6 +132,7 @@ func (o *Owner) close() error {
 		<-active.done
 	}
 	<-o.retentionDone
+	<-o.goalDone
 	serveErr := <-o.serveDone
 	return errors.Join(err, serveErr)
 }
@@ -190,7 +197,9 @@ func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, 
 	}
 	admission.Detached, admission.InvocationID = detached, id
 	runCtx, cancel := context.WithCancel(o.ctx)
-	active := &activeRun{task: task, id: id, admission: admission, cancel: cancel, done: make(chan struct{})}
+	stream := newProviderStream(task, id, state.TaskSeq)
+	active := &activeRun{task: task, id: id, admission: admission, stream: stream, cancel: cancel, done: make(chan struct{})}
+	o.streams[task] = stream
 	o.active = active
 	o.mu.Unlock()
 	o.control.Unlock()
@@ -200,7 +209,9 @@ func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, 
 		defer stop()
 	}
 	go func() {
-		active.state, active.err = o.Session.RunControlled(runCtx, task, &active.pause)
+		streamCtx := model.WithDeltaObserver(runCtx, stream.Publish)
+		active.state, active.err = o.Session.RunControlled(streamCtx, task, &active.pause)
+		stream.Complete()
 		receiptCtx, receiptCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		recorded, receiptErr := o.Session.InvocationFinishWithError(receiptCtx, task, id, active.err)
 		if receiptErr == nil {
@@ -215,6 +226,7 @@ func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, 
 		o.active = nil
 		close(active.done)
 		o.mu.Unlock()
+		o.wakeGoals()
 	}()
 	if detached {
 		return admission, nil
@@ -358,6 +370,23 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.AttachPage(ctx, request.TaskID, query)
+	case "stream-page":
+		var query StreamPageQuery
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		return o.StreamPage(ctx, request.TaskID, query)
+	case "goal-list":
+		if err := nullPayload(request.Payload); err != nil {
+			return nil, err
+		}
+		return o.Session.GoalQueue(ctx, request.TaskID)
+	case "goal-control":
+		var command agent.GoalCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		return o.goalControl(ctx, request.ID, request.TaskID, command)
 	case "delete", "delete-preview":
 		o.mu.Lock()
 		defer o.mu.Unlock()

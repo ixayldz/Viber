@@ -49,6 +49,16 @@ func (s *Session) RegisterEvaluationReport(ctx context.Context, evaluator *Sessi
 	if evaluator == nil || evaluator == s || s.privacy == nil || evaluator.privacy == nil || *s.privacy != *evaluator.privacy {
 		return c.Fail(c.PolicyDenied, "registered separate evaluator required")
 	}
+	parentState, parentDoc, err := s.Load(ctx, source.TaskID)
+	if err != nil {
+		return err
+	}
+	if err = currentOperatorEffect(parentDoc, "export"); err != nil {
+		return err
+	}
+	if parentState.TaskSeq != source.TaskSequence || parentState.DocumentDigest != source.DocumentDigest {
+		return c.Fail(c.Conflict, "source changed before evaluation report registration")
+	}
 	_, doc, err := evaluator.Load(ctx, evaluator.EvaluationTaskID())
 	if err != nil {
 		return err
@@ -76,7 +86,7 @@ func (s *Session) RegisterEvaluationReport(ctx context.Context, evaluator *Sessi
 	}
 	tasks := []string{source.TaskID, doc.TaskID}
 	sort.Strings(tasks)
-	scope := privacyScope{evaluator.instance.ID, ownerPath, evaluator.instance.PhysicalRoot}
+	scope := privacyScope{InstanceID: evaluator.instance.ID, Directory: ownerPath, PhysicalRoot: evaluator.instance.PhysicalRoot}
 	return s.registerManagedCopy(ctx, ManagedCopy{Kind: "EVALUATION_REPORT", Directory: directory, PhysicalRoot: physical, Tasks: tasks, Files: []BackupFile{}, ExcludedStore: &scope})
 }
 

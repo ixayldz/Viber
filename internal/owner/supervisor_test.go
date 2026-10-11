@@ -2,9 +2,9 @@ package owner
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,13 +20,17 @@ func TestDetachedInvocationOutlivesClientAndSupportsCursorReconnect(t *testing.T
 	started := make(chan struct{})
 	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = io.WriteString(w, `{"model":"local-test:1","message":{"role":"assistant","content":"visible "},"done":false}`+"\n")
+		w.(http.Flusher).Flush()
 		once.Do(func() { close(started) })
 		select {
 		case <-gate:
 		case <-r.Context().Done():
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"model": "local-test:1", "message": map[string]any{"role": "assistant", "content": "done"}, "done": true, "done_reason": "stop", "prompt_eval_count": 1, "eval_count": 1})
+		_, _ = io.WriteString(w, `{"model":"local-test:1","message":{"role":"assistant","content":"done"},"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}`+"\n")
+		w.(http.Flusher).Flush()
 	}))
 	defer server.Close()
 	defer func() {
@@ -45,7 +49,7 @@ func TestDetachedInvocationOutlivesClientAndSupportsCursorReconnect(t *testing.T
 		t.Fatal(err)
 	}
 	defer session.Close()
-	runtime := &agent.Runtime{SchemaVersion: 1, Provider: "ollama", Endpoint: server.URL, Model: "local-test:1", DeclaredLocal: true, ContextLimit: 32768, OutputLimit: 512, TimeoutMillis: 10000}
+	runtime := &agent.Runtime{SchemaVersion: 1, Provider: "ollama", Endpoint: server.URL, Model: "local-test:1", DeclaredLocal: true, Stream: true, ContextLimit: 32768, OutputLimit: 512, TimeoutMillis: 10000}
 	if _, err = session.Create(context.Background(), agent.StartOptions{Root: source, TaskID: "task", Prompt: []byte("Review source"), Budget: agent.DefaultBudget(), Autonomy: "guided", Runtime: runtime}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +69,10 @@ func TestDetachedInvocationOutlivesClientAndSupportsCursorReconnect(t *testing.T
 		t.Fatal("model was not dispatched")
 	}
 	cancel()
+	providerPage, err := host.StreamPage(context.Background(), "task", StreamPageQuery{After: 0, Limit: 16, WaitMillis: 1000})
+	if err != nil || providerPage.Replay != "AVAILABLE" || len(providerPage.Deltas) != 1 || providerPage.Deltas[0].Text != "visible " || providerPage.Deltas[0].DurableTaskSeq == 0 {
+		t.Fatal("provider delta was not exposed separately from durable task history", providerPage, err)
+	}
 	if _, err = session.QueueControl(context.Background(), agent.QueueCommand{CommandID: "while-inference", TaskID: "task", Action: "add", Text: "future work"}); err != nil {
 		t.Fatal("active inference blocked independent queue", err)
 	}

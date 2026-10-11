@@ -16,9 +16,11 @@ import (
 )
 
 type privacyScope struct {
-	InstanceID   string `json:"instance_id"`
-	Directory    string `json:"directory"`
-	PhysicalRoot string `json:"physical_root"`
+	InstanceID       string `json:"instance_id"`
+	Directory        string `json:"directory"`
+	PhysicalRoot     string `json:"physical_root"`
+	CheckpointAnchor string `json:"checkpoint_anchor,omitempty"`
+	RestoreBinding   string `json:"restore_binding,omitempty"`
 }
 type DeletionStore struct {
 	Scope          privacyScope       `json:"scope"`
@@ -30,6 +32,9 @@ type DeletionStore struct {
 
 func validPrivacyScope(scope privacyScope) bool {
 	if len(scope.InstanceID) != 32 || !filepath.IsAbs(scope.Directory) || len(scope.Directory) > 2048 || !c.ValidDigest(scope.PhysicalRoot) {
+		return false
+	}
+	if (scope.CheckpointAnchor == "") != (scope.RestoreBinding == "") || scope.CheckpointAnchor != "" && (!c.ValidDigest(scope.CheckpointAnchor) || !c.ValidDigest(scope.RestoreBinding)) {
 		return false
 	}
 	for _, r := range scope.InstanceID {

@@ -18,6 +18,7 @@ import (
 	"github.com/ixayldz/Viber/internal/diskguard"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/kernel"
+	"github.com/ixayldz/Viber/internal/resource"
 	_ "modernc.org/sqlite"
 )
 
@@ -34,6 +35,7 @@ type Store struct {
 	readOnlyReason string
 	migrationFault func(string) error
 	migrationSpace func() uint64
+	physical       *resource.Ledger
 }
 type Command struct {
 	ID              string         `json:"command_id"`

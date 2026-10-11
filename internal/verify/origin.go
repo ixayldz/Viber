@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/discovery"
 	"github.com/ixayldz/Viber/internal/policy"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
@@ -45,6 +46,8 @@ type CheckOrigin struct {
 	InputDigest        string           `json:"input_digest"`
 	Provenance         string           `json:"provenance"`
 	ClosureCoverage    string           `json:"closure_coverage"`
+	DiscoveryDigest    string           `json:"source_discovery_digest,omitempty"`
+	DiscoveryCoverage  string           `json:"source_discovery_coverage,omitempty"`
 	Plan               CheckPlan        `json:"plan"`
 	Protected          []ProtectedScope `json:"protected"`
 }
@@ -186,6 +189,13 @@ func scopeRecord(capture workspace.Capture, scope CheckScope) (ProtectedScope, e
 // BuildCheckOrigin must run before the first candidate mutation. The caller
 // durably binds this object in the task document before admitting any write.
 func BuildCheckOrigin(task string, baseline workspace.Capture, inputDigest string, plan CheckPlan) (CheckOrigin, error) {
+	return BuildCheckOriginWithDiscovery(task, baseline, inputDigest, plan, nil)
+}
+
+// BuildCheckOriginWithDiscovery binds source discovery for the exact baseline
+// before checks are admitted. A supplied report is merely an input and is
+// revalidated against capture; an omitted report is generated locally.
+func BuildCheckOriginWithDiscovery(task string, baseline workspace.Capture, inputDigest string, plan CheckPlan, supplied *discovery.Report) (CheckOrigin, error) {
 	origin := CheckOrigin{SourceRoot: baseline.Snapshot.Root, SchemaVersion: 1, TaskID: task, InitialSpecVersion: 1, BaselineDigest: baseline.Snapshot.Digest, InputDigest: inputDigest, Provenance: "OPERATOR_DECLARED_REPOSITORY_BASELINE", ClosureCoverage: "EXPLICIT_UNREVIEWED", Plan: plan, Protected: []ProtectedScope{}}
 	if !validCheckID(task) || !c.ValidDigest(inputDigest) {
 		return origin, c.Fail(c.InvalidArgument, "invalid check origin task or input binding")
@@ -195,6 +205,31 @@ func BuildCheckOrigin(task string, baseline workspace.Capture, inputDigest strin
 	}
 	if err := plan.Validate(); err != nil {
 		return origin, err
+	}
+	if supplied != nil || HasTestChecks(plan) {
+		var report discovery.Report
+		if supplied == nil {
+			var err error
+			report, err = discovery.Discover(baseline)
+			if err != nil {
+				return origin, err
+			}
+			supplied = &report
+		}
+		if HasTestChecks(plan) {
+			if err := discovery.Validate(*supplied, baseline); err != nil {
+				return origin, err
+			}
+			if err := requireDiscoveredClosure(plan, *supplied); err != nil {
+				return origin, err
+			}
+		} else if err := discovery.Validate(*supplied, baseline); err != nil {
+			return origin, err
+		}
+		if HasTestChecks(plan) {
+			origin.DiscoveryDigest = supplied.ReportDigest
+			origin.DiscoveryCoverage = supplied.Coverage.Overall
+		}
 	}
 	// Own the plan arrays so a caller cannot mutate an admitted origin by alias.
 	raw, err := c.CanonicalV1(plan)
@@ -299,6 +334,15 @@ func GuardProtectedCandidate(origin CheckOrigin, candidate workspace.Capture) er
 		}
 		if actual != protected {
 			return c.Fail(c.PolicyDenied, "candidate changes protected check closure; authorized check revision is required")
+		}
+	}
+	if HasTestChecks(origin.Plan) {
+		report, err := discovery.Discover(candidate)
+		if err != nil {
+			return err
+		}
+		if err = requireDiscoveredClosure(origin.Plan, report); err != nil {
+			return c.Fail(c.PolicyDenied, "candidate source discovery exceeds its authorized test closure")
 		}
 	}
 	return nil

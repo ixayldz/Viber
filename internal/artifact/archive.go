@@ -4,6 +4,7 @@
 package artifact
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/policy"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
@@ -40,6 +42,7 @@ type Manifest struct {
 	IgnoreBlobs   map[string]string `json:"ignore_blobs"`
 }
 type Archive struct {
+	physical     *resource.Ledger
 	admission    func(int64, bool) error
 	workQuota    int64
 	workUsed     int64
@@ -93,6 +96,29 @@ func (a *Archive) Close() error {
 	a.closed = true
 	return errors.Join(a.lock.Close(), a.root.Close())
 }
+
+// BindPhysicalQuota attaches the authority-shared admission broker and imports
+// pre-existing archive bytes once so a rollout cannot treat legacy content as
+// free capacity.
+func (a *Archive) BindPhysicalQuota(ledger *resource.Ledger) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return os.ErrClosed
+	}
+	if ledger == nil || a.physical != nil {
+		return c.Fail(c.InvalidArgument, "one shared physical quota ledger required")
+	}
+	measured, err := resource.Measure(a.root, true)
+	if err != nil {
+		return err
+	}
+	if err = ledger.ImportRetained(context.Background(), "artifact", "ARCHIVE_BASE", measured); err != nil {
+		return err
+	}
+	a.physical = ledger
+	return nil
+}
 func validateRef(ref Ref) error {
 	if ref.SchemaVersion != c.SchemaVersion || !taskValid(ref.TaskID) || !c.ValidDigest(ref.SnapshotDigest) {
 		return c.Fail(c.InvalidArgument, "invalid scoped snapshot reference")
@@ -117,8 +143,72 @@ func (a *Archive) publish(name string, raw []byte) error {
 	if err := a.admit(int64(len(raw)), a.controlWrite); err != nil {
 		return err
 	}
+	var allocation resource.Allocation
+	newDirectories, err := missingDirectories(a.root, filepath.Dir(name))
+	if err != nil {
+		return err
+	}
+	covered := false
+	if a.physical != nil {
+		_, covered, err = a.physical.EnclosingReservation(context.Background(), a.root.Name())
+		if err != nil {
+			return err
+		}
+		if !covered {
+			upperBytes := uint64(len(raw))*2 + uint64(newDirectories)*4096 + 8192
+			upperEntries := uint64(2 + newDirectories)
+			class := resource.Payload
+			if a.controlWrite {
+				class = resource.Control
+			}
+			allocation, err = a.physical.Reserve(context.Background(), resource.Request{Writer: "artifact", Family: "IMMUTABLE", RequestDigest: c.HashBytes([]byte(name + "\x00" + c.HashBytes(raw))), TargetRoot: a.root.Name(), UpperBytes: upperBytes, UpperEntries: upperEntries, Class: class})
+			if err != nil {
+				return err
+			}
+			if err = allocation.Begin(context.Background()); err != nil {
+				return err
+			}
+		}
+	}
 	a.workUsed += int64(len(raw))
-	return fileguard.Publish(a.root, name, raw)
+	if err = fileguard.Publish(a.root, name, raw); err != nil {
+		return err
+	}
+	if a.physical != nil && !covered {
+		inventory, measureErr := resource.MeasureFileInventory(a.root, name)
+		if measureErr != nil {
+			return measureErr
+		}
+		inventory.Entries += uint64(newDirectories)
+		inventory.ChargedBytes += uint64(newDirectories) * 4096
+		if err = allocation.Commit(context.Background(), inventory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func missingDirectories(root *os.Root, directory string) (int, error) {
+	count := 0
+	for directory != "." && directory != "" {
+		info, err := root.Lstat(directory)
+		if err == nil {
+			if !info.IsDir() {
+				return 0, c.Fail(c.PolicyDenied, "artifact parent is not a directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		count++
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return 0, c.Fail(c.PolicyDenied, "artifact parent escaped archive root")
+		}
+		directory = parent
+	}
+	return count, nil
 }
 func (a *Archive) putBlob(task string, raw []byte) (string, error) {
 	if len(raw) > 64<<20 {
@@ -291,7 +381,46 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 		return result, err
 	}
 	stage := filepath.Join("tasks", ref.TaskID, "candidates", ".prepare-"+hex.EncodeToString(nonce[:]))
-	if err = a.root.MkdirAll(filepath.Join(stage, "source"), 0755); err != nil {
+	var materializedAllocation resource.Allocation
+	materializationCovered := false
+	parentDirectories, err := missingDirectories(a.root, filepath.Dir(target))
+	if err != nil {
+		return result, err
+	}
+	if a.physical != nil {
+		total := uint64(4096)
+		for _, entry := range capture.Snapshot.Entries {
+			total += uint64(entry.Size)
+		}
+		fileCount := uint64(len(capture.Snapshot.Entries) + 1)
+		directoryCount := uint64(len(capture.Snapshot.Directories) + 3 + parentDirectories)
+		upperBytes := 2*total + (fileCount+directoryCount)*4096
+		upperEntries := 2 * (fileCount + directoryCount + 1)
+		if err = a.admit(int64(total), false); err != nil {
+			return result, err
+		}
+		_, materializationCovered, err = a.physical.EnclosingReservation(context.Background(), filepath.Join(a.root.Name(), target))
+		if err != nil {
+			return result, err
+		}
+		if !materializationCovered {
+			requestDigest := c.HashBytes([]byte("materialize:" + ref.TaskID + ":" + ref.SnapshotDigest))
+			materializedAllocation, err = a.physical.Reserve(context.Background(), resource.Request{Writer: "artifact", Family: "MATERIALIZE", RequestDigest: requestDigest, TargetRoot: filepath.Join(a.root.Name(), target), UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+			if err != nil {
+				return result, err
+			}
+			if err = materializedAllocation.Begin(context.Background()); err != nil {
+				return result, err
+			}
+		}
+		a.workUsed += int64(total)
+		if err = a.root.MkdirAll(filepath.Dir(stage), 0700); err != nil {
+			return result, err
+		}
+		if err = a.root.MkdirAll(filepath.Join(stage, "source"), 0755); err != nil {
+			return result, err
+		}
+	} else if err = a.root.MkdirAll(filepath.Join(stage, "source"), 0755); err != nil {
 		return result, err
 	}
 	// No recursive cleanup: a failed prepare remains an explicitly unpublished
@@ -316,10 +445,12 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 		// original modes remain in the immutable capture manifest. The enclosing
 		// private archive ACL prevents host-wide source disclosure.
 		mode = (mode & 0111) | 0444
-		if err := a.admit(entry.Size, false); err != nil {
-			return result, err
+		if a.physical == nil {
+			if err = a.admit(entry.Size, false); err != nil {
+				return result, err
+			}
+			a.workUsed += entry.Size
 		}
-		a.workUsed += entry.Size
 		f, err := a.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return result, err
@@ -343,10 +474,12 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 	if err != nil {
 		return result, err
 	}
-	if err = a.admit(int64(len(raw)), false); err != nil {
-		return result, err
+	if a.physical == nil {
+		if err = a.admit(int64(len(raw)), false); err != nil {
+			return result, err
+		}
+		a.workUsed += int64(len(raw))
 	}
-	a.workUsed += int64(len(raw))
 	if err = fileguard.Publish(a.root, filepath.Join(stage, "manifest.json"), raw); err != nil {
 		return result, err
 	}
@@ -371,6 +504,22 @@ func (a *Archive) Materialize(ref Ref) (Materialized, error) {
 	}
 	if err = fileguard.SyncParents(a.root, filepath.Dir(target)); err != nil {
 		return result, err
+	}
+	if a.physical != nil && !materializationCovered {
+		candidate, openErr := a.root.OpenRoot(target)
+		if openErr != nil {
+			return result, openErr
+		}
+		inventory, measureErr := resource.Measure(candidate, true)
+		closeErr := candidate.Close()
+		if measureErr != nil || closeErr != nil {
+			return result, errors.Join(measureErr, closeErr)
+		}
+		inventory.Entries += uint64(parentDirectories)
+		inventory.ChargedBytes += uint64(parentDirectories) * 4096
+		if err = materializedAllocation.Commit(context.Background(), inventory); err != nil {
+			return result, err
+		}
 	}
 	return result, a.validateMaterialized(target, capture)
 }

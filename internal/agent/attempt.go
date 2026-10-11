@@ -145,9 +145,14 @@ func (s *Session) validateAttempt(doc Document) error {
 		if a.validate() != nil || a.ChildTask != doc.TaskID || doc.TaskID != "eval-"+a.Scope.InstanceID || doc.AttemptOrigin != nil || taskKind(doc) != "ANALYSIS" || doc.Runtime != nil || doc.Candidate != doc.Baseline {
 			return c.Fail(c.StoreIntegrityError, "invalid immutable evaluator lineage")
 		}
+		if doc.EvaluationAssignment != nil && (doc.EvaluationAssignment.Validate() != nil || doc.EvaluationAssignment.Task != a.ParentTask) {
+			return c.Fail(c.StoreIntegrityError, "invalid preregistered evaluator assignment binding")
+		}
 		if err := s.validateEvaluationLineage(context.Background(), *a); err != nil {
 			return err
 		}
+	} else if doc.EvaluationAssignment != nil {
+		return c.Fail(c.StoreIntegrityError, "evaluation assignment has no separate owner lineage")
 	}
 	if doc.MergedDelivery != nil {
 		if doc.AttemptOrigin == nil || doc.MergedDelivery.Validate() != nil || taskKind(doc) != "ANALYSIS" || doc.Runtime != nil || doc.Baseline.SnapshotDigest != doc.MergedDelivery.Result || doc.Candidate != doc.Baseline {

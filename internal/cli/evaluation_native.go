@@ -13,6 +13,9 @@ func runEvaluationCandidate(command string, args []string, out, errout io.Writer
 	f := flags(command, errout)
 	store := f.String("store", "", "existing original private task store")
 	recipe := f.String("recipe", "", "bound hidden operator STDIO recipe outside original root/store")
+	registration := f.String("registration", "", "frozen evaluation registration directory")
+	arm := f.String("arm", "", "predeclared arm ID for registered evaluation")
+	repeat := f.Int("repeat", 0, "predeclared repeat number for registered evaluation")
 	output := f.String("output", "", "fresh independent evaluator directory")
 	bundle := f.String("bundle", "", "existing native independent evaluator directory")
 	jsonMode := f.Bool("json", false, "structured independent result")
@@ -27,20 +30,31 @@ func runEvaluationCandidate(command string, args []string, out, errout io.Writer
 	var result evaluation.NativeResult
 	var err error
 	if command == "eval-inspect" {
-		if task != "" || *bundle == "" || *store != "" || *recipe != "" || *output != "" {
-			return report(out, errout, c.Fail(c.InvalidArgument, "eval-inspect requires only bundle"), *jsonMode)
+		if task != "" || *bundle == "" || *store != "" || *recipe != "" || *output != "" || *arm != "" || *repeat != 0 {
+			return report(out, errout, c.Fail(c.InvalidArgument, "eval-inspect requires bundle and optionally registration"), *jsonMode)
 		}
-		result, err = evaluation.ReadNativeResult(context.Background(), *bundle)
+		if *registration == "" {
+			result, err = evaluation.ReadNativeResult(context.Background(), *bundle)
+		} else {
+			result, err = evaluation.ReadRegisteredNativeResult(context.Background(), *bundle, *registration)
+		}
 	} else {
-		if task == "" || *store == "" || *recipe == "" || *output == "" || *bundle != "" {
-			return report(out, errout, c.Fail(c.InvalidArgument, "task/store/hidden recipe/fresh output required"), *jsonMode)
+		if task == "" || *store == "" || *output == "" || *bundle != "" {
+			return report(out, errout, c.Fail(c.InvalidArgument, "task/store/fresh output required"), *jsonMode)
+		}
+		if *registration == "" && (*recipe == "" || *arm != "" || *repeat != 0) || *registration != "" && (*recipe != "" || *arm == "" || *repeat < 1 || *repeat > 10) {
+			return report(out, errout, c.Fail(c.InvalidArgument, "choose either a post-hoc recipe or a registered arm and repeat"), *jsonMode)
 		}
 		original, openErr := agent.OpenExisting(context.Background(), *store)
 		if openErr != nil {
 			return report(out, errout, openErr, *jsonMode)
 		}
 		defer original.Close()
-		result, err = evaluation.RunCandidate(context.Background(), original, task, *recipe, *output)
+		if *registration == "" {
+			result, err = evaluation.RunCandidate(context.Background(), original, task, *recipe, *output)
+		} else {
+			result, err = evaluation.RunRegisteredCandidate(context.Background(), original, task, *registration, *arm, *repeat, *output)
+		}
 	}
 	if err != nil {
 		return report(out, errout, err, *jsonMode)

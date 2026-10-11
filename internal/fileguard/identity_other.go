@@ -10,3 +10,6 @@ import (
 func DirectoryIdentity(root *os.Root) (string, error) {
 	return "", c.Fail(c.UnsupportedCapability, "physical directory identity unavailable")
 }
+
+func FileIdentity(*os.File) (string, error)   { return "", unsupported() }
+func VolumeIdentity(*os.Root) (string, error) { return "", unsupported() }

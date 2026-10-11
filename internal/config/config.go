@@ -41,9 +41,10 @@ type Layer struct {
 	File   File   `json:"file"`
 }
 type Resolved struct {
-	SchemaVersion int         `json:"schema_version"`
-	Layers        []Layer     `json:"layers"`
-	Preferences   Preferences `json:"preferences"`
+	SchemaVersion int           `json:"schema_version"`
+	Layers        []Layer       `json:"layers"`
+	Preferences   Preferences   `json:"preferences"`
+	Authority     *AuthorityRef `json:"operator_authority,omitempty"`
 }
 
 func (f File) Validate() error {
@@ -140,6 +141,11 @@ func Resolve(user, project *File) (Resolved, error) {
 	return result, result.Validate()
 }
 func (r Resolved) Validate() error {
+	if r.Authority != nil {
+		if err := r.Authority.Validate(); err != nil {
+			return err
+		}
+	}
 	if r.SchemaVersion != 1 || len(r.Layers) > 2 {
 		return c.Fail(c.StoreIntegrityError, "invalid config resolution")
 	}
@@ -182,6 +188,22 @@ func (r Resolved) Validate() error {
 	return nil
 }
 func (r Resolved) AdmitProvider(provider string, remote bool) error {
+	if err := r.CurrentAuthority(); err != nil {
+		return err
+	}
+	return r.AdmitRetainedProvider(provider, remote)
+}
+
+// AdmitRetainedProvider validates the historical binding without reading current
+// operator state. Replay remains available after revocation; effects still use
+// AdmitProvider and the current authority gate.
+func (r Resolved) AdmitRetainedProvider(provider string, remote bool) error {
+	if r.Authority != nil {
+		initial := Resolved{Layers: []Layer{{Origin: "USER", File: File{SchemaVersion: 1, Restrictions: r.Authority.Initial.Restrictions}}}}
+		if err := initial.AdmitRetainedProvider(provider, remote); err != nil {
+			return err
+		}
+	}
 	for _, layer := range r.Layers {
 		limits := layer.File.Restrictions
 		if remote && limits.RemoteInference != nil && !*limits.RemoteInference {
@@ -203,6 +225,11 @@ func (r Resolved) AdmitProvider(provider string, remote bool) error {
 }
 func (r Resolved) SensitivePaths() []string {
 	seen := map[string]bool{}
+	if r.Authority != nil {
+		for _, scope := range r.Authority.Initial.Restrictions.SensitivePaths {
+			seen[scope] = true
+		}
+	}
 	for _, layer := range r.Layers {
 		for _, scope := range layer.File.Restrictions.SensitivePaths {
 			seen[scope] = true
@@ -214,4 +241,32 @@ func (r Resolved) SensitivePaths() []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// Training has its own consent axis. A repository can restrict it but cannot
+// opt the user in, and telemetry permission never implies training permission.
+func (r Resolved) AdmitTrainingExport() error {
+	if err := r.CurrentAuthority(); err != nil {
+		return err
+	}
+	optedIn := false
+	for _, layer := range r.Layers {
+		value := layer.File.Restrictions.TrainingExport
+		if value != nil && !*value {
+			return c.Fail(c.PolicyDenied, "training export denied by retained restrictions")
+		}
+		if layer.Origin == "USER" && value != nil && *value {
+			optedIn = true
+		}
+	}
+	if r.Authority != nil {
+		value := r.Authority.Initial.Restrictions.TrainingExport
+		if value != nil && !*value {
+			return c.Fail(c.PolicyDenied, "training export denied by operator restrictions")
+		}
+	}
+	if !optedIn {
+		return c.Fail(c.PolicyDenied, "training export requires separate user opt-in")
+	}
+	return r.AdmitEffect("export")
 }
