@@ -21,7 +21,15 @@ func usePrivateConfigRoot(t *testing.T) string {
 	root := onboardingTempDir(t)
 	t.Setenv("APPDATA", root)
 	t.Setenv("XDG_CONFIG_HOME", root)
-	return root
+	// Darwin derives its config directory from HOME, not APPDATA/XDG. Keep
+	// every supported OS inside the test's private root and use its actual
+	// platform directory rather than assuming the environment value is it.
+	t.Setenv("HOME", root)
+	configRoot, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return configRoot
 }
 
 func onboardingTempDir(t *testing.T) string {
