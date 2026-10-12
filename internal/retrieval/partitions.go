@@ -8,10 +8,13 @@ import (
 	"github.com/ixayldz/Viber/internal/policy"
 )
 
-const PartitionVersion = "AUTHORIZED_SOURCE_PARTITIONS_V1"
+const PartitionVersion = "AUTHORIZED_SOURCE_PARTITIONS_V2"
 const PartitionMaxBytes = 4 << 20
-const PartitionMaxDocuments = 256
-const PartitionMaxCount = 64
+
+// Smaller lazy batches keep cold indexing responsive as repositories grow.
+// The count envelope still covers all 10,000 admitted source documents.
+const PartitionMaxDocuments = 128
+const PartitionMaxCount = 128
 
 type Partition struct {
 	Ordinal     int    `json:"ordinal"`

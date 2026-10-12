@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,6 +199,14 @@ func TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete
 			lock.Close()
 			t.Fatal(createErr)
 		}
+		// Nonempty untyped leases may belong to an older owner protocol. Their
+		// current liveness and authority cannot be inferred, so retirement must
+		// fail closed instead of treating them like empty crash leftovers.
+		if _, createErr = f.Write([]byte("legacy owner lease")); createErr != nil {
+			f.Close()
+			lock.Close()
+			t.Fatal(createErr)
+		}
 		if createErr = f.Close(); createErr != nil {
 			lock.Close()
 			t.Fatal(createErr)
@@ -206,7 +215,12 @@ func TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete
 	}
 	lock.Close()
 	if _, err = privacyOperation(ctx, *s.privacy); err == nil {
-		t.Fatal("restore operation created an over-quota owner lease")
+		t.Fatal("restore operation adopted an untyped legacy lease")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.StoreIntegrityError {
+			t.Fatal("untyped legacy catalog was not rejected with its exact fail-closed reason", err)
+		}
 	}
 	after, err := admitPrivacyCatalog(root)
 	if err != nil || after != count {
@@ -216,6 +230,11 @@ func TestPrivacyOwnerCatalogRejectsBeforeLeaseAndExistingOwnerCanReopenAndDelete
 	if owner, err := s.OpenIndependentEvaluator(ctx, candidate); err == nil {
 		owner.Close()
 		t.Fatal("new evaluator entered saturated owner catalog")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.BudgetLimitReached {
+			t.Fatal("new evaluator rejection did not enforce the owner catalog budget", err)
+		}
 	}
 	after, err = admitPrivacyCatalog(root)
 	if err != nil || after != count {

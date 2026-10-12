@@ -178,7 +178,9 @@ func (s *Store) AttachPhysicalQuota(ledger *resource.Ledger) error {
 	}
 	if err = s.attachMutableSQLite(ledger); err != nil {
 		s.mutable = nil
+		s.controlReserve = nil
 		_ = s.disk.SetAdmissionHook(nil)
+		_ = s.disk.SetReserveReconcileHook(nil)
 		return err
 	}
 	s.physical = ledger

@@ -2,13 +2,86 @@ package intelligence
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/runner"
 	"github.com/ixayldz/Viber/internal/workspace"
 )
+
+func TestGoSemanticWorkerPinnedDockerIntegration(t *testing.T) {
+	image := os.Getenv("VIBER_GO_GRAPH_TEST_IMAGE")
+	if image == "" {
+		t.Skip("opt-in pinned Go graph helper image required")
+	}
+	sourceRoot := t.TempDir()
+	if err := os.Chmod(sourceRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "go.mod"), []byte("module fixture.invalid/graph\n\ngo 1.27.2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "graph.go"), []byte("package graph\nfunc Target() {}\nfunc Caller() { Target() }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := workspace.CaptureDirectory(sourceRoot, workspace.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NormalizeGoSemanticOptions(GoSemanticOptions{GOOS: "linux", GOARCH: "amd64", Compiler: "gc", GoVersion: "1.27.2", BuildTagsComplete: true, CGOEnabled: "DISABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(GoSemanticWorkerRequest{Protocol: GoSemanticWorkerProtocol, CandidateDigest: capture.Snapshot.Digest, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDigest := c.HashBytes(request)
+	lease := runner.Lease{SchemaVersion: 1, InstanceID: strings.Repeat("1", 32), ID: strings.Repeat("2", 32), TaskDigest: capture.Snapshot.Digest, OperationDigest: requestDigest, Generation: 1, PolicyEpoch: 1, SpecVersion: 1, ClockDomain: strings.Repeat("3", 32), DeadlineMillis: 120000}
+	input := append([]byte(nil), request...)
+	profile := runner.DefaultProfile(image)
+	target, capsule, err := runner.PrepareTarget(runner.Target{Owner: runner.Ownership{Lease: lease, Phase: "CHECK", Ordinal: 1}, Source: sourceRoot, Profile: profile, Invocation: runner.Invocation{CandidateDigest: capture.Snapshot.Digest, RequestDigest: requestDigest, Argv: []string{"/usr/local/bin/viber-go-graph-helper"}, Stdin: &input}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := runner.OpenDocker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	owned, err := runner.WithOwnership(ctx, target.Owner, time.Now().Add(120*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := broker.Run(owned, target.Source, target.Profile, target.Invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 || result.OutputTruncated || !result.SourceReadOnly || !result.ProtectedResultChannel || !result.ProcessTreeQuiescent || result.Ownership == nil || *result.Ownership != capsule {
+		t.Fatalf("pinned graph helper lacks owned bounded completion evidence: %#v", result)
+	}
+	var response GoSemanticWorkerResponse
+	if err = c.DecodeStrict(result.Stdout, &response); err != nil || response.Protocol != GoSemanticWorkerProtocol || response.TypeCheckMode != GoSemanticWorkerTypeCheckMode {
+		t.Fatalf("pinned helper omitted its fixed type-check mode: %v", err)
+	}
+	if err = ValidateGoSemanticGraphEnvelope(response.Graph, capture, options, capture.Snapshot.Digest); err != nil {
+		t.Fatalf("pinned helper graph did not bind to exact source bytes: %v", err)
+	}
+	for _, edge := range response.Graph.Edges {
+		if edge.Relation == "CALLS" && edge.ResolutionClass == "ACTUAL_RESOLVED" && edge.EvidencePath == "graph.go" && edge.EvidenceKind == "GO_TYPES_OBJECT_USE" {
+			return
+		}
+	}
+	t.Fatalf("pinned helper did not produce the expected resolved source call: %#v", response.Graph.Edges)
+}
 
 func TestCapturedGoSemanticGraphResolvesCallsAndWidensUncertainBuilds(t *testing.T) {
 	source := goSemanticFixture(t, map[string][]byte{
@@ -42,6 +115,16 @@ func TestCapturedGoSemanticGraphResolvesCallsAndWidensUncertainBuilds(t *testing
 	}
 	if err := ValidateGoSemanticGraph(graph, source, options); err != nil {
 		t.Fatalf("fresh graph did not validate: %v", err)
+	}
+	hints, err := BuildGoSemanticHintsGraph(context.Background(), source, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hints.Coverage.TypeCheckedPackages != 0 || !hints.Coverage.WidenCheckSelection || hints.Coverage.Overall != "PARTIAL_SOURCE_BOUND_GO_TYPES_GRAPH" || !containsGoString(hints.Coverage.Unknowns, "GO_TYPES_NOT_RUN_IN_COOPERATIVE_PATH") {
+		t.Fatalf("parse-only host hints did not remain partial and broad: %#v", hints.Coverage)
+	}
+	if err := ValidateGoSemanticGraph(hints, source, options); err != nil {
+		t.Fatalf("parse-only graph failed source validation: %v", err)
 	}
 	selection, err := SelectGoTests(graph, []string{"pkg/base.go"})
 	if err != nil {

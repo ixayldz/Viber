@@ -4,7 +4,9 @@
 
 | Kullanıcı yeteneği | Kullanılabilir kapsam | Açık kabul/eksik |
 |---|---|---|
-| Kalıcı görev/candidate/diff/export | CLI, fixture loop, immutable capture/candidate, task/store replay, bounded approval | Tam apply/owned restore ve hostile writer matrisi |
+| Kalıcı görev/candidate/diff/export | CLI, fixture loop, immutable capture/candidate, task/store replay, bounded approval | — |
+| Canlı apply/owned restore | Main'de yalnız Windows fixed NTFS için açık `--exclusive-ntfs` profili; mevcut regular dosyalara sınırlı içerik yazısı, durable per-file receipt, exact owned restore ve read-only reconcile. Varsayılan her platformda review/patch teslimidir. | Current main exact-source Windows hostile-writer/checkpoint CI kabulü bekliyor; yayımlanmış `engineering-f1b323d…` paketi bu yeni profili içermiyor. |
+| Linux/macOS teslimi | Main'de fresh review/export/patch; doğrudan live apply/restore fail-closed unsupported. | Bu bilinçli PRD §13.3 candidate/patch fallback'idir; tek başına koşulsuz “eksik backend” sayılmaz. |
 | Model bağlantısı | Offline fixture; Ollama adapter; resmî ChatGPT giriş kodu; OpenAI/Anthropic API JSON/SSE | Gerçek hesap/model/provider kabulü ayrı; fixture gerçek inference değildir |
 | Context retrieval | Source-bound FTS5/BM25/trigram, exact span/paging/cache/log processing; Go parser/types resolved graph ve conservative test önerisi; TS/JS/Python lexical hints, cutoff-bound Git history/co-change, opt-in local embedding ve DEV/HOLDOUT advisory ranking | Genel LSP/diğer dillerde resolved graph, gerçek runtime coverage ve bağımsız effectiveness/reference p95; eksik import/build context PARTIAL |
 | Verification | Korunan exact STDIO oracle, candidate binding, fresh merged check, ayrı hidden evaluator owner; bounded framework/import discovery ve protected closure | Genel runtime oracle/coverage ve V0–V5 tam saldırgan kabul matrisi |

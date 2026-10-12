@@ -17,12 +17,36 @@ func TestProfileRejectsUnpinnedOrUnboundedExecution(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	localID := DefaultProfile("sha256:" + strings.Repeat("b", 64))
+	if err := localID.Validate(); err != nil {
+		t.Fatalf("immutable local image ID rejected: %v", err)
+	}
 	for _, mutate := range []func(*Profile){func(p *Profile) { p.Image = "golang:latest" }, func(p *Profile) { p.TimeoutSeconds = 0 }, func(p *Profile) { p.Pids = 0 }, func(p *Profile) { p.MemoryBytes = 1 }, func(p *Profile) { p.MaxOutputBytes = 1 << 62 }} {
 		bad := p
 		mutate(&bad)
 		if err := bad.Validate(); err == nil {
 			t.Fatal("invalid profile accepted", bad)
 		}
+	}
+}
+
+func TestLocalPinnedImageMustResolveToExactImageID(t *testing.T) {
+	want := "sha256:" + strings.Repeat("c", 64)
+	profile := DefaultProfile(want)
+	docker := &Docker{controlHook: func(_ context.Context, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") != "image inspect --format {{.Id}} "+want {
+			t.Fatalf("local image was not inspected by exact ID: %v", args)
+		}
+		return []byte(want + "\n"), nil
+	}}
+	if err := docker.verifyPinnedImage(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	docker.controlHook = func(context.Context, ...string) ([]byte, error) {
+		return []byte("sha256:" + strings.Repeat("d", 64)), nil
+	}
+	if err := docker.verifyPinnedImage(context.Background(), profile); err == nil {
+		t.Fatal("different local image ID accepted")
 	}
 }
 func TestBoundedOutputCancelsOnceAndDoesNotExposeInternalBytes(t *testing.T) {

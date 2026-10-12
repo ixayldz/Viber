@@ -48,6 +48,13 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 		if doc.AttemptOrigin == nil || doc.AttemptOrigin.RequestDigest != digest {
 			return state, c.Fail(c.CommandIDConflict, "new task ID already used with different attempt input")
 		}
+		_, attemptParent, err := s.Load(ctx, doc.AttemptOrigin.ParentTask)
+		if err != nil {
+			return state, err
+		}
+		if attemptParent.GoalOrigin != nil {
+			return state, c.Fail(c.UnsupportedCapability, "scheduled child budgets cannot be cloned into another task; queue a separately allocated goal from its parent")
+		}
 		if state.Execution == c.Created || state.Execution == c.Scoping {
 			state, _, err = s.Load(ctx, options.NewTask)
 			if err != nil {
@@ -75,6 +82,9 @@ func (s *Session) NewAttempt(ctx context.Context, options AttemptOptions) (c.Tas
 	parent, doc, err := s.Load(ctx, options.ParentTask)
 	if err != nil {
 		return parent, err
+	}
+	if doc.GoalOrigin != nil {
+		return parent, c.Fail(c.UnsupportedCapability, "scheduled child budgets cannot be cloned into another task; queue a separately allocated goal from its parent")
 	}
 	if parent.Execution != c.Terminated || parent.TaskSeq != options.ExpectedParentSequence {
 		return parent, c.Fail(c.StaleRequest, "parent must be terminal at the exact requested sequence")

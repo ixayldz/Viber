@@ -51,7 +51,7 @@ func TestOwnerLazyPartitionsExposePartialCoverageAndBindCursorAndPolicy(t *testi
 		return result, err
 	}
 	first, err := search("TargetLast", 0, "")
-	if err != nil || len(first.Retrieval.Hits) != 0 || first.Retrieval.Partition == nil || len(first.Retrieval.Partition.Partitions) != 3 || first.Retrieval.Partition.AuthorizedDocuments != 600 || first.Retrieval.Manifest.Documents != 256 || first.Retrieval.Cache.Hit {
+	if err != nil || len(first.Retrieval.Hits) != 0 || first.Retrieval.Partition == nil || len(first.Retrieval.Partition.Partitions) != 5 || first.Retrieval.Partition.AuthorizedDocuments != 600 || first.Retrieval.Manifest.Documents != 128 || first.Retrieval.Cache.Hit {
 		t.Fatal("first useful query built all source indexes or hid incomplete coverage", first, err)
 	}
 	if !strings.Contains(first.Retrieval.Partition.Scope, "NO_REPOSITORY_ABSENCE_PROOF") || first.Retrieval.Partition.Next == nil || *first.Retrieval.Partition.Next != 1 {
@@ -61,7 +61,7 @@ func TestOwnerLazyPartitionsExposePartialCoverageAndBindCursorAndPolicy(t *testi
 	if err != nil || !warm.Retrieval.Cache.Hit {
 		t.Fatal("same lazy partition rebuilt", err)
 	}
-	last, err := search("TargetLast", 2, "")
+	last, err := search("TargetLast", 4, "")
 	if err != nil || len(last.Retrieval.Hits) != 1 || last.Retrieval.Hits[0].Path != "src/0599.txt" || last.Retrieval.Manifest.Documents != 88 || last.Retrieval.Partition.Next != nil {
 		t.Fatal("last partition lost exact source", last, err)
 	}

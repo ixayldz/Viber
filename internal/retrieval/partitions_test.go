@@ -17,7 +17,7 @@ func TestPartitionPlanCoversAllSourcesDeterministicallyWithinBounds(t *testing.T
 		docs = append(docs, document(fmt.Sprintf("src/%05d.go", n), fmt.Sprintf("symbol%d\n", n)))
 	}
 	first, err := PlanPartitions(ctx, fixtureBinding(), docs)
-	if err != nil || len(first.Partitions) != 40 {
+	if err != nil || len(first.Partitions) != 79 {
 		t.Fatal(first.Partitions, err)
 	}
 	reversed := append([]Document{}, docs...)
@@ -44,7 +44,7 @@ func TestPartitionPlanCoversAllSourcesDeterministicallyWithinBounds(t *testing.T
 	if len(seen) != len(docs) {
 		t.Fatal("sources silently omitted", len(seen))
 	}
-	lastDocs, last, err := first.Select(39)
+	lastDocs, last, err := first.Select(78)
 	if err != nil || last.Next != nil || lastDocs[len(lastDocs)-1].Path != "src/09999.go" {
 		t.Fatal(last, err)
 	}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/store"
 	"os"
@@ -92,8 +93,17 @@ func TestGoalQueueCreatesSeparateSnapshotBoundChildAndRecoversAfterRestore(t *te
 		t.Fatal(err)
 	}
 	queued, err := s.GoalControl(ctx, GoalCommand{CommandID: "goal-add-one", TaskID: opts.TaskID, Action: "add", ChildTaskID: "goal-child-one", Text: "Inspect the captured source independently."})
-	if err != nil || len(queued.GoalQueue) != 1 || queued.GoalQueue[0].Status != "QUEUED" || len(queued.PromptQueue) != len(before.PromptQueue) || queued.InputBarrier || queueIndependentState(queued) != queueIndependentState(before) {
+	if err != nil || len(queued.GoalQueue) != 1 || queued.GoalQueue[0].Status != "QUEUED" || len(queued.PromptQueue) != len(before.PromptQueue) || queued.InputBarrier || queueIndependentState(queued) == queueIndependentState(before) {
 		t.Fatal("goal scheduling became steering or changed current authority", queued, err)
+	}
+	allocation := queued.GoalQueue[0].BudgetAllocation
+	allocationDigest, digestErr := allocation.Digest()
+	if digestErr != nil || allocationDigest != queued.GoalQueue[0].BudgetAllocationDigest || allocation.MaxSteps != opts.Budget.MaxSteps/goalBudgetTrancheDenominator {
+		t.Fatal("goal allocation was not durably digest-bound to a fixed tranche", allocation, digestErr)
+	}
+	remaining, err := budgetHeadroom(opts.Budget, queued.GoalQueue, false)
+	if err != nil || remaining.MaxSteps != opts.Budget.MaxSteps-allocation.MaxSteps || remaining.MaxInputTokens != opts.Budget.MaxInputTokens-allocation.MaxInputTokens {
+		t.Fatal("queued child budget was not reserved from parent headroom", remaining, allocation, err)
 	}
 	state, item, err := s.BeginGoalActivation(ctx, GoalCommand{CommandID: "goal-activate-one", TaskID: opts.TaskID, Action: "activate", GoalID: "goal-add-one"})
 	if err != nil || item.Status != "ACTIVATING" {
@@ -103,6 +113,15 @@ func TestGoalQueueCreatesSeparateSnapshotBoundChildAndRecoversAfterRestore(t *te
 	if err != nil || child.TaskID != "goal-child-one" || child.Execution != c.Ready {
 		t.Fatal("separate child was not admitted", child, err)
 	}
+	_, err = s.NewAttempt(ctx, AttemptOptions{ParentTask: child.TaskID, NewTask: "goal-child-budget-clone", ExpectedParentSequence: child.TaskSeq})
+	var typed *c.Error
+	if !errors.As(err, &typed) || typed.Code != c.UnsupportedCapability {
+		t.Fatalf("scheduled child budget was cloned into a fresh task: %v", err)
+	}
+	_, childDoc, err := s.Load(ctx, child.TaskID)
+	if err != nil || !budgetMatchesAllocation(childDoc.Budget, allocation) || childDoc.GoalOrigin == nil || childDoc.GoalOrigin.BudgetAllocationDigest != item.BudgetAllocationDigest {
+		t.Fatal("child did not receive its exact immutable allocation", childDoc.Budget, allocation, err)
+	}
 	activated, err := s.CommitGoalActivation(ctx, opts.TaskID, item, child)
 	if err != nil || len(activated.GoalQueue) != 1 || activated.GoalQueue[0].Status != "ACTIVATED" || activated.GoalQueue[0].ChildTaskSeq != child.TaskSeq || activated.GoalQueue[0].ChildDocumentDigest != child.DocumentDigest {
 		t.Fatal("child binding receipt missing", activated, err)
@@ -111,12 +130,21 @@ func TestGoalQueueCreatesSeparateSnapshotBoundChildAndRecoversAfterRestore(t *te
 	if err != nil || !reflect.DeepEqual(child, retried) {
 		t.Fatal("stable child reconciliation created a different task", retried, err)
 	}
-	if _, err = s.GoalControl(ctx, GoalCommand{CommandID: "goal-add-two", TaskID: opts.TaskID, Action: "add", ChildTaskID: "goal-child-two", Text: "A second independently scheduled task."}); err != nil {
+	withSecond, err := s.GoalControl(ctx, GoalCommand{CommandID: "goal-add-two", TaskID: opts.TaskID, Action: "add", ChildTaskID: "goal-child-two", Text: "A second independently scheduled task."})
+	if err != nil {
 		t.Fatal(err)
+	}
+	second := withSecond.GoalQueue[1].BudgetAllocation
+	if second.MaxSteps != allocation.MaxSteps || second.MaxInputTokens != allocation.MaxInputTokens {
+		t.Fatal("second child did not receive a separately reserved tranche", second, allocation)
 	}
 	cancelled, err := s.GoalControl(ctx, GoalCommand{CommandID: "goal-cancel-two", TaskID: opts.TaskID, Action: "cancel", GoalID: "goal-add-two"})
 	if err != nil || len(cancelled.GoalQueue) != 2 || cancelled.GoalQueue[1].Status != "CANCELLED" {
 		t.Fatal("queued goal cancellation was not durable", cancelled, err)
+	}
+	remaining, err = budgetHeadroom(opts.Budget, cancelled.GoalQueue, false)
+	if err != nil || remaining.MaxSteps != opts.Budget.MaxSteps-allocation.MaxSteps || remaining.MaxInputTokens != opts.Budget.MaxInputTokens-allocation.MaxInputTokens {
+		t.Fatal("cancelling an unactivated goal did not release only its own tranche", remaining, err)
 	}
 	backup := filepath.Join(t.TempDir(), "backup")
 	if _, err = s.Backup(ctx, backup); err != nil {
@@ -155,6 +183,12 @@ func TestKernelPublicationCanRetryOnlyQueueCursorChanges(t *testing.T) {
 	next, err := s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
 	if err != nil || len(next.PromptQueue) != 1 {
 		t.Fatal("benign queue cursor killed work", next, err)
+	}
+	if _, err = s.GoalControl(ctx, GoalCommand{CommandID: "reserved-goal", TaskID: opts.TaskID, Action: "add", ChildTaskID: "reserved-child", Text: "Reserve an independent child budget."}); err != nil {
+		t.Fatal("goal allocation could not be durably reserved", err)
+	}
+	if _, err = s.record(ctx, next, doc, "SessionRecorded", c.EventPayload{}); err == nil {
+		t.Fatal("stale work publication crossed a changed child-budget pool")
 	}
 	if _, err = s.RecordSteering(ctx, SteeringInput{CommandID: "steer", TaskID: opts.TaskID, Text: "stop"}); err != nil {
 		t.Fatal(err)

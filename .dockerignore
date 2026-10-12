@@ -1,0 +1,14 @@
+.git
+.cache
+.tools
+**/.cache
+**/.tools
+evidence
+**/.aws
+**/.ssh
+**/.codex
+**/.agents
+.env
+.env.*
+**/.env
+**/.env.*

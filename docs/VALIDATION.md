@@ -1,5 +1,15 @@
 # Doğrulama kaydı
 
+## 12 Ekim CI takip düzeltmesi
+
+`4fa2332f9e2b71f8616622fd542b83374578a22a` [CI38167787683](https://github.com/ixayldz/Viber/actions/runs/38167787683) Windows native/full/migration, macOS native/full/migration ve rootless SUCCESS. Ubuntu normal full PASS, race turunda `TestRealRepositoryOwnerRetrievalRecallSpansAndWarmInvalidation` cold index 10s sınırında literal fallback nedeniyle FAILED. Pipeline FAILURE; Docker/vault/package/installer/provenance atlandı, yayın yapılmadı. Race detect edilen veri yarışı raporu yok; bounded fallback davranışı doğru, ranked-cache kabulü gerçekleşmedi.
+
+Yeni V2 lazy partition profili 128 dosya/4MiB ve 128 partition ile cold batch işini azaltır; 10.000 dosya coverage korunur. Runtime 10s build sınırı gevşetilmedi. Partition identity/byte/complete coverage mevcut kontrolleri PASS; exact-source race ve gerçek paket kabulü yeni SHA'da ayrıca gerekir. Native Windows NTFS ve actual Docker MCP parent'ları evidence validator'a mandatory olarak eklenmiştir; SKIP artık bu profiller için PASS yerine sayılamaz.
+
+Exact Windows job114553857379 artifact11713727333 readback: `core-windows-latest-4fa2332f9e2b71f8616622fd542b83374578a22a/tests.jsonl`, validator `--native-ntfs --delivery` PASS; **977 PASS / 23 SKIP / 0 FAIL**, 12 mandatory parent PASS. Altı native NTFS parent ayrı readback'te run+pass/zero skip/fail: exclusive file apply, open-writer refusal, closed-handle mapped-view refusal, owned restore, post-apply edit conflict ve crash reconcile. Yeni test çalıştırılmadı; mevcut CI kanıtı tekrar okundu. Bu bounded Windows kabulüdür; aggregate pipeline failure veya bütün PRD/stable kapanışı değildir.
+
+Birleşik 12 Ekim takip kaynağı: full `go vet -p 1 ./...`, CLI ve Go graph helper native build PASS, gofmt/diff-check temiz. Scoped current kabul: parent-budget kernel/contracts + queue/restart/CAS/ceiling/risk/legacy canonical/attempt guards PASS; control reserve physical charge/standby/anti-spoof + risk restore/reopen PASS; legacy lease/capacity PASS; graph intent/capsule/barrier, source semantic graph ve image pin validation PASS. Python evidence/publisher trust sözleşmeleri PASS. Full yerel suite tekrar edilmedi. Actual Docker MCP ve pinned graph helper yerel daemon yokluğunda çalıştırılmadı; yeni CI'da mandatory parent olarak yürütülür. Public baseline `null`; gerçek cross-revision upgrade henüz NOT_RUN.
+
 ## 11 Ekim birleşik anahtarsız takip
 
 Son çalışma ağacı için `go vet -p 1 ./...` ve `go build -p 1 ./cmd/viber` PASS. Veri korumasını etkileyen değişikliklerin odaklı kabulü: Windows exact-file apply/restore ve actual Close+OpenExisting recovery, crash-left UNKNOWN reconciliation, current operator effect denial, mapped-view refusal; backup-pinned checkpoint projection pruning; mutable SQLite crash/high-water/anti-spoof accounting; source-bound cross-file Go graph ve packed Git delta/cutoff/inventory; partition cache warm/invalidation. İlgili kontroller geçti. Doküman ve düşük etkili CLI değişiklikleri için gereksiz yeni test eklenmedi; full yerel suite tekrar edilmedi.

@@ -38,7 +38,7 @@ Usage:
   viber check-prepare --file RECIPE --output FRESH_FILE
   viber check-discover --root PATH [--json]
   viber repo-history --root PATH --allow-local-history --cutoff UTC [--json]
-  viber repo-graph --root PATH [--goos OS --goarch ARCH --compiler gc --go-version go1.27 --tags TAG --tags-complete --cgo DISABLED] [--changed PATH] [--json]
+  viber repo-graph --root PATH [--goos OS --goarch ARCH --compiler gc --go-version go1.27 --tags TAG --tags-complete --cgo DISABLED] [--changed PATH] [--cooperative-types] [--json]
   viber context-why|checks|verification|report TASK --store PATH [--json]
   viber context-page TASK --store PATH [--offset N] [--limit N] [--json]
   viber check-output TASK --store PATH --run-id ID [--stream stdout|stderr] [--offset N] [--limit N] [--json]

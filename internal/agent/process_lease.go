@@ -97,8 +97,15 @@ func pendingCheck(doc Document) (model.Call, error) {
 		return model.Call{}, c.Fail(c.StoreIntegrityError, "owned native call differs from durable intent")
 	}
 	if doc.Pending.ExtensionIntent != nil {
-		if call.Name != extensionModelToolName(doc.Pending.ExtensionIntent.Manifest.Digest, doc.Pending.ExtensionIntent.ToolName) || validateExtensionIntentBinding(doc, call, *doc.Pending.ExtensionIntent) != nil {
+		if doc.Pending.GoGraphIntent != nil || call.Name != extensionModelToolName(doc.Pending.ExtensionIntent.Manifest.Digest, doc.Pending.ExtensionIntent.ToolName) || validateExtensionIntentBinding(doc, call, *doc.Pending.ExtensionIntent) != nil {
 			return model.Call{}, c.Fail(c.StoreIntegrityError, "owned extension call differs from durable intent")
+		}
+		return call, nil
+	}
+	if doc.Pending.GoGraphIntent != nil {
+		state := c.TaskState{PolicyEpoch: doc.Pending.Epoch, KernelGeneration: doc.Pending.Generation}
+		if validateGoGraphIntent(state, doc, call, *doc.Pending.GoGraphIntent) != nil {
+			return model.Call{}, c.Fail(c.StoreIntegrityError, "owned Go graph call differs from durable intent")
 		}
 		return call, nil
 	}
@@ -110,6 +117,9 @@ func pendingCheck(doc Document) (model.Call, error) {
 func ownedCheckTargets(s *Session, doc Document, call model.Call, lease runner.Lease) ([]runner.Target, []runner.Capsule, error) {
 	if doc.Pending != nil && doc.Pending.ExtensionIntent != nil {
 		return ownedExtensionTargets(s, doc, call, lease)
+	}
+	if doc.Pending != nil && doc.Pending.GoGraphIntent != nil {
+		return ownedGoGraphTarget(s, doc, call, lease)
 	}
 	var query struct {
 		CheckID string `json:"check_id"`
@@ -165,9 +175,13 @@ func ownedCheckTargets(s *Session, doc Document, call model.Call, lease runner.L
 	return targets, capsules, nil
 }
 func (s *Session) prepareNativeLease(state c.TaskState, doc *Document, call model.Call) error {
-	remaining := doc.Budget.MaxActiveMillis - doc.Budget.ActiveMillis
+	headroom, err := budgetHeadroom(doc.Budget, state.GoalQueue, false)
+	if err != nil {
+		return err
+	}
+	remaining := headroom.MaxActiveMillis
 	if remaining < 1 {
-		return c.Fail(c.BudgetLimitReached, "native task deadline exhausted")
+		return c.Fail(c.BudgetLimitReached, "native task deadline is exhausted or reserved for a scheduled child")
 	}
 	lease := runner.Lease{SchemaVersion: 1, InstanceID: s.instance.ID, ID: newID(""), TaskDigest: c.HashBytes([]byte(doc.TaskID)), OperationDigest: c.HashBytes([]byte(nativeResourceID(*doc))), Generation: state.KernelGeneration, PolicyEpoch: state.PolicyEpoch, SpecVersion: doc.Spec.Version, ClockDomain: s.clockDomain, DeadlineMillis: time.Since(s.clockOrigin).Milliseconds() + remaining}
 	_, capsules, err := ownedCheckTargets(s, *doc, call, lease)
@@ -190,7 +204,7 @@ func validateNativeLease(doc Document) error {
 		return nil // Older retained intents stay UNKNOWN; they cannot be released by cleanup.
 	}
 	l := *p.NativeLease
-	if p.Kind != "NATIVE_TOOL" || l.Validate() != nil || l.TaskDigest != c.HashBytes([]byte(doc.TaskID)) || l.OperationDigest != c.HashBytes([]byte(nativeResourceID(doc))) || l.Generation != p.Generation || l.PolicyEpoch != p.Epoch || l.SpecVersion != doc.Spec.Version || len(p.NativeSubjects) < 1 || len(p.NativeSubjects) > 256 {
+	if p.Kind != "NATIVE_TOOL" || p.ExtensionIntent != nil && p.GoGraphIntent != nil || l.Validate() != nil || l.TaskDigest != c.HashBytes([]byte(doc.TaskID)) || l.OperationDigest != c.HashBytes([]byte(nativeResourceID(doc))) || l.Generation != p.Generation || l.PolicyEpoch != p.Epoch || l.SpecVersion != doc.Spec.Version || len(p.NativeSubjects) < 1 || len(p.NativeSubjects) > 256 {
 		return c.Fail(c.StoreIntegrityError, "native lease intent binding invalid")
 	}
 	call, err := pendingCheck(doc)
@@ -210,6 +224,23 @@ func validateNativeLease(doc Document) error {
 		capsule := p.NativeSubjects[0]
 		if len(p.NativeSubjects) != 1 || capsule.SchemaVersion != 1 || capsule.Owner != (runner.Ownership{Lease: l, Phase: "CHECK", Ordinal: 1}) || capsule.CandidateDigest != doc.Candidate.SnapshotDigest || capsule.ProfileDigest != profileDigest || capsule.InvocationDigest != invocationDigest || !c.ValidDigest(capsule.SourceDigest) {
 			return c.Fail(c.StoreIntegrityError, "owned extension process capsule changed")
+		}
+		return nil
+	}
+	if p.GoGraphIntent != nil {
+		if doc.GoGraphRuntime == nil || validateGoGraphIntent(c.TaskState{PolicyEpoch: p.Epoch, KernelGeneration: p.Generation}, doc, call, *p.GoGraphIntent) != nil {
+			return c.Fail(c.StoreIntegrityError, "owned Go graph admission binding invalid")
+		}
+		invocation, invocationErr := goGraphInvocation(doc, *p.GoGraphIntent)
+		manifest := doc.GoGraphRuntime.Manifest
+		if invocationErr != nil || doc.GoGraphRuntime.Validate() != nil || len(p.NativeSubjects) != 1 {
+			return c.Fail(c.StoreIntegrityError, "owned Go graph process intent incomplete")
+		}
+		profileDigest, _ := c.Digest(manifest.Profile)
+		invocationDigest, _ := c.Digest(invocation)
+		capsule := p.NativeSubjects[0]
+		if capsule.SchemaVersion != 1 || capsule.Owner != (runner.Ownership{Lease: l, Phase: "CHECK", Ordinal: 1}) || capsule.CandidateDigest != doc.Candidate.SnapshotDigest || capsule.ProfileDigest != profileDigest || capsule.InvocationDigest != invocationDigest || !c.ValidDigest(capsule.SourceDigest) {
+			return c.Fail(c.StoreIntegrityError, "owned Go graph process capsule changed")
 		}
 		return nil
 	}

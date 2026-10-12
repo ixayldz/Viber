@@ -39,6 +39,18 @@ API key isteyen kabul: OpenAI/Anthropic actual dispatch/protocol/usage/model-qua
 
 Her teslim aşağıdakileri ekler: değişen dosya ve kullanıcı komutu; kaynak/policy/digest bağları; çalıştırılan scoped test/build sonucu; entegrasyon durumu; gerçek kabul sınırı. Kapsamın tamamı kapanmadan bu belge veya release `DONE/%100` olarak işaretlenmez.
 
+## 12 Ekim devam teslimi
+
+Cold retrieval V2, 10s runtime build deadline'ını koruyarak 128-file lazy batch kullanır; 10.000-file complete partition planı ve owner cache/span/regression kontrolleri geçti. Önceki `4fa2332` Windows/macOS/rootless SUCCESS olsa da Ubuntu race fallback nedeniyle aggregate CI FAILED, bu SHA yayımlanmadı.
+
+`control.reserve` fiziksel blokları ayrı PAYLOAD high-water + standby ilişkisinde sayılır; ControlBytes emergency slack değildir. NTFS actual 384KiB allocation overhead ölçüldü; aynı 512KiB bounded allowance hem admission envelope hem metric'te uygulanır. Risk-reconciliation restore/reopen focused kontrolleri geçti. Owner-pinned lease'ler ve full anchor chain korunur; yalnız unlocked, unpinned boş legacy lock reclaim edilir. Foreign nonempty legacy descriptor sessizce adopte edilmez.
+
+Parent/child work pool: TaskCreated sealed maxima/counter witness, immutable per-goal allocation digest, reducer sum/admission ve Document readback; source parent holds ve in-flight risk birlikte hesaba katılır. Legacy child inspection-only, hiçbir retry yeni allocation üretmez. Gerçek multi-worker DAG/AgentLease/mutex/fabric'in bütün kapsamı yerine geçmez.
+
+Go graph host default parse-only/PARTIAL/broad checks; unsafe synchronous type-check normal tool yolundan çıkarıldı. `--go-graph-runtime` source-bound fixed helper için pinned image, durable lease/capsule ve bounded container profiline bağlanır; standalone `--cooperative-types` açık ayrı host tercihtir. Helper protocol analizi adlandırır, limit garantisi üretmez; limit/quiescence otoritesi runner receipt'idir. Actual Docker helper kabulü yeni exact-source CI'da ayrıca zorunludur.
+
+Dağıtım sırası: yeni SHA 16-job kabul → ilk managed engineering public baseline → bu exact baseline'a karşı gerçek cross-revision install/rollback → kullanıcı download/install README bağlantıları. Signing, eligible SIWC/live local model, independent cohort/pilot/reference performance ve kalan geniş FR/NFR kabulü bu offline yazılım teslimlerinden çıkarılmaz.
+
 ## 11 Ekim akşam entegrasyonu
 
 README ilk kurulum → ChatGPT hesabı → ilk görev → onay → export sırasına indirildi; ayrıntılı komutlar `CLI_REFERENCE.md` içinde kaldı. Resmi SIWC OSS akışı ayrı API key/client secret istemez. Gerçek eligible hesapla giriş ve model çağrısı ölçülmedi; bu anahtarsız dış kabul hâlâ açıktır.

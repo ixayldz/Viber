@@ -149,25 +149,57 @@ type PromptRef struct {
 	Bytes  int64  `json:"bytes"`
 }
 
+// BudgetAllocation is a fixed upper bound reserved from a parent task's local
+// work budget for one separately scheduled child. Store-wide token and
+// physical-resource ledgers remain independent and are deliberately not
+// duplicated here.
+type BudgetAllocation struct {
+	MaxSteps        int64 `json:"max_steps"`
+	MaxToolCalls    int64 `json:"max_tool_calls"`
+	MaxInputTokens  int64 `json:"max_input_tokens"`
+	MaxOutputTokens int64 `json:"max_output_tokens"`
+	MaxActiveMillis int64 `json:"max_active_millis"`
+}
+
 // GoalSchedule is a durable request to create a separate child task. It is
 // intentionally distinct from PromptQueue: queued prompts become steering
 // input on this task, while goals create a separately scheduled task from the
 // immutable source state captured when the goal was queued.
 type GoalSchedule struct {
-	ID                   string `json:"id"`
-	Digest               string `json:"digest"`
-	Bytes                int64  `json:"bytes"`
-	ParentTaskSeq        int64  `json:"parent_task_seq"`
-	ParentDocumentDigest string `json:"parent_document_digest"`
-	SourceSnapshotDigest string `json:"source_snapshot_digest"`
-	ChildTaskID          string `json:"child_task_id"`
-	Status               string `json:"status"`
-	ActivationCommandID  string `json:"activation_command_id,omitempty"`
-	ChildTaskSeq         int64  `json:"child_task_seq,omitempty"`
-	ChildDocumentDigest  string `json:"child_document_digest,omitempty"`
+	ID                     string           `json:"id"`
+	Digest                 string           `json:"digest"`
+	BudgetAllocation       BudgetAllocation `json:"budget_allocation,omitempty,omitzero"`
+	BudgetAllocationDigest string           `json:"budget_allocation_digest,omitempty"`
+	Bytes                  int64            `json:"bytes"`
+	ParentTaskSeq          int64            `json:"parent_task_seq"`
+	ParentDocumentDigest   string           `json:"parent_document_digest"`
+	SourceSnapshotDigest   string           `json:"source_snapshot_digest"`
+	ChildTaskID            string           `json:"child_task_id"`
+	Status                 string           `json:"status"`
+	ActivationCommandID    string           `json:"activation_command_id,omitempty"`
+	ChildTaskSeq           int64            `json:"child_task_seq,omitempty"`
+	ChildDocumentDigest    string           `json:"child_document_digest,omitempty"`
 }
+
+// TaskWorkBudget is the parent task's authoritative local work pool. Limits
+// are sealed when TaskCreated is reduced; counters are updated only by
+// document-recording kernel events. Child goal allocations are reserved from
+// this pool without duplicating the store-wide token/resource ledgers.
+type TaskWorkBudget struct {
+	Limits         BudgetAllocation `json:"limits"`
+	Steps          int64            `json:"steps"`
+	ToolCalls      int64            `json:"tool_calls"`
+	UsedInput      int64            `json:"used_input"`
+	UsedOutput     int64            `json:"used_output"`
+	ReservedInput  int64            `json:"reserved_input"`
+	ReservedOutput int64            `json:"reserved_output"`
+	ActiveMillis   int64            `json:"active_millis"`
+	EffectPending  bool             `json:"effect_pending,omitempty"`
+}
+
 type TaskState struct {
 	Deletion                *TaskDeletion    `json:"content_deletion,omitempty"`
+	WorkBudget              *TaskWorkBudget  `json:"work_budget,omitempty"`
 	DeliveryEffects         []DeliveryEffect `json:"delivery_effects,omitempty"`
 	GoalQueue               []GoalSchedule   `json:"goal_queue,omitempty"`
 	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
@@ -207,6 +239,7 @@ type Event struct {
 }
 type EventPayload struct {
 	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
+	WorkBudget          *TaskWorkBudget           `json:"work_budget,omitempty"`
 	DeliveryEffect      *DeliveryEffect           `json:"delivery_effect,omitempty"`
 	Goal                *GoalMutation             `json:"goal,omitempty"`
 	Verification        *VerificationFinalization `json:"verification,omitempty"`
@@ -229,17 +262,19 @@ type EventPayload struct {
 	Reason              string                    `json:"reason,omitempty"`
 }
 type GoalMutation struct {
-	ID                   string `json:"id"`
-	Digest               string `json:"digest,omitempty"`
-	Bytes                int64  `json:"bytes,omitempty"`
-	ParentTaskSeq        int64  `json:"parent_task_seq,omitempty"`
-	ParentDocumentDigest string `json:"parent_document_digest,omitempty"`
-	SourceSnapshotDigest string `json:"source_snapshot_digest,omitempty"`
-	ChildTaskID          string `json:"child_task_id,omitempty"`
-	ActivationCommandID  string `json:"activation_command_id,omitempty"`
-	ChildTaskSeq         int64  `json:"child_task_seq,omitempty"`
-	ChildDocumentDigest  string `json:"child_document_digest,omitempty"`
-	Reason               string `json:"reason,omitempty"`
+	ID                     string           `json:"id"`
+	Digest                 string           `json:"digest,omitempty"`
+	BudgetAllocation       BudgetAllocation `json:"budget_allocation,omitempty,omitzero"`
+	BudgetAllocationDigest string           `json:"budget_allocation_digest,omitempty"`
+	Bytes                  int64            `json:"bytes,omitempty"`
+	ParentTaskSeq          int64            `json:"parent_task_seq,omitempty"`
+	ParentDocumentDigest   string           `json:"parent_document_digest,omitempty"`
+	SourceSnapshotDigest   string           `json:"source_snapshot_digest,omitempty"`
+	ChildTaskID            string           `json:"child_task_id,omitempty"`
+	ActivationCommandID    string           `json:"activation_command_id,omitempty"`
+	ChildTaskSeq           int64            `json:"child_task_seq,omitempty"`
+	ChildDocumentDigest    string           `json:"child_document_digest,omitempty"`
+	Reason                 string           `json:"reason,omitempty"`
 }
 type Entry struct {
 	Path string `json:"path"`

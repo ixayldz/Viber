@@ -35,6 +35,7 @@ func runRepoGraph(args []string, out, errout io.Writer) int {
 	version := f.String("go-version", "", "target compiler release tags; default analyzer version, language semantics from captured go.mod")
 	complete := f.Bool("tags-complete", false, "declare that the supplied build tag inventory is complete")
 	cgo := f.String("cgo", "UNKNOWN", "ENABLED, DISABLED or UNKNOWN; does not execute cgo")
+	cooperativeTypes := f.Bool("cooperative-types", false, "opt in to synchronous host go/types analysis without a hard CPU/RSS bound")
 	jsonMode := f.Bool("json", false, "source-bound graph and conservative selection")
 	var tags, changed graphValues
 	f.Var(&tags, "tags", "build tags, comma separated or repeated")
@@ -51,10 +52,16 @@ func runRepoGraph(args []string, out, errout io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	graph, err := intelligence.BuildGoSemanticGraph(ctx, capture, intelligence.GoSemanticOptions{
+	options := intelligence.GoSemanticOptions{
 		GOOS: *goos, GOARCH: *goarch, Compiler: *compiler, GoVersion: *version,
 		BuildTags: []string(tags), BuildTagsComplete: *complete, CGOEnabled: *cgo,
-	})
+	}
+	var graph intelligence.GoSemanticGraph
+	if *cooperativeTypes {
+		graph, err = intelligence.BuildGoSemanticGraph(ctx, capture, options)
+	} else {
+		graph, err = intelligence.BuildGoSemanticHintsGraph(ctx, capture, options)
+	}
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
@@ -71,7 +78,12 @@ func runRepoGraph(args []string, out, errout io.Writer) int {
 			Graph     intelligence.GoSemanticGraph  `json:"graph"`
 			Selection *intelligence.GoTestSelection `json:"test_selection,omitempty"`
 			Trust     string                        `json:"trust"`
-		}{graph, selection, "SOURCE_BOUND_ANALYSIS; NOT_RUNTIME_COVERAGE_OR_VERIFICATION"}); err != nil {
+		}{graph, selection, func() string {
+			if *cooperativeTypes {
+				return "SOURCE_BOUND_COOPERATIVE_GO_TYPES; CPU_RSS_NOT_HARD_BOUNDED; NOT_RUNTIME_COVERAGE_OR_VERIFICATION"
+			}
+			return "SOURCE_BOUND_PARSE_ONLY; GO_TYPES_SKIPPED; PARTIAL_AND_CHECKS_WIDENED; NOT_RUNTIME_COVERAGE_OR_VERIFICATION"
+		}()}); err != nil {
 			return 4
 		}
 		return 0
@@ -84,7 +96,11 @@ func runRepoGraph(args []string, out, errout io.Writer) int {
 			return 4
 		}
 	}
-	_, err = fmt.Fprintln(out, "Captured source only. Unresolved imports/build context widen selection; this is not runtime coverage or a verification verdict.")
+	if *cooperativeTypes {
+		_, err = fmt.Fprintln(out, "Captured source only. Cooperative go/types analysis has no hard host CPU/RSS bound; unresolved imports/build context widen selection; this is not runtime coverage or a verification verdict.")
+	} else {
+		_, err = fmt.Fprintln(out, "Captured source parse/import hints only; go/types skipped, coverage partial and check selection widened. This is not runtime coverage or a verification verdict.")
+	}
 	if err != nil {
 		return 4
 	}

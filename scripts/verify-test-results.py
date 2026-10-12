@@ -15,12 +15,21 @@ parser.add_argument("--privacy", action="store_true")
 parser.add_argument("--retention", action="store_true")
 parser.add_argument("--retrieval", action="store_true")
 parser.add_argument("--delivery", action="store_true")
+parser.add_argument("--native-ntfs", action="store_true")
 args = parser.parse_args()
 
 # Explicit package identity is part of mandatory acceptance. This static
 # manifest is reviewed with the validator; test-name collisions cannot replace
 # a skipped native test with an unrelated package PASS.
 EXPECTED_TEST_PACKAGES = {
+    "TestGoSemanticWorkerPinnedDockerIntegration": "github.com/ixayldz/Viber/internal/intelligence",
+    "TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess": "github.com/ixayldz/Viber/internal/extensions",
+    "TestNativeTargetExclusiveLeaseAppliesOnlySealedExistingFile": "github.com/ixayldz/Viber/internal/delivery",
+    "TestNativeTargetAdmissionRejectsExistingOpenWriterWithoutChangingIt": "github.com/ixayldz/Viber/internal/delivery",
+    "TestExclusiveOpenRefusesMappedViewAfterSourceHandlesClose": "github.com/ixayldz/Viber/internal/delivery",
+    "TestExclusiveNTFSApplyAndOwnedRestoreTouchOnlyReceiptedFiles": "github.com/ixayldz/Viber/internal/agent",
+    "TestExclusiveNTFSRestorePreservesPostApplyUserEdit": "github.com/ixayldz/Viber/internal/agent",
+    "TestExclusiveNTFSReconcileCompletesCrashAfterWriteBeforeReceipt": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority": "github.com/ixayldz/Viber/internal/agent",
@@ -43,7 +52,7 @@ EXPECTED_TEST_PACKAGES = {
     "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyOperationRetirementPreservesActiveChildAndForeignCatalog": "github.com/ixayldz/Viber/internal/agent",
-    "TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity": "github.com/ixayldz/Viber/internal/agent",
+    "TestPrivacyOperationRetirementAtCatalogLimitRestoresTypedAndLegacyCapacity": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyOperationRetirementRejectsWrongAuthorityScopeAndHardlink": "github.com/ixayldz/Viber/internal/agent",
     "TestExistingLeaseAndRetirementNeverAdoptMissingOrReplacementIdentity": "github.com/ixayldz/Viber/internal/fileguard",
     "TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen": "github.com/ixayldz/Viber/internal/diskguard",
@@ -176,6 +185,15 @@ if args.delivery:
         "TestDeliveryReverificationMissingStoreAndTaskMismatchHaveNoEffects",
         "TestOperatorDeliveryPreviewPreservesUserBytesAndHistoricalTask",
     }
+if args.native_ntfs:
+    required |= {
+        "TestNativeTargetExclusiveLeaseAppliesOnlySealedExistingFile",
+        "TestNativeTargetAdmissionRejectsExistingOpenWriterWithoutChangingIt",
+        "TestExclusiveOpenRefusesMappedViewAfterSourceHandlesClose",
+        "TestExclusiveNTFSApplyAndOwnedRestoreTouchOnlyReceiptedFiles",
+        "TestExclusiveNTFSRestorePreservesPostApplyUserEdit",
+        "TestExclusiveNTFSReconcileCompletesCrashAfterWriteBeforeReceipt",
+    }
 if args.retrieval:
     required |= {
         "TestGoASTBindsGroupedGenericUnicodeAndMethodDeclarationsToActualBytes",
@@ -205,7 +223,7 @@ if args.privacy:
         "TestPrivacyOperationRetirementBoundsNativeDescriptorsAcrossLargeInventory",
         "TestPrivacyOperationLeasesRetireOnCloseAndActualCrashWithoutChangingPins",
         "TestPrivacyOperationRetirementPreservesActiveChildAndForeignCatalog",
-        "TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity",
+        "TestPrivacyOperationRetirementAtCatalogLimitRestoresTypedAndLegacyCapacity",
         "TestPrivacyOperationRetirementRejectsWrongAuthorityScopeAndHardlink",
         "TestExistingLeaseAndRetirementNeverAdoptMissingOrReplacementIdentity",
         "TestPrivacyCapacityCLIAndUIRouteStoreScopeWithoutCreatingTasks",
@@ -257,6 +275,8 @@ if args.vault_failure:
     }
 if args.docker:
     required |= {
+		"TestGoSemanticWorkerPinnedDockerIntegration",
+		"TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess",
 		"TestActualDockerHostileProcessMatrix",
 		"TestActualDockerPersistentFenceInventoryAndReopen",
         "TestDockerOfflineReadOnlyQuiescenceAndTimeout",

@@ -34,7 +34,7 @@ type Profile struct {
 	MaxOutputBytes int64  `json:"max_output_bytes"`
 }
 
-var pinnedImage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:\-]*@sha256:[a-f0-9]{64}$`)
+var pinnedImage = regexp.MustCompile(`^(?:[a-zA-Z0-9][a-zA-Z0-9._/:\-]*@sha256:[a-f0-9]{64}|sha256:[a-f0-9]{64})$`)
 
 func (p Profile) Validate() error {
 	if p.SchemaVersion != c.SchemaVersion || !pinnedImage.MatchString(p.Image) || p.MemoryBytes < 64<<20 || p.MemoryBytes > 8<<30 || p.Pids < 8 || p.Pids > 512 || p.CPUs < 1 || p.CPUs > 8 || p.ScratchBytes < 1<<20 || p.ScratchBytes > 1<<30 || p.TimeoutSeconds < 1 || p.TimeoutSeconds > 900 || p.MaxOutputBytes < 1024 || p.MaxOutputBytes > 8<<20 {
@@ -150,6 +150,21 @@ func (d *Docker) Check(ctx context.Context) error {
 	return d.check(ctx)
 }
 func (d *Docker) check(ctx context.Context) error { _, err := d.backend(ctx); return err }
+
+func (d *Docker) verifyPinnedImage(ctx context.Context, profile Profile) error {
+	args := []string{"image", "inspect", profile.Image}
+	if strings.HasPrefix(profile.Image, "sha256:") {
+		args = []string{"image", "inspect", "--format", "{{.Id}}", profile.Image}
+	}
+	raw, err := d.control(ctx, args...)
+	if err != nil {
+		return c.Fail(c.UnsupportedCapability, "pinned environment image not installed")
+	}
+	if strings.HasPrefix(profile.Image, "sha256:") && strings.TrimSpace(string(raw)) != profile.Image {
+		return c.Fail(c.PolicyDenied, "local content-addressed image identity mismatch")
+	}
+	return nil
+}
 
 type inspectedMount struct {
 	Destination string
@@ -320,8 +335,8 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 	}
 	// Never pull an image implicitly. Profile/environment publication is a
 	// separate, authorized network effect; this broker is always offline.
-	if _, err = d.control(ctx, "image", "inspect", p.Image); err != nil {
-		return result, c.Fail(c.UnsupportedCapability, "pinned environment image not installed")
+	if err = d.verifyPinnedImage(ctx, p); err != nil {
+		return result, err
 	}
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {

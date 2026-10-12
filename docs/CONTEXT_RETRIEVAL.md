@@ -14,7 +14,7 @@ coverage.next_cursor aynı query/mode/intent/limit/partition ile kullanılır. C
 
 ## Büyük capture'larda lazy partition
 
-256 dosya veya 4 MiB üzerindeki authorized source set'i path sırasıyla deterministik parçalara ayrılır. Her parça en fazla 256 dosya/4 MiB, plan en fazla 64 parçadır. Planlama bütün yetkili kaynakları hash ile doğrular; yalnız seçilen parçanın SQLite index'i kurulur. Varsayılan `partition:0`; ilk useful action full repository indexing'i beklemez.
+128 dosya veya 4 MiB üzerindeki authorized source set'i path sırasıyla deterministik parçalara ayrılır. V2 profilde her parça en fazla 128 dosya/4 MiB, plan en fazla 128 parçadır; 10.000 admitted dosyanın tamamı planlanabilir. Daha küçük lazy bölümler cold sorgu işini azaltır; runtime index build sınırı 10 saniye olarak korunur. Planlama bütün yetkili kaynakları hash ile doğrular; yalnız seçilen parçanın SQLite index'i kurulur. Varsayılan `partition:0`; ilk useful action full repository indexing'i beklemez. Önceki V1 profile bağlı cursor yeni planın sayfası diye yorumlanmaz.
 
 ~~~json
 {"query":"RefreshAccessToken","mode":"ranked","intent":"IDENTIFIER","partition":0,"limit":3}

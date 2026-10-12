@@ -319,6 +319,9 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = ensureMutableReplacementSchema(db); err != nil {
 		return nil, err
 	}
+	if err = ensureControlReserveSchema(db); err != nil {
+		return nil, err
+	}
 	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
 	if _, err = ledger.reconcileFreePendingLocked(context.Background()); err != nil {
 		return nil, err
@@ -518,6 +521,7 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 		"CREATE INDEX quota_allocations_status ON quota_allocations(status)",
 		freeIntentsDDL,
 		mutableReplacementDDL,
+		controlReserveDDL,
 		"PRAGMA user_version=1",
 	}
 	for _, statement := range statements {
@@ -1078,7 +1082,7 @@ func (l *Ledger) EnclosingReservation(ctx context.Context, target string) (Alloc
 	var found Allocation
 	count := 0
 	err = l.withReadLock(ctx, func() error {
-		rows, err := l.db.QueryContext(ctx, "SELECT id,target_root,parent_path,parent_identity,volume_identity FROM quota_allocations WHERE status='WRITING' AND id NOT IN (SELECT standby_id FROM quota_mutable_replacements)")
+		rows, err := l.db.QueryContext(ctx, "SELECT id,target_root,parent_path,parent_identity,volume_identity FROM quota_allocations WHERE status='WRITING' AND id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
 		if err != nil {
 			return err
 		}
@@ -1220,7 +1224,7 @@ func retainedSeedID(authority, rootPath, rootIdentity string) string {
 }
 
 func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory) error {
-	rows, err := tx.QueryContext(ctx, "SELECT status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements)")
+	rows, err := tx.QueryContext(ctx, "SELECT status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
 	if err != nil {
 		return err
 	}
@@ -2188,6 +2192,9 @@ func Measure(root *os.Root, includeFiles bool) (Inventory, error) {
 }
 
 func statOnlyFile(name string) bool {
+	if filepath.ToSlash(name) == "control.reserve" {
+		return true
+	}
 	switch filepath.Base(filepath.FromSlash(name)) {
 	case "owner.lock", "archive.lock", "state.sqlite", "state.sqlite-wal", "state.sqlite-shm":
 		return true

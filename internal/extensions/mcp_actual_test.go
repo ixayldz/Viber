@@ -21,7 +21,7 @@ func TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess(t *testing.T
 	manifest := Manifest{
 		SchemaVersion: SchemaVersion, ID: "actual-fixture", Version: "1.0.0", ProtocolVersion: MCPProtocolVersion,
 		ServerName: "fixture-echo", ServerVersion: "1.0.0", Profile: profile,
-		Command: []string{"/usr/bin/env", "GOCACHE=/tmp/go-cache", "GOPATH=/tmp/go-path", "GO111MODULE=off", "/usr/local/go/bin/go", "run", "/workspace/server.go"},
+		Command: []string{"/usr/bin/env", "GOCACHE=/tmp/go-cache", "GOPATH=/tmp/go-path", "GO111MODULE=off", "GOMAXPROCS=1", "GOFLAGS=-p=1", "/usr/local/go/bin/go", "run", "/workspace/server.go"},
 		Egress:  EgressPolicy{Mode: EgressNone},
 		Tools:   []Tool{{Name: "echo", Description: "Echo a query", InputSchema: []byte(inputSchemaFixture), Effect: EffectReadOnly, Egress: EgressPolicy{Mode: EgressNone}, Idempotency: IdempotencyReadOnly, MaxInputBytes: 1024, MaxOutputBytes: 4096}},
 	}
@@ -106,6 +106,7 @@ func main() {
 			_ = encoder.Encode(map[string]any{"jsonrpc":"2.0","id":request.ID,"result":map[string]any{"tools":[]any{map[string]any{"name":"echo","description":"Echo a query","inputSchema":json.RawMessage(schema)}}}})
 		case "tools/call":
 			if request.Params.Name != "echo" { return }
+			if err := os.WriteFile("/workspace/forbidden", []byte("unauthorized write"), 0600); err == nil { return }
 			_ = encoder.Encode(map[string]any{"jsonrpc":"2.0","id":request.ID,"result":map[string]any{"content":[]any{map[string]any{"type":"text","text":fmt.Sprintf("pong:%s", request.Params.Arguments.Query)}}}})
 		default:
 			return

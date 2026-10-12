@@ -13,18 +13,46 @@ func (s *Store) attachMutableSQLite(ledger *resource.Ledger) error {
 	if ledger == nil {
 		return c.Fail(c.InvalidArgument, "shared physical quota ledger required")
 	}
+	cleanup := func(err error) error {
+		s.mutable = nil
+		s.controlReserve = nil
+		return errors.Join(err, s.disk.SetAdmissionHook(nil), s.disk.SetReserveReconcileHook(nil))
+	}
 	mutable, err := ledger.AttachMutableSQLite(context.Background(), s.directory)
 	if err != nil {
-		return err
+		return cleanup(err)
 	}
 	s.mutable = mutable
-	if s.mutable == nil {
-		return s.disk.SetAdmissionHook(nil)
+	controlReserve, err := ledger.AttachControlReserve(context.Background(), s.directory)
+	if err != nil {
+		return cleanup(err)
 	}
-	return s.disk.SetAdmissionHook(func(bytes int64, control bool) error {
+	s.controlReserve = controlReserve
+	if s.mutable == nil && s.controlReserve == nil {
+		if err = s.disk.SetReserveReconcileHook(nil); err != nil {
+			return cleanup(err)
+		}
+		if err = s.disk.SetAdmissionHook(nil); err != nil {
+			return cleanup(err)
+		}
+		return nil
+	}
+	if err = s.disk.SetAdmissionHook(func(bytes int64, control bool) error {
 		ctx := s.physicalCtx
 		if ctx == nil {
 			ctx = context.Background()
+		}
+		digest := s.physicalDigest
+		if !c.ValidDigest(digest) {
+			digest = c.HashBytes([]byte(fmt.Sprintf("store-physical-admission:%d:%t", bytes, control)))
+		}
+		if !control && s.controlReserve != nil {
+			if err := s.controlReserve.Prepare(ctx, digest); err != nil {
+				return err
+			}
+		}
+		if s.mutable == nil {
+			return nil
 		}
 		upper := s.physicalUpper
 		if upper == 0 {
@@ -34,12 +62,29 @@ func (s *Store) attachMutableSQLite(ledger *resource.Ledger) error {
 				return upperErr
 			}
 		}
-		digest := s.physicalDigest
 		if !c.ValidDigest(digest) {
 			digest = c.HashBytes([]byte(fmt.Sprintf("store-mutable-admission:%d:%t", bytes, control)))
 		}
 		return mutable.Prepare(ctx, digest, upper)
-	})
+	}); err != nil {
+		return cleanup(err)
+	}
+	if s.controlReserve == nil {
+		if err = s.disk.SetReserveReconcileHook(nil); err != nil {
+			return cleanup(err)
+		}
+		return nil
+	}
+	if err = s.disk.SetReserveReconcileHook(func() error {
+		ctx := s.physicalCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return s.controlReserve.Refresh(ctx)
+	}); err != nil {
+		return cleanup(err)
+	}
+	return nil
 }
 
 // preparePinnedQuotaForOpen attaches the owner's existing ledger before SQLite

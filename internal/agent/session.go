@@ -1,7 +1,8 @@
 // Package agent coordinates an offline fixture coding loop through durable
 // intents, immutable candidate artifacts and bounded native tools. It is a
 // controlled engineering profile. Reviewed external V4 behavior can finalize
-// VERIFIED candidate-only results; there is no live-write or release-ready claim.
+// VERIFIED candidate-only results. Explicit Windows fixed-NTFS delivery is a
+// separate owned effect; stable release readiness is not implied.
 package agent
 
 import (
@@ -64,6 +65,7 @@ func (b Budget) Validate() error {
 
 type Pending struct {
 	ExtensionIntent *ExtensionIntent `json:"extension_intent,omitempty"`
+	GoGraphIntent   *GoGraphIntent   `json:"go_graph_intent,omitempty"`
 	NativeLease     *runner.Lease    `json:"native_lease,omitempty"`
 	NativeSubjects  []runner.Capsule `json:"native_subjects,omitempty"`
 	ID              string           `json:"id"`
@@ -75,6 +77,7 @@ type Pending struct {
 	Status          string           `json:"status"`
 }
 type Document struct {
+	GoGraphRuntime        *GoGraphRuntimeBinding       `json:"go_graph_runtime,omitempty"`
 	ExtensionManifest     *extensions.PinnedManifest   `json:"extension_manifest,omitempty"`
 	Extension             *ExtensionRef                `json:"extension,omitempty"`
 	SkillRegistry         *SkillRegistryRef            `json:"advisory_skill_registry,omitempty"`
@@ -327,6 +330,11 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	} else if doc.Extension.Validate() != nil || doc.ExtensionManifest == nil || doc.ExtensionManifest.Validate() != nil || doc.Extension.ManifestDigest != doc.ExtensionManifest.Digest {
 		return state, doc, c.Fail(c.StoreIntegrityError, "retained extension binding failed validation")
 	}
+	if doc.GoGraphRuntime != nil {
+		if err = doc.GoGraphRuntime.Validate(); err != nil {
+			return state, doc, c.Fail(c.StoreIntegrityError, "retained Go graph runtime binding failed validation")
+		}
+	}
 	if doc.Ranking != nil {
 		if err = doc.Ranking.Validate(); err != nil {
 			return state, doc, err
@@ -380,6 +388,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	if err = doc.Budget.Validate(); err != nil {
 		return state, doc, err
 	}
+	if state.WorkBudget != nil && !workBudgetMatchesDocument(*state.WorkBudget, doc) {
+		return state, doc, c.Fail(c.StoreIntegrityError, "task work budget journal projection differs from its retained document")
+	}
 	for _, id := range state.PendingInputIDs {
 		if _, err := s.pendingInput(context.Background(), task, id); err != nil {
 			return state, doc, err
@@ -399,6 +410,17 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, kind string, extra c.EventPayload) (c.TaskState, error) {
 	if err := s.Journal.Writable(); err != nil {
 		return state, err
+	}
+	if extra.WorkBudget != nil {
+		return state, c.Fail(c.InvalidArgument, "work budget snapshots are derived from the durable task document")
+	}
+	if kind == "TaskCreated" {
+		if state.TaskSeq != 0 {
+			return state, c.Fail(c.StoreIntegrityError, "task work budget can only be sealed at creation")
+		}
+		extra.WorkBudget = workBudgetSnapshot(doc)
+	} else if state.WorkBudget != nil && (kind == "SessionRecorded" || kind == "CandidateRecorded") {
+		extra.WorkBudget = workBudgetSnapshot(doc)
 	}
 	if err := recordTokenMutation(state, doc, kind, &extra); err != nil {
 		return state, err
@@ -458,6 +480,7 @@ func (s *Session) recover(ctx context.Context, state c.TaskState) (c.TaskState, 
 }
 
 type StartOptions struct {
+	GoGraphRuntime       *GoGraphRuntimeBinding
 	Extension            *ExtensionRef
 	SkillRegistry        *SkillRegistryRef
 	Ranking              *learning.Binding
@@ -519,6 +542,18 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 		}
 		extensionPin = &pin
 	}
+	if options.GoGraphRuntime != nil {
+		if err := options.GoGraphRuntime.Validate(); err != nil {
+			return c.TaskState{}, err
+		}
+		if !fileguard.Disjoint(options.Root, options.GoGraphRuntime.ManifestPath) || !fileguard.Disjoint(s.directory, options.GoGraphRuntime.ManifestPath) {
+			return c.TaskState{}, c.Fail(c.PolicyDenied, "Go graph runtime manifest must be outside source and task store")
+		}
+		manifest, err := options.GoGraphRuntime.Read()
+		if err != nil || manifest != options.GoGraphRuntime.Manifest {
+			return c.TaskState{}, c.Fail(c.StaleAuthority, "Go graph runtime manifest changed during task binding")
+		}
+	}
 	if options.SkillRegistry != nil {
 		if err := options.SkillRegistry.Validate(); err != nil {
 			return c.TaskState{}, err
@@ -541,7 +576,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if !utf8.Valid(options.Prompt) || len(options.Prompt) == 0 || len(options.Prompt) > 64<<10 || options.TaskID == "" || options.Budget.Validate() != nil || options.Autonomy != "guided" && options.Autonomy != "review" && options.Autonomy != "auto" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "invalid task creation")
 	}
-	if options.GoalOrigin != nil && (options.GoalOrigin.validate() != nil || options.GoalOrigin.ChildTaskID != options.TaskID || options.GoalOrigin.GoalDigest != c.HashBytes(options.Prompt)) {
+	if options.GoalOrigin != nil && (options.GoalOrigin.validate() != nil || options.GoalOrigin.ChildTaskID != options.TaskID || options.GoalOrigin.GoalDigest != c.HashBytes(options.Prompt) || !budgetMatchesAllocation(options.Budget, options.GoalOrigin.BudgetAllocation)) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "scheduled child origin does not match task input")
 	}
 	if err := s.contentAvailable(options.TaskID); err != nil {
@@ -692,7 +727,7 @@ func (s *Session) createLocked(ctx context.Context, options StartOptions) (c.Tas
 	if err = verify.ValidateCheckOrigin(spec, protected, base); err != nil {
 		return c.TaskState{}, err
 	}
-	doc := Document{Extension: options.Extension, ExtensionManifest: extensionPin, SkillRegistry: options.SkillRegistry, Ranking: options.Ranking, Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
+	doc := Document{GoGraphRuntime: options.GoGraphRuntime, Extension: options.Extension, ExtensionManifest: extensionPin, SkillRegistry: options.SkillRegistry, Ranking: options.Ranking, Config: options.Config, AttemptOrigin: options.AttemptOrigin, GoalOrigin: options.GoalOrigin, TaskKind: options.TaskKind, MaxRepairs: options.MaxRepairs, CheckRuntime: options.CheckRuntime, StoreTokens: &limits, ResourcePolicy: resourcePolicy, Runtime: options.Runtime, Protection: &protected, SchemaVersion: 1, TaskID: options.TaskID, Spec: spec, Baseline: ref, Candidate: ref, Messages: []model.Message{{Role: "user", Text: string(options.Prompt)}}, Budget: options.Budget, AllowUnverified: options.AllowUnverified, Autonomy: options.Autonomy, FixtureDigest: fixtureDigest}
 	doc.MergedDelivery = options.mergedDelivery
 	doc.EvaluationOrigin = options.evaluationOrigin
 	doc.EvaluationAssignment = options.evaluationAssignment
@@ -742,6 +777,9 @@ func (s *Session) layers(state c.TaskState, doc Document) []policy.Policy {
 		effects = append(effects, "check.run")
 	}
 	if doc.Extension != nil {
+		effects = append(effects, "check.run")
+	}
+	if doc.GoGraphRuntime != nil {
 		effects = append(effects, "check.run")
 	}
 	if doc.Autonomy != "review" && taskKind(doc) != "ANALYSIS" {
@@ -837,6 +875,9 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	if err != nil {
 		return state, err
 	}
+	if doc.GoalOrigin != nil && doc.GoalOrigin.hasLegacyBudget() {
+		return state, c.Fail(c.UnsupportedCapability, "legacy scheduled child is available for inspection only; its original budget was not reserved from the parent pool")
+	}
 	if state.Execution == c.Terminated {
 		return state, c.Fail(c.UnsupportedCapability, "terminal resume requires an explicit attempt command with a new task ID")
 	}
@@ -921,17 +962,30 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		if ctx.Err() != nil {
 			return state, ctx.Err()
 		}
-		if doc.Budget.Steps >= doc.Budget.MaxSteps || doc.Budget.ToolCalls >= doc.Budget.MaxToolCalls || doc.Budget.ActiveMillis >= doc.Budget.MaxActiveMillis {
+		headroom, budgetErr := budgetHeadroom(doc.Budget, state.GoalQueue, false)
+		if budgetErr != nil {
+			var typed *c.Error
+			if errors.As(budgetErr, &typed) && typed.Code == c.BudgetLimitReached {
+				return s.stop(ctx, state, doc, "GOAL_BUDGET_POOL_REQUIRES_RECONCILIATION", c.WaitingResource)
+			}
+			return state, budgetErr
+		}
+		if headroom.MaxSteps <= 0 || headroom.MaxToolCalls <= 0 || headroom.MaxActiveMillis <= 0 {
 			state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
 			if err != nil {
 				return state, err
 			}
 			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "work budget exhausted; candidate retained")
 		}
+		held, _, heldErr := heldGoalBudget(state.GoalQueue)
+		if heldErr != nil {
+			return state, heldErr
+		}
+		activeDeadline := started.Add(time.Duration(doc.Budget.MaxActiveMillis-held.MaxActiveMillis-initialActive) * time.Millisecond)
 		if len(doc.Messages) > 0 {
 			last := doc.Messages[len(doc.Messages)-1]
 			if last.Role == "assistant" && len(last.Calls) > 0 {
-				toolCtx, cancelTools := context.WithDeadline(ctx, started.Add(time.Duration(doc.Budget.MaxActiveMillis-initialActive)*time.Millisecond))
+				toolCtx, cancelTools := context.WithDeadline(ctx, activeDeadline)
 				state, doc, err = s.completeTools(toolCtx, state, doc, last.Calls)
 				cancelTools()
 				if state.Execution != c.Running {
@@ -943,12 +997,12 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 				continue
 			}
 		}
-		request, encoded, manifest, err := compileOfflineRequest(doc, state, s.layers(state, doc))
+		request, encoded, manifest, err := compileOfflineRequestWithOutput(doc, state, s.layers(state, doc), headroom.MaxOutputTokens)
 		var contextError *c.Error
 		if errors.As(err, &contextError) && contextError.Code == c.ContextTooSmall && len(doc.Messages) > 9 {
 			compacted, _, compactErr := s.compactDocument(doc, 8)
 			if compactErr == nil {
-				freshRequest, freshBytes, freshManifest, compileErr := compileOfflineRequest(compacted, state, s.layers(state, compacted))
+				freshRequest, freshBytes, freshManifest, compileErr := compileOfflineRequestWithOutput(compacted, state, s.layers(state, compacted), headroom.MaxOutputTokens)
 				if compileErr == nil {
 					doc = compacted
 					state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
@@ -966,8 +1020,13 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 			}
 			return state, err
 		}
+		doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()
+		headroom, err = budgetHeadroom(doc.Budget, state.GoalQueue, false)
+		if err != nil {
+			return state, err
+		}
 		reserveInput := manifest.InputTokens + 4096
-		if reserveInput > doc.Budget.MaxInputTokens-doc.Budget.UsedInput || request.MaxOutputTokens > doc.Budget.MaxOutputTokens-doc.Budget.UsedOutput {
+		if reserveInput > headroom.MaxInputTokens || request.MaxOutputTokens > headroom.MaxOutputTokens || headroom.MaxSteps <= 0 || headroom.MaxActiveMillis <= 0 {
 			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "compiled request upper-bound reservation exceeds budget")
 		}
 		requestDigest, err := s.Archive.PutBytes(task, encoded)
@@ -1006,7 +1065,7 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		} else {
 			// The operator model timeout cannot extend the task's remaining work
 			// time. Deadline loss remains UNKNOWN until an actual receipt exists.
-			deadline := started.Add(time.Duration(doc.Budget.MaxActiveMillis-initialActive) * time.Millisecond)
+			deadline := activeDeadline
 			inferCtx, cancelInfer := context.WithDeadline(ctx, deadline)
 			authorizedCtx, finishAuthority := guardOperatorContext(inferCtx, doc)
 			result, callErr = client.Complete(authorizedCtx, request)
@@ -1054,7 +1113,11 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 			}
 			return s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "settled usage exceeded budget")
 		}
-		if doc.Budget.ActiveMillis >= doc.Budget.MaxActiveMillis {
+		activeAfterResult, budgetErr := budgetHeadroom(doc.Budget, state.GoalQueue, false)
+		if budgetErr != nil {
+			return state, budgetErr
+		}
+		if activeAfterResult.MaxActiveMillis <= 0 {
 			state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
 			if err != nil {
 				return state, err
@@ -1099,6 +1162,7 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		call := calls[n]
 		approvedIndex := -1
 		var extensionIntent *ExtensionIntent
+		var graphIntent *GoGraphIntent
 		var preflightErr error
 		if call.Name == "candidate_propose" && taskKind(doc) == "ANALYSIS" {
 			preflightErr = c.Fail(c.PolicyDenied, "analysis task cannot mutate its candidate")
@@ -1143,14 +1207,27 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 				preflightErr = c.Fail(c.PolicyDenied, "extension tool call rejected by user")
 			}
 		}
-		if doc.Budget.ToolCalls >= doc.Budget.MaxToolCalls {
+		if call.Name == "fs_graph" && doc.GoGraphRuntime != nil && preflightErr == nil {
+			graphIntent, preflightErr = s.admitGoGraphCall(state, doc, call)
+		}
+		headroom, budgetErr := budgetHeadroom(doc.Budget, state.GoalQueue, false)
+		if budgetErr != nil {
+			var typed *c.Error
+			if errors.As(budgetErr, &typed) && typed.Code == c.BudgetLimitReached {
+				next, stopErr := s.stop(ctx, state, doc, "GOAL_BUDGET_POOL_REQUIRES_RECONCILIATION", c.WaitingResource)
+				return next, doc, stopErr
+			}
+			return state, doc, budgetErr
+		}
+		if headroom.MaxToolCalls <= 0 || headroom.MaxActiveMillis <= 0 {
 			state, err := s.transition(ctx, state, c.Terminated, c.BudgetExhausted, "tool call budget exhausted")
 			return state, doc, err
 		}
 		doc.Budget.ToolCalls++
 		doc.Pending = &Pending{ID: call.ID, Kind: "NATIVE_TOOL", Candidate: doc.Candidate.SnapshotDigest, Generation: state.KernelGeneration, Epoch: state.PolicyEpoch, ArgumentsDigest: c.HashBytes(call.Arguments), Status: "ADMITTED"}
 		doc.Pending.ExtensionIntent = extensionIntent
-		if preflightErr == nil && (call.Name == "check_run" || extensionIntent != nil) {
+		doc.Pending.GoGraphIntent = graphIntent
+		if preflightErr == nil && (call.Name == "check_run" || extensionIntent != nil || graphIntent != nil) {
 			preflightErr = s.prepareNativeLease(state, &doc, call)
 		}
 		var err error
@@ -1171,7 +1248,24 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		var reply model.Reply
 		var next *artifact.Ref
 		toolErr := preflightErr
-		if toolErr == nil {
+		if toolErr == nil && graphIntent != nil {
+			candidate, getErr := s.Archive.Get(doc.Candidate)
+			if getErr != nil {
+				toolErr = getErr
+			} else {
+				readLayers := s.layers(state, doc)
+				if node := doc.Plan.Active(); node != nil {
+					readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})
+				}
+				var value any
+				value, toolErr = s.isolatedGoGraph(ctx, state, &doc, call, readLayers, candidate)
+				if toolErr == nil {
+					var raw []byte
+					raw, toolErr = json.Marshal(value)
+					reply = model.Reply{CallID: call.ID, Content: string(raw)}
+				}
+			}
+		} else if toolErr == nil {
 			if extensionIntent != nil {
 				var value any
 				value, toolErr = s.executeExtension(ctx, state, &doc, call)
@@ -1186,7 +1280,7 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 		}
 		doc.Budget.ActiveMillis += time.Since(toolStarted).Milliseconds()
 		commitCtx := ctx
-		if (call.Name == "check_run" || extensionIntent != nil) && (ctx.Err() != nil || doc.UnknownEffect) {
+		if (call.Name == "check_run" || extensionIntent != nil || graphIntent != nil) && (ctx.Err() != nil || doc.UnknownEffect) {
 			var cancel context.CancelFunc
 			commitCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()

@@ -31,6 +31,7 @@ type Reserve struct {
 	file            *os.File
 	free            func(*os.Root) (uint64, error)
 	beforeAdmission func(int64, bool) error
+	afterReserve    func() error
 }
 
 func Open(directory string) (*Reserve, error) {
@@ -92,6 +93,19 @@ func (r *Reserve) SetAdmissionHook(hook func(int64, bool) error) error {
 		return os.ErrClosed
 	}
 	r.beforeAdmission = hook
+	return nil
+}
+
+// SetReserveReconcileHook installs an owner-specific durable receipt refresh
+// after the normal-work path has synced or verified the reserve file. It runs
+// under the reserve lock and must not call methods on this Reserve.
+func (r *Reserve) SetReserveReconcileHook(hook func() error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return os.ErrClosed
+	}
+	r.afterReserve = hook
 	return nil
 }
 func (r *Reserve) retained() (int64, error) {
@@ -174,6 +188,11 @@ func (r *Reserve) Admit(bytes int64, control bool) error {
 				return c.Fail(c.StoreIntegrityError, "reserve replenishment incomplete")
 			}
 			if err = fileguard.SyncDirectory(r.root, "."); err != nil {
+				return err
+			}
+		}
+		if r.afterReserve != nil {
+			if err = r.afterReserve(); err != nil {
 				return err
 			}
 		}

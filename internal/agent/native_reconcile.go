@@ -233,6 +233,7 @@ func (s *Session) reconcileNativeRisk(ctx context.Context, command NativeRiskCom
 	if err != nil {
 		return state, err
 	}
+	payload.WorkBudget = workBudgetSnapshotForState(state, doc)
 	state, err = s.Journal.Execute(cleanupCtx, store.Command{ID: command.CommandID, TaskID: doc.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: kind, Payload: payload})
 	if err != nil {
 		return state, err

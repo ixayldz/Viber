@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/model"
 	"github.com/ixayldz/Viber/internal/store"
 	"strings"
 	"unicode/utf8"
@@ -39,13 +40,15 @@ type ScheduledGoal struct {
 // it. This is checked whenever the child document is loaded, including after
 // restart, so a reused child ID cannot silently dispatch a different goal.
 type GoalOrigin struct {
-	ParentTask           string `json:"parent_task"`
-	ParentTaskSeq        int64  `json:"parent_task_seq"`
-	ParentDocumentDigest string `json:"parent_document_digest"`
-	GoalID               string `json:"goal_id"`
-	GoalDigest           string `json:"goal_digest"`
-	SourceSnapshotDigest string `json:"source_snapshot_digest"`
-	ChildTaskID          string `json:"child_task_id"`
+	ParentTask             string             `json:"parent_task"`
+	ParentTaskSeq          int64              `json:"parent_task_seq"`
+	ParentDocumentDigest   string             `json:"parent_document_digest"`
+	GoalID                 string             `json:"goal_id"`
+	GoalDigest             string             `json:"goal_digest"`
+	BudgetAllocation       c.BudgetAllocation `json:"budget_allocation,omitempty,omitzero"`
+	BudgetAllocationDigest string             `json:"budget_allocation_digest,omitempty"`
+	SourceSnapshotDigest   string             `json:"source_snapshot_digest"`
+	ChildTaskID            string             `json:"child_task_id"`
 }
 
 func (s *Session) queueFromState(state c.TaskState) ([]QueuedPrompt, error) {
@@ -149,7 +152,21 @@ func (s *Session) QueueControl(ctx context.Context, command QueueCommand) (c.Tas
 
 func queueIndependentState(state c.TaskState) string {
 	state.PromptQueue = nil
-	state.GoalQueue = nil
+	// Bind the held pool, but normalize activation status and receipts: QUEUED,
+	// ACTIVATING, UNKNOWN and ACTIVATED all reserve the same immutable tranche.
+	// Cancellation removes only an unactivated hold, so it changes this digest.
+	held := make([]c.GoalSchedule, 0, len(state.GoalQueue))
+	for _, item := range state.GoalQueue {
+		if item.Status == "CANCELLED" {
+			continue
+		}
+		item.Status = "HELD"
+		item.ActivationCommandID = ""
+		item.ChildTaskSeq = 0
+		item.ChildDocumentDigest = ""
+		held = append(held, item)
+	}
+	state.GoalQueue = held
 	state.TaskSeq = 0
 	state.StoreSeq = 0
 	digest, _ := c.Digest(state)
@@ -191,11 +208,18 @@ func goalItem(state c.TaskState, id string) (c.GoalSchedule, bool) {
 }
 
 func validGoalItem(item c.GoalSchedule) bool {
-	return item.ID != "" && len(item.ID) <= 128 && c.ValidDigest(item.Digest) && item.Bytes > 0 && item.Bytes <= 64<<10 &&
+	legacyAllocation := item.BudgetAllocation == (c.BudgetAllocation{}) && item.BudgetAllocationDigest == ""
+	allocationValid := legacyAllocation
+	if !legacyAllocation && item.BudgetAllocation.Validate() == nil && c.ValidDigest(item.BudgetAllocationDigest) {
+		digest, err := item.BudgetAllocation.Digest()
+		allocationValid = err == nil && digest == item.BudgetAllocationDigest
+	}
+	return allocationValid && item.ID != "" && len(item.ID) <= 128 && c.ValidDigest(item.Digest) && item.Bytes > 0 && item.Bytes <= 64<<10 &&
 		item.ParentTaskSeq > 0 && c.ValidDigest(item.ParentDocumentDigest) && c.ValidDigest(item.SourceSnapshotDigest) &&
 		item.ChildTaskID != "" && len(item.ChildTaskID) <= 128 &&
 		(item.Status == "QUEUED" && item.ActivationCommandID == "" && item.ChildTaskSeq == 0 && item.ChildDocumentDigest == "" ||
 			item.Status == "ACTIVATING" && item.ActivationCommandID != "" && item.ChildTaskSeq == 0 && item.ChildDocumentDigest == "" ||
+			item.Status == "UNKNOWN" && item.ActivationCommandID != "" && item.ChildTaskSeq == 0 && item.ChildDocumentDigest == "" ||
 			item.Status == "ACTIVATED" && item.ActivationCommandID != "" && item.ChildTaskSeq > 0 && c.ValidDigest(item.ChildDocumentDigest) ||
 			item.Status == "CANCELLED" && item.ActivationCommandID == "" && item.ChildTaskSeq == 0 && item.ChildDocumentDigest == "")
 }
@@ -257,8 +281,10 @@ func (s *Session) GoalControl(ctx context.Context, command GoalCommand) (c.TaskS
 			expectedType = "GoalCancelled"
 		}
 		g := payload.Goal
+		legacyAllocation := g != nil && g.BudgetAllocation == (c.BudgetAllocation{}) && g.BudgetAllocationDigest == ""
+		allocationReceiptValid := legacyAllocation || g != nil && g.BudgetAllocation.Validate() == nil && c.ValidDigest(g.BudgetAllocationDigest) && allocationDigestMatches(g.BudgetAllocation, g.BudgetAllocationDigest)
 		if event.TaskID != command.TaskID || event.Actor != "user" || event.Type != expectedType || g == nil || g.Reason != digest ||
-			command.Action == "add" && (g.ID != command.CommandID || g.Digest != c.HashBytes([]byte(command.Text)) || g.Bytes != int64(len(command.Text)) || g.ChildTaskID != command.ChildTaskID) ||
+			command.Action == "add" && (g.ID != command.CommandID || g.Digest != c.HashBytes([]byte(command.Text)) || g.Bytes != int64(len(command.Text)) || g.ChildTaskID != command.ChildTaskID || !allocationReceiptValid) ||
 			command.Action == "cancel" && g.ID != command.GoalID {
 			return prior, c.Fail(c.CommandIDConflict, "goal command ID reused with different input")
 		}
@@ -272,6 +298,12 @@ func (s *Session) GoalControl(ctx context.Context, command GoalCommand) (c.TaskS
 		if state.Deletion != nil {
 			return state, c.Fail(c.PolicyDenied, "deleted task cannot schedule new goals")
 		}
+		if state.WorkBudget == nil {
+			return state, c.Fail(c.UnsupportedCapability, "legacy task has no sealed parent work budget pool for child allocations")
+		}
+		if doc.Pending != nil || doc.UnknownEffect {
+			return state, c.Fail(c.BudgetLimitReached, "a pending or unknown parent effect reserves the remaining child work window")
+		}
 		if _, exists := goalItem(state, command.CommandID); exists {
 			return state, c.Fail(c.CommandIDConflict, "goal ID already exists")
 		}
@@ -280,11 +312,28 @@ func (s *Session) GoalControl(ctx context.Context, command GoalCommand) (c.TaskS
 				return state, c.Fail(c.CommandIDConflict, "child task ID already scheduled")
 			}
 		}
+		allocation, err := allocateGoalBudget(doc.Budget, state.GoalQueue, false)
+		if err != nil {
+			return state, err
+		}
+		if doc.Runtime != nil && doc.Runtime.Provider == "chatgpt" {
+			headroom, headroomErr := budgetHeadroom(doc.Budget, state.GoalQueue, false)
+			if headroomErr != nil {
+				return state, headroomErr
+			}
+			if allocation.MaxOutputTokens < model.ChatGPTOutputCeiling || headroom.MaxOutputTokens-allocation.MaxOutputTokens < model.ChatGPTOutputCeiling {
+				return state, c.Fail(c.BudgetLimitReached, "ChatGPT requires its full published output ceiling; parent and child reservations cannot shrink it")
+			}
+		}
+		allocationDigest, err := allocation.Digest()
+		if err != nil {
+			return state, err
+		}
 		blob, err := s.Archive.PutBytes(command.TaskID, []byte(command.Text))
 		if err != nil {
 			return state, err
 		}
-		mutation := &c.GoalMutation{ID: command.CommandID, Digest: blob, Bytes: int64(len(command.Text)), ParentTaskSeq: state.TaskSeq, ParentDocumentDigest: state.DocumentDigest, SourceSnapshotDigest: doc.Baseline.SnapshotDigest, ChildTaskID: command.ChildTaskID, Reason: digest}
+		mutation := &c.GoalMutation{ID: command.CommandID, Digest: blob, BudgetAllocation: allocation, BudgetAllocationDigest: allocationDigest, Bytes: int64(len(command.Text)), ParentTaskSeq: state.TaskSeq, ParentDocumentDigest: state.DocumentDigest, SourceSnapshotDigest: doc.Baseline.SnapshotDigest, ChildTaskID: command.ChildTaskID, Reason: digest}
 		return s.executeAroundQueue(ctx, state, store.Command{ID: command.CommandID, TaskID: command.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "GoalQueued", Payload: c.EventPayload{Goal: mutation}})
 	}
 	state, err := s.State(ctx, command.TaskID)
@@ -311,7 +360,13 @@ func (s *Session) BeginGoalActivation(ctx context.Context, command GoalCommand) 
 	if !found {
 		return state, c.GoalSchedule{}, c.Fail(c.StaleRequest, "scheduled goal unavailable")
 	}
-	if item.Status == "ACTIVATING" || item.Status == "ACTIVATED" {
+	if item.Status == "UNKNOWN" && command.Action == "activate" {
+		return state, c.GoalSchedule{}, c.Fail(c.StaleRequest, "unknown goal activation requires explicit recovery")
+	}
+	if item.Status == "QUEUED" && (item.BudgetAllocation.Validate() != nil || !c.ValidDigest(item.BudgetAllocationDigest) || !allocationDigestMatches(item.BudgetAllocation, item.BudgetAllocationDigest)) {
+		return state, c.GoalSchedule{}, c.Fail(c.UnsupportedCapability, "legacy goal has no fixed child budget allocation and cannot activate")
+	}
+	if item.Status == "ACTIVATING" || item.Status == "ACTIVATED" || item.Status == "UNKNOWN" {
 		if command.Action == "activate" {
 			prior, event, payload, receipt, receiptErr := s.Journal.CommandReceipt(ctx, command.CommandID)
 			if receiptErr != nil {
@@ -364,7 +419,7 @@ func goalActivationReceiptID(parent, goal string) string {
 }
 
 func (s *Session) CommitGoalActivation(ctx context.Context, parent string, item c.GoalSchedule, child c.TaskState) (c.TaskState, error) {
-	if !validGoalItem(item) || item.Status != "ACTIVATING" && item.Status != "ACTIVATED" || child.TaskID != item.ChildTaskID || child.TaskSeq < 1 || !c.ValidDigest(child.DocumentDigest) {
+	if !validGoalItem(item) || item.Status != "ACTIVATING" && item.Status != "ACTIVATED" && item.Status != "UNKNOWN" || child.TaskID != item.ChildTaskID || child.TaskSeq < 1 || !c.ValidDigest(child.DocumentDigest) {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "verified child activation receipt required")
 	}
 	id := goalActivationReceiptID(parent, item.ID)
@@ -384,7 +439,7 @@ func (s *Session) CommitGoalActivation(ctx context.Context, parent string, item 
 		}
 		return s.State(ctx, parent)
 	}
-	if item.Status != "ACTIVATING" {
+	if item.Status != "ACTIVATING" && item.Status != "UNKNOWN" {
 		return prior, c.Fail(c.StoreIntegrityError, "activated goal is missing its durable child receipt")
 	}
 	state, err := s.State(ctx, parent)
@@ -392,7 +447,7 @@ func (s *Session) CommitGoalActivation(ctx context.Context, parent string, item 
 		return state, err
 	}
 	current, ok := goalItem(state, item.ID)
-	if !ok || current.Status != "ACTIVATING" || current.ChildTaskID != child.TaskID || current.ActivationCommandID != item.ActivationCommandID {
+	if !ok || current.Status != "ACTIVATING" && current.Status != "UNKNOWN" || current.ChildTaskID != child.TaskID || current.ActivationCommandID != item.ActivationCommandID {
 		return state, c.Fail(c.StaleRequest, "goal activation intent changed before child receipt")
 	}
 	return s.executeAroundQueue(ctx, state, store.Command{ID: id, TaskID: parent, Actor: "kernel", ExpectedTaskSeq: state.TaskSeq, Type: "GoalActivated", Payload: c.EventPayload{Goal: mutation}})
@@ -401,10 +456,13 @@ func (s *Session) CommitGoalActivation(ctx context.Context, parent string, item 
 func (s *Session) CreateGoalTask(ctx context.Context, parent string, item c.GoalSchedule) (c.TaskState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if parent == "" || !validGoalItem(item) || item.Status != "ACTIVATING" && item.Status != "ACTIVATED" {
+	if parent == "" || !validGoalItem(item) || item.Status != "ACTIVATING" && item.Status != "ACTIVATED" && item.Status != "UNKNOWN" {
 		return c.TaskState{}, c.Fail(c.InvalidArgument, "recoverable durable goal activation required")
 	}
-	origin := GoalOrigin{ParentTask: parent, ParentTaskSeq: item.ParentTaskSeq, ParentDocumentDigest: item.ParentDocumentDigest, GoalID: item.ID, GoalDigest: item.Digest, SourceSnapshotDigest: item.SourceSnapshotDigest, ChildTaskID: item.ChildTaskID}
+	if item.BudgetAllocation == (c.BudgetAllocation{}) && item.BudgetAllocationDigest == "" {
+		return c.TaskState{}, c.Fail(c.UnsupportedCapability, "legacy scheduled goal has no fixed child budget; activation is read-only")
+	}
+	origin := GoalOrigin{ParentTask: parent, ParentTaskSeq: item.ParentTaskSeq, ParentDocumentDigest: item.ParentDocumentDigest, GoalID: item.ID, GoalDigest: item.Digest, BudgetAllocation: item.BudgetAllocation, BudgetAllocationDigest: item.BudgetAllocationDigest, SourceSnapshotDigest: item.SourceSnapshotDigest, ChildTaskID: item.ChildTaskID}
 	if err := origin.validate(); err != nil {
 		return c.TaskState{}, err
 	}
@@ -425,7 +483,7 @@ func (s *Session) CreateGoalTask(ctx context.Context, parent string, item c.Goal
 		return parentAtOrigin, err
 	}
 	currentItem, found := goalItem(currentParent[parent], item.ID)
-	if !found || currentItem.Status != "ACTIVATING" && currentItem.Status != "ACTIVATED" || currentItem.ChildTaskID != item.ChildTaskID || currentItem.Digest != item.Digest || currentItem.ParentDocumentDigest != item.ParentDocumentDigest {
+	if !found || currentItem.Status != "ACTIVATING" && currentItem.Status != "ACTIVATED" && currentItem.Status != "UNKNOWN" || currentItem.ChildTaskID != item.ChildTaskID || currentItem.Digest != item.Digest || currentItem.ParentDocumentDigest != item.ParentDocumentDigest || currentItem.BudgetAllocation != item.BudgetAllocation || currentItem.BudgetAllocationDigest != item.BudgetAllocationDigest {
 		return parentAtOrigin, c.Fail(c.StaleAuthority, "goal no longer has a matching durable activation intent")
 	}
 	goalRaw, err := s.Archive.GetBytes(parent, item.Digest)
@@ -448,7 +506,7 @@ func (s *Session) CreateGoalTask(ctx context.Context, parent string, item c.Goal
 		if loadErr != nil {
 			return existing, loadErr
 		}
-		if childDoc.GoalOrigin == nil || *childDoc.GoalOrigin != origin || childDoc.Spec.Goal != string(goalRaw) || childDoc.Baseline.SnapshotDigest != item.SourceSnapshotDigest {
+		if childDoc.GoalOrigin == nil || *childDoc.GoalOrigin != origin || !budgetMatchesAllocation(childDoc.Budget, item.BudgetAllocation) || childDoc.Spec.Goal != string(goalRaw) || childDoc.Baseline.SnapshotDigest != item.SourceSnapshotDigest {
 			return child, c.Fail(c.CommandIDConflict, "stable child ID belongs to a different task or goal")
 		}
 		return s.finishGoalCreation(ctx, child)
@@ -474,13 +532,8 @@ func (s *Session) CreateGoalTask(ctx context.Context, parent string, item c.Goal
 			return parentAtOrigin, err
 		}
 	}
-	budget := DefaultBudget()
-	budget.MaxSteps = parentDoc.Budget.MaxSteps
-	budget.MaxToolCalls = parentDoc.Budget.MaxToolCalls
-	budget.MaxInputTokens = parentDoc.Budget.MaxInputTokens
-	budget.MaxOutputTokens = parentDoc.Budget.MaxOutputTokens
-	budget.MaxActiveMillis = parentDoc.Budget.MaxActiveMillis
-	child, err := s.createLocked(ctx, StartOptions{GoalOrigin: &origin, Config: parentDoc.Config, ResourcePolicy: parentDoc.ResourcePolicy, StoreTokens: parentDoc.StoreTokens, Root: baseline.Snapshot.Root, Git: baseline.Snapshot.Git != nil, Prompt: goalRaw, TaskID: item.ChildTaskID, Budget: budget, Autonomy: parentDoc.Autonomy, AllowUnverified: parentDoc.AllowUnverified, Runtime: parentDoc.Runtime, Fixture: fixture, CheckPlan: checkPlan, CheckRuntime: parentDoc.CheckRuntime, TaskKind: taskKind(parentDoc), MaxRepairs: parentDoc.MaxRepairs})
+	budget := budgetFromAllocation(item.BudgetAllocation)
+	child, err := s.createLocked(ctx, StartOptions{GoGraphRuntime: parentDoc.GoGraphRuntime, GoalOrigin: &origin, Config: parentDoc.Config, ResourcePolicy: parentDoc.ResourcePolicy, StoreTokens: parentDoc.StoreTokens, Root: baseline.Snapshot.Root, Git: baseline.Snapshot.Git != nil, Prompt: goalRaw, TaskID: item.ChildTaskID, Budget: budget, Autonomy: parentDoc.Autonomy, AllowUnverified: parentDoc.AllowUnverified, Runtime: parentDoc.Runtime, Fixture: fixture, CheckPlan: checkPlan, CheckRuntime: parentDoc.CheckRuntime, TaskKind: taskKind(parentDoc), MaxRepairs: parentDoc.MaxRepairs})
 	if err != nil {
 		return child, err
 	}
@@ -488,6 +541,16 @@ func (s *Session) CreateGoalTask(ctx context.Context, parent string, item c.Goal
 }
 
 func (origin GoalOrigin) validate() error {
+	if err := origin.validateIdentity(); err != nil {
+		return err
+	}
+	if origin.hasLegacyBudget() || origin.BudgetAllocation.Validate() != nil || !c.ValidDigest(origin.BudgetAllocationDigest) || !allocationDigestMatches(origin.BudgetAllocation, origin.BudgetAllocationDigest) {
+		return c.Fail(c.InvalidArgument, "scheduled-goal child requires an exact fixed budget allocation")
+	}
+	return nil
+}
+
+func (origin GoalOrigin) validateIdentity() error {
 	if origin.ParentTask == "" || len(origin.ParentTask) > 128 || origin.ParentTask == origin.ChildTaskID || origin.ParentTaskSeq < 1 ||
 		!c.ValidDigest(origin.ParentDocumentDigest) || origin.GoalID == "" || len(origin.GoalID) > 128 || !c.ValidDigest(origin.GoalDigest) ||
 		!c.ValidDigest(origin.SourceSnapshotDigest) || origin.ChildTaskID == "" || len(origin.ChildTaskID) > 128 || strings.HasPrefix(origin.ChildTaskID, "eval-") {
@@ -496,12 +559,22 @@ func (origin GoalOrigin) validate() error {
 	return nil
 }
 
+func (origin GoalOrigin) hasLegacyBudget() bool {
+	return origin.BudgetAllocation == (c.BudgetAllocation{}) && origin.BudgetAllocationDigest == ""
+}
+
+func allocationDigestMatches(allocation c.BudgetAllocation, expected string) bool {
+	digest, err := allocation.Digest()
+	return err == nil && digest == expected
+}
+
 func (s *Session) validateGoalOrigin(ctx context.Context, doc Document) error {
 	if doc.GoalOrigin == nil {
 		return nil
 	}
 	origin := *doc.GoalOrigin
-	if err := origin.validate(); err != nil || origin.ChildTaskID != doc.TaskID || doc.Baseline.SnapshotDigest != origin.SourceSnapshotDigest || doc.Spec.Goal == "" || len(doc.Spec.Inputs) != 1 || doc.Spec.Inputs[0].Digest != origin.GoalDigest || doc.Spec.Inputs[0].ByteLength <= 0 || doc.Spec.Inputs[0].ByteLength > 64<<10 {
+	legacyBudget := origin.hasLegacyBudget()
+	if err := origin.validateIdentity(); err != nil || !legacyBudget && origin.validate() != nil || origin.ChildTaskID != doc.TaskID || doc.Baseline.SnapshotDigest != origin.SourceSnapshotDigest || doc.Spec.Goal == "" || len(doc.Spec.Inputs) != 1 || doc.Spec.Inputs[0].Digest != origin.GoalDigest || doc.Spec.Inputs[0].ByteLength <= 0 || doc.Spec.Inputs[0].ByteLength > 64<<10 {
 		return c.Fail(c.StoreIntegrityError, "scheduled child lost immutable goal origin")
 	}
 	goal, err := s.Archive.GetBytes(doc.TaskID, origin.GoalDigest)
@@ -522,7 +595,13 @@ func (s *Session) validateGoalOrigin(ctx context.Context, doc Document) error {
 			break
 		}
 	}
-	if schedule == nil || schedule.ParentTaskSeq != origin.ParentTaskSeq || schedule.ParentDocumentDigest != origin.ParentDocumentDigest || schedule.SourceSnapshotDigest != origin.SourceSnapshotDigest || schedule.ChildTaskID != origin.ChildTaskID || schedule.Digest != origin.GoalDigest || schedule.Status != "ACTIVATING" && schedule.Status != "ACTIVATED" {
+	allocationMatches := schedule != nil && schedule.BudgetAllocation == origin.BudgetAllocation && schedule.BudgetAllocationDigest == origin.BudgetAllocationDigest
+	if legacyBudget {
+		allocationMatches = schedule != nil && schedule.BudgetAllocation == (c.BudgetAllocation{}) && schedule.BudgetAllocationDigest == ""
+	} else {
+		allocationMatches = allocationMatches && budgetMatchesAllocation(doc.Budget, origin.BudgetAllocation)
+	}
+	if schedule == nil || schedule.ParentTaskSeq != origin.ParentTaskSeq || schedule.ParentDocumentDigest != origin.ParentDocumentDigest || schedule.SourceSnapshotDigest != origin.SourceSnapshotDigest || schedule.ChildTaskID != origin.ChildTaskID || schedule.Digest != origin.GoalDigest || !allocationMatches || schedule.Status != "ACTIVATING" && schedule.Status != "ACTIVATED" && schedule.Status != "UNKNOWN" {
 		return c.Fail(c.StoreIntegrityError, "scheduled child does not match its parent journal")
 	}
 	parentAtOrigin, err := s.Journal.ReplayAt(ctx, origin.ParentTask, origin.ParentTaskSeq)

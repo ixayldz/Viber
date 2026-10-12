@@ -133,7 +133,7 @@ func (s *Session) ReconcileModelRisk(ctx context.Context, command ModelRiskComma
 	if err != nil {
 		return state, err
 	}
-	return s.Journal.Execute(ctx, store.Command{ID: command.CommandID, TaskID: doc.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "ModelRiskReconciled", Payload: c.EventPayload{DocumentDigest: digest, Reason: hash, Tokens: &c.TokenMutation{Action: "SETTLE", Reservation: tr}, Resources: &c.ResourceMutation{Action: "SETTLE", Reservation: rr}}})
+	return s.Journal.Execute(ctx, store.Command{ID: command.CommandID, TaskID: doc.TaskID, Actor: "user", ExpectedTaskSeq: state.TaskSeq, Type: "ModelRiskReconciled", Payload: c.EventPayload{DocumentDigest: digest, WorkBudget: workBudgetSnapshotForState(state, doc), Reason: hash, Tokens: &c.TokenMutation{Action: "SETTLE", Reservation: tr}, Resources: &c.ResourceMutation{Action: "SETTLE", Reservation: rr}}})
 }
 func (s *Session) validateRiskReceipt(doc Document, r c.TokenReservation, raw []byte) error {
 	var proof ModelRiskReceipt

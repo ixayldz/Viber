@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,11 +39,30 @@ func TestChatGPTTaskBindsAccountConsentAndFullOutputCeiling(t *testing.T) {
 	if r.ContextWindow != 0 || r.MaxOutputTokens != 128000 || r.Model != model.ChatGPTModel || manifest.Estimator != model.ChatGPTProfile || strings.Contains(string(raw), runtime.AuthDirectory) || strings.Contains(string(raw), runtime.AuthProfile) {
 		t.Fatal("account/ceiling/context compiler binding")
 	}
+	if _, _, _, err = compileOfflineRequestWithOutput(doc, state, s.layers(state, doc), model.ChatGPTOutputCeiling-1); err == nil {
+		t.Fatal("smaller remaining output budget was sent as an invalid ChatGPT request")
+	} else {
+		var budgetError *c.Error
+		if !errors.As(err, &budgetError) || budgetError.Code != c.BudgetLimitReached {
+			t.Fatalf("expected an explicit budget stop for the fixed ChatGPT ceiling: %v", err)
+		}
+	}
 	if err = policy.Admit(s.layers(state, doc), policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Remote: true, Provider: "chatgpt", Effect: "model.infer"}); err != nil {
 		t.Fatal(err)
 	}
 	if err = policy.Admit(s.layers(state, doc), policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Remote: true, Provider: "openai", Effect: "model.infer"}); err == nil {
 		t.Fatal("plan consent granted API provider")
+	}
+	smallBudget := budget
+	smallBudget.MaxOutputTokens = 400000
+	small, err := s.Create(context.Background(), StartOptions{Root: source, TaskID: "plan-small-child-tranche", Prompt: []byte("Inspect source"), Budget: smallBudget, Autonomy: "guided", Runtime: runtime, AllowUnverified: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.GoalControl(context.Background(), GoalCommand{CommandID: "chatgpt-small-child", TaskID: small.TaskID, Action: "add", ChildTaskID: "chatgpt-child", Text: "Inspect source separately."})
+	var allocationError *c.Error
+	if !errors.As(err, &allocationError) || allocationError.Code != c.BudgetLimitReached {
+		t.Fatalf("child allocation below ChatGPT's full output ceiling was not refused: %v", err)
 	}
 	for _, change := range []func(*LocalRuntime){
 		func(r *LocalRuntime) { r.AllowRemote = false }, func(r *LocalRuntime) { r.OutputLimit = 512 }, func(r *LocalRuntime) { r.Endpoint = "https://chatgpt.com" }, func(r *LocalRuntime) { r.Model = "unknown" }, func(r *LocalRuntime) { r.DeclaredLocal = true }, func(r *LocalRuntime) { r.AuthProfile = "" }, func(r *LocalRuntime) { r.AuthDirectory = "relative" },

@@ -78,6 +78,9 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		}
 		return encode(value)
 	case "fs_graph":
+		if doc.GoGraphRuntime != nil {
+			return model.Reply{}, nil, c.Fail(c.StaleAuthority, "configured Go graph runtime requires its persisted process lease")
+		}
 		readLayers := layers
 		if node := doc.Plan.Active(); node != nil {
 			readLayers = append(readLayers, policy.Policy{SchemaVersion: 1, Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effects: []string{"snapshot.read"}, Paths: node.ReadScope})

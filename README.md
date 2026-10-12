@@ -8,6 +8,17 @@ ChatGPT hesabınızla kullanabilirsiniz. **Bu giriş için OpenAI API anahtarı 
 
 [İndir](https://github.com/ixayldz/Viber/releases) · [Kurulum ayrıntıları](docs/INSTALL.md) · [CLI kılavuzu](docs/CLI_REFERENCE.md) · [PRD](prd.md) · [MIT lisansı](LICENSE)
 
+İlk kullanımda yapacağınız şey: **paketi açın → ChatGPT ile giriş yapın → proje yolunu seçin → görevi yazın → öneriyi onaylayın → diff'i inceleyip dışarı alın.** Aşağıdaki örnekleri sırayla çalıştırabilirsiniz. Windows için PowerShell, Linux/macOS için Terminal kullanın.
+
+| Gereken | Ne için? |
+| --- | --- |
+| İşletim sisteminize uygun Viber paketi | Uygulamayı çalıştırmak |
+| Uygun ChatGPT hesap/workspace izni ve internet | ChatGPT planıyla gerçek model kullanımı |
+| Kodunuzun bulunduğu proje klasörü | Viber'ın çalışacağı kaynak |
+| Proje dışında ayrı store klasörü | Görev geçmişi, çalışma kopyaları ve devam etme |
+
+Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension çalıştırmak için gerekir. İnternetsiz demoda ChatGPT hesabı da gerekmez.
+
 ## 1. İndirin ve kurun
 
 **Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-f1b323d437e953411649db6fec2532a20095a524) Assets bölümünden işletim sisteminize uygun arşivi indirin:
@@ -74,7 +85,7 @@ Windows:
 $project = 'C:\Projects\my-app'
 $store = Join-Path $env:LOCALAPPDATA 'ViberData\my-app'
 
-.\viber.exe run "Projeyi incele, README'deki kurulum adımlarını düzelt ve değişiklikleri açıkla" --provider chatgpt --allow-remote --root $project --store $store --task first-task --autonomy review --allow-unverified --json
+.\viber.exe run "Projeyi incele, README'deki kurulum adımlarını düzelt ve değişiklikleri açıkla" --provider chatgpt --allow-remote --root $project --store $store --task first-task --autonomy review --allow-unverified
 ```
 
 Linux / macOS:
@@ -83,7 +94,7 @@ Linux / macOS:
 project="$HOME/projects/my-app"
 store="$HOME/.local/share/viber/tasks/my-app"
 
-./viber run "Projeyi incele, README'deki kurulum adımlarını düzelt ve değişiklikleri açıkla" --provider chatgpt --allow-remote --root "$project" --store "$store" --task first-task --autonomy review --allow-unverified --json
+./viber run "Projeyi incele, README'deki kurulum adımlarını düzelt ve değişiklikleri açıkla" --provider chatgpt --allow-remote --root "$project" --store "$store" --task first-task --autonomy review --allow-unverified
 ```
 
 `--allow-remote` seçili modelin proje bağlamını almasına izin verir. `--autonomy review` yazı önerilerini onayınıza sunar. `--allow-unverified` bağımsız kontrol yapılmadan inceleme paketi teslim edilmesine izin verir; sonucu doğrulanmış yapmaz. Hassas yolları görevden önce [config ile dışlayabilirsiniz](docs/CLI_REFERENCE.md#terminal-arayüzü-prompt-kuyruğu-ve-config-09).
@@ -97,6 +108,8 @@ Görev onay bekliyorsa arayüzü açın:
 Linux/macOS'ta aynı komut `./viber ui first-task --store "$store"` olur. Arayüzde `/requests` bekleyen önerileri gösterir. İncelediğiniz isteği `/respond REQUEST_ID approve` ile onaylayın, ardından `/resume` yazın. `/diff` değişiklikleri, `/status` durumu, `/help` mevcut komutları gösterir. `REQUEST_ID` yerine ekrandaki gerçek kimliği yazın.
 
 Programı yeniden açınca aynı task ve store ile durum/geçmiş okunabilir. Yeni görev için farklı bir `--task` kimliği kullanın.
+
+İlk komutun onay bekleyerek durması normaldir. Terminali kapattıysanız aynı `$store`/`store` değerini yeniden tanımlayıp `ui first-task` komutunu açın; görevi baştan oluşturmanız gerekmez. Örneklerde okunabilir terminal çıktısı kullanılır. Otomasyon için komutun sonuna `--json` ekleyebilirsiniz.
 
 ## 4. Sonucu inceleyin ve dışarı alın
 
@@ -181,6 +194,7 @@ viber store-restore --backup BACKUP --store NEW_STORE --json
 | Exit `3` | `ui` / `requests` ile bekleyen kararı inceleyin |
 | Store zaten kullanılıyor | Aynı store owner'ına bağlanın; lock dosyasını elle silmeyin |
 | Source/store çakışıyor | Store'u proje dışına taşıyan yeni görev/restore dizini seçin |
+| Eski scheduled child `UNSUPPORTED_CAPABILITY` veriyor | Eski child'ı `status`/`diff` ile inceleyin; [paylaşılan goal bütçesi kılavuzunu](docs/KEYLESS_OPERATIONS.md) okuyun; kayıtları silerek veya retry ile bütçeyi sıfırlamayın |
 
 ## Kaynaktan kurulum
 

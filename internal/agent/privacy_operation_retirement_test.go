@@ -258,7 +258,7 @@ func TestPrivacyOperationRetirementPreservesActiveChildAndForeignCatalog(t *test
 	}
 }
 
-func TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity(t *testing.T) {
+func TestPrivacyOperationRetirementAtCatalogLimitRestoresTypedAndLegacyCapacity(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, t.TempDir())
 	if err != nil {
@@ -274,6 +274,7 @@ func TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialCount := count
 	digest, _ := c.Digest(s.privacy)
 	for index := 1; count < privacyWorkCatalogLimit; index++ {
 		name := filepath.Join("owners", fmt.Sprintf("%032x.lock", index))
@@ -297,12 +298,84 @@ func TestPrivacyOperationRetirementAtCatalogLimitRestoresOnlyTypedCapacity(t *te
 		t.Fatal(err)
 	}
 	capacity, err := s.PrivacyMetadataCapacity(ctx)
-	if err != nil || capacity.CatalogEntries != privacyWorkCatalogLimit-2 || !capacity.WorkReady {
-		t.Fatal("typed cleanup did not restore exact capacity", capacity, err)
+	if err != nil || capacity.CatalogEntries != initialCount || !capacity.WorkReady {
+		t.Fatal("legacy and typed inactive lease cleanup did not restore exact capacity", capacity, err)
 	}
 	legacy := filepath.Join("owners", fmt.Sprintf("%032x.lock", 3))
-	if raw, err := fileguard.ReadRegular(root, legacy, 0); err != nil || len(raw) != 0 {
-		t.Fatal("untyped legacy lease was pruned", err)
+	if _, err := root.Lstat(legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unreferenced inactive legacy lease was not retired", err)
+	}
+	ownerLease, err := root.Lstat(s.privacyOwner.name)
+	if err != nil || ownerLease.Size() != 0 {
+		t.Fatal("active scope-pinned owner lease was retired", err)
+	}
+}
+
+func TestPrivacyOperationRetirementRetainsScopePinnedLegacyLease(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	root, err := openPrivacyRoot(*s.privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	id := fmt.Sprintf("%032x", 1)
+	leaseName := filepath.Join("owners", id+".lock")
+	if err = root.WriteFile(leaseName, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = publishPrivacyScope(root, privacyScope{InstanceID: id, Directory: s.directory, PhysicalRoot: s.instance.PhysicalRoot}); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := privacyLock(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired, retireErr := retirePrivacyOperationLeases(ctx, root, *s.privacy, "")
+	retireErr = errors.Join(retireErr, lock.Close())
+	if retireErr != nil {
+		t.Fatal(retireErr)
+	}
+	if retired != 0 {
+		t.Fatal("scope-pinned legacy lease was retired", retired)
+	}
+	if info, err := root.Lstat(leaseName); err != nil || info.Size() != 0 {
+		t.Fatal("scope-pinned legacy lease changed", err)
+	}
+}
+
+func TestPrivacyOperationRetirementRequiresTypedDescriptorForExactClose(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	root, err := openPrivacyRoot(*s.privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	name := filepath.Join("owners", fmt.Sprintf("%032x.lock", 1))
+	if err = root.WriteFile(name, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := privacyLock(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retireErr := retirePrivacyOperationLeases(ctx, root, *s.privacy, name)
+	retireErr = errors.Join(retireErr, lock.Close())
+	var typed *c.Error
+	if !errors.As(retireErr, &typed) || typed.Code != c.StaleBase {
+		t.Fatal("exact close accepted an untyped empty lease", retireErr)
+	}
+	if _, err = root.Lstat(name); err != nil {
+		t.Fatal("exact close removed the untyped lease", err)
 	}
 }
 

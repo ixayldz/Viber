@@ -14,7 +14,8 @@ import (
 )
 
 // A typed, genesis-bound operation lease is separate from persistent owner
-// scopes and process fences. Empty legacy leases have no retirement proof.
+// scopes and process fences. An empty legacy lease is reclaimable only when
+// no registered scope names its ID and its existing inode is quiescent.
 type privacyOperationLease struct {
 	SchemaVersion   int    `json:"schema_version"`
 	Kind            string `json:"kind"`
@@ -40,7 +41,7 @@ type privacyRetirementCandidate struct {
 	raw      []byte
 }
 
-func inspectPrivacyOperationLease(root *os.Root, name, digest string, pinned bool) (candidate *privacyRetirementCandidate, resultErr error) {
+func inspectPrivacyOperationLease(root *os.Root, name, digest string, pinned, allowLegacy bool) (candidate *privacyRetirementCandidate, resultErr error) {
 	f, err := fileguard.LockExisting(root, name)
 	var typed *c.Error
 	if errors.As(err, &typed) && typed.Code == c.StoreOwned {
@@ -55,8 +56,11 @@ func inspectPrivacyOperationLease(root *os.Root, name, digest string, pinned boo
 		return nil, err
 	}
 	if info.Size() == 0 {
-		return nil, nil
-	} // untyped lease has no retirement proof
+		if pinned || !allowLegacy {
+			return nil, nil
+		}
+		return &privacyRetirementCandidate{info, name, []byte{}}, nil
+	}
 	if info.Size() > 4096 {
 		return nil, c.Fail(c.StoreIntegrityError, "oversized operation lease")
 	}
@@ -123,7 +127,7 @@ func retirePrivacyOperationLeases(ctx context.Context, root *os.Root, authority 
 		if only != "" && name != only {
 			continue
 		}
-		candidate, inspectErr := inspectPrivacyOperationLease(root, name, digest, pinned[name])
+		candidate, inspectErr := inspectPrivacyOperationLease(root, name, digest, pinned[name], only == "")
 		if inspectErr != nil {
 			return 0, inspectErr
 		}
@@ -135,7 +139,7 @@ func retirePrivacyOperationLeases(ctx context.Context, root *os.Root, authority 
 	}
 	retired := 0
 	// Audit the entire inactive inventory before the first removal. Active locks,
-	// untyped leases, source scopes, managed-copy pins and journal remain intact.
+	// scope-pinned owner leases, source scopes, managed-copy pins and journal remain intact.
 	for index := range candidates {
 		candidate := &candidates[index]
 		if err = ctx.Err(); err != nil {
@@ -143,7 +147,7 @@ func retirePrivacyOperationLeases(ctx context.Context, root *os.Root, authority 
 		}
 		// Only one native probe handle is open at a time, even at 8192 entries.
 		// Reacquisition rechecks both liveness and the exact preflight inode/bytes.
-		current, inspectErr := inspectPrivacyOperationLease(root, candidate.name, digest, false)
+		current, inspectErr := inspectPrivacyOperationLease(root, candidate.name, digest, false, only == "")
 		if inspectErr != nil {
 			return retired, inspectErr
 		}

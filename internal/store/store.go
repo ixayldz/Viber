@@ -37,6 +37,7 @@ type Store struct {
 	migrationSpace func() uint64
 	physical       *resource.Ledger
 	mutable        *resource.MutableSQLite
+	controlReserve *resource.ControlReserve
 	physicalCtx    context.Context
 	physicalUpper  uint64
 	physicalDigest string
@@ -133,6 +134,7 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	defer func() {
 		if resultErr != nil && preflightLedger != nil {
 			_ = disk.SetAdmissionHook(nil)
+			_ = disk.SetReserveReconcileHook(nil)
 			_ = preflightLedger.Close()
 		}
 	}()
@@ -155,10 +157,15 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 		if s.mutable != nil {
 			finishErr = s.mutable.Refresh(ctx)
 		}
+		if s.controlReserve != nil {
+			finishErr = errors.Join(finishErr, s.controlReserve.Refresh(ctx))
+		}
 		_ = disk.SetAdmissionHook(nil)
+		_ = disk.SetReserveReconcileHook(nil)
 		finishErr = errors.Join(finishErr, preflightLedger.Close())
 		preflightLedger = nil
 		s.mutable = nil
+		s.controlReserve = nil
 		return finishErr
 	}
 	for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA wal_autocheckpoint=1", "PRAGMA journal_size_limit=16777216", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
@@ -255,6 +262,9 @@ func (s *Store) Close() error {
 	var err error
 	if s.mutable != nil {
 		err = errors.Join(err, s.mutable.Refresh(context.Background()))
+	}
+	if s.controlReserve != nil {
+		err = errors.Join(err, s.controlReserve.Refresh(context.Background()))
 	}
 	err = errors.Join(err, s.db.Close())
 	lockErr := s.lock.Close()

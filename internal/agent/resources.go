@@ -59,11 +59,21 @@ func unresolvedResource(state c.TaskState) *c.ResourceReservation {
 func resourceProfile(doc Document) string {
 	if doc.Extension != nil {
 		digest, _ := c.Digest(struct {
-			Runtime      *Runtime      `json:"runtime,omitempty"`
-			Checks       *CheckRuntime `json:"checks,omitempty"`
-			Protocol     string        `json:"protocol"`
-			ExtensionPin string        `json:"extension_manifest_digest"`
-		}{doc.Runtime, doc.CheckRuntime, "NATIVE_TOOL_RESOURCE_V1", doc.Extension.ManifestDigest})
+			Runtime      *Runtime               `json:"runtime,omitempty"`
+			Graph        *GoGraphRuntimeBinding `json:"go_graph_runtime,omitempty"`
+			Checks       *CheckRuntime          `json:"checks,omitempty"`
+			Protocol     string                 `json:"protocol"`
+			ExtensionPin string                 `json:"extension_manifest_digest"`
+		}{doc.Runtime, doc.GoGraphRuntime, doc.CheckRuntime, "NATIVE_TOOL_RESOURCE_V1", doc.Extension.ManifestDigest})
+		return digest
+	}
+	if doc.GoGraphRuntime != nil {
+		digest, _ := c.Digest(struct {
+			Runtime  *Runtime               `json:"runtime,omitempty"`
+			Graph    *GoGraphRuntimeBinding `json:"go_graph_runtime,omitempty"`
+			Checks   *CheckRuntime          `json:"checks,omitempty"`
+			Protocol string                 `json:"protocol"`
+		}{doc.Runtime, doc.GoGraphRuntime, doc.CheckRuntime, "NATIVE_TOOL_RESOURCE_V1"})
 		return digest
 	}
 	digest, _ := c.Digest(struct {
@@ -85,6 +95,13 @@ func resourceUpper(doc Document, modelOperation bool) c.ResourceVector {
 		upper.DiskBytes = 64 << 20
 		if doc.Pending != nil && doc.Pending.ExtensionIntent != nil {
 			p := doc.Pending.ExtensionIntent.Manifest.Manifest.Profile
+			upper.WallMillis += 60000
+			upper.CPUMillis += 60000 * int64(runtime.NumCPU())
+			upper.Children = p.Pids
+			upper.CPUMillis += min(remaining, p.TimeoutSeconds*1000) * p.CPUs
+			upper.DiskBytes += p.ScratchBytes
+		} else if doc.Pending != nil && doc.Pending.GoGraphIntent != nil && doc.GoGraphRuntime != nil {
+			p := doc.GoGraphRuntime.Manifest.Profile
 			upper.WallMillis += 60000
 			upper.CPUMillis += 60000 * int64(runtime.NumCPU())
 			upper.Children = p.Pids

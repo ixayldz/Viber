@@ -149,13 +149,36 @@ type goSemanticImporter struct {
 	unknown  map[string]*types.Package
 }
 
-// BuildGoSemanticGraph resolves Go identifiers across captured files and
-// module-local packages using go/types. No importer, compiler, generator, LSP,
-// or host filesystem package loading is used.
+// BuildGoSemanticGraph performs cooperative source-only go/types analysis over
+// captured files. Synchronous go/types work has no hard host CPU/RSS bound;
+// use BuildGoSemanticHintsGraph on an untrusted host path or the pinned helper
+// worker for isolated bounded type checking.
 func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options GoSemanticOptions) (GoSemanticGraph, error) {
-	out := emptyGoSemanticGraph(source.Snapshot.Digest)
+	return buildGoSemanticGraphForSnapshot(ctx, source, options, source.Snapshot.Digest, true)
+}
+
+// BuildGoSemanticHintsGraph returns bounded parse/import/declaration hints and
+// deliberately skips go/types. It always marks coverage partial and widens
+// check selection because lexical evidence cannot establish semantic closure.
+func BuildGoSemanticHintsGraph(ctx context.Context, source workspace.Capture, options GoSemanticOptions) (GoSemanticGraph, error) {
+	return buildGoSemanticGraphForSnapshot(ctx, source, options, source.Snapshot.Digest, false)
+}
+
+// BuildGoSemanticGraphForSnapshot analyzes captured materialized bytes while
+// preserving their original immutable snapshot identity. The supplied digest
+// is only an identity binding: callers must verify it against their retained
+// capture and ValidateGoSemanticGraphEnvelope must be used on worker output.
+func BuildGoSemanticGraphForSnapshot(ctx context.Context, source workspace.Capture, options GoSemanticOptions, snapshotDigest string) (GoSemanticGraph, error) {
+	return buildGoSemanticGraphForSnapshot(ctx, source, options, snapshotDigest, true)
+}
+
+func buildGoSemanticGraphForSnapshot(ctx context.Context, source workspace.Capture, options GoSemanticOptions, snapshotDigest string, allowTypeCheck bool) (GoSemanticGraph, error) {
+	out := emptyGoSemanticGraph(snapshotDigest)
 	if err := workspace.VerifyCapture(source); err != nil {
 		return out, err
+	}
+	if !c.ValidDigest(snapshotDigest) {
+		return out, c.Fail(c.InvalidArgument, "valid source snapshot binding required")
 	}
 	out.Coverage.WidenCheckSelection = false
 	if ctx == nil {
@@ -173,7 +196,7 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 	}
 	out.BuildContext = options
 	out.ToolchainVersion = runtime.Version()
-	out.FileSetDigest, err = capturedGoFileSetDigest(source)
+	out.FileSetDigest, err = capturedGoFileSetDigestForSnapshot(source, snapshotDigest)
 	if err != nil {
 		return out, err
 	}
@@ -307,6 +330,13 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 
 	packages, packageByPath, packageNodes, declByPos := buildGoSemanticPackages(&out, files, modulePath, moduleImportsSafe)
 	markGoGenericTypeCheckSkips(&out, packages, packageByPath)
+	if !allowTypeCheck {
+		for _, pkg := range packages {
+			pkg.skipTypeCheck = true
+		}
+		addGoUnknown(&out.Coverage, "GO_TYPES_NOT_RUN_IN_COOPERATIVE_PATH")
+		out.Coverage.WidenCheckSelection = true
+	}
 	out.Nodes = append(out.Nodes, packageNodes...)
 	filePaths := make([]string, 0, len(fileEntries))
 	for filePath := range fileEntries {
@@ -315,7 +345,7 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 	sort.Strings(filePaths)
 	for _, filePath := range filePaths {
 		entry := fileEntries[filePath]
-		id, digestErr := goSemanticNodeID(source.Snapshot.Digest, "FILE", filePath, "", entry.Hash, 0, 0)
+		id, digestErr := goSemanticNodeID(snapshotDigest, "FILE", filePath, "", entry.Hash, 0, 0)
 		if digestErr != nil {
 			return out, digestErr
 		}
@@ -334,7 +364,7 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 		}
 		for _, file := range pkg.files {
 			if file.ast != nil {
-				if err := addGoDeclarations(&out, file, file.ast, file.tokenFile, declByPos, source.Snapshot.Digest); err != nil {
+				if err := addGoDeclarations(&out, file, file.ast, file.tokenFile, declByPos, snapshotDigest); err != nil {
 					return out, err
 				}
 			}
@@ -418,7 +448,7 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 		return out, err
 	}
 	for _, pkg := range packages {
-		addGoImportEdges(&out, pkg, packageByPath, source.Snapshot.Digest)
+		addGoImportEdges(&out, pkg, packageByPath, snapshotDigest)
 		addGoResolvedEdges(&out, pkg, fset, declByPos)
 	}
 	if out.Coverage.UnresolvedImports > 0 || out.Coverage.TypeCheckErrors > 0 || len(out.Coverage.Unknowns) > 0 || out.Coverage.EdgesTruncated {
@@ -440,6 +470,85 @@ func BuildGoSemanticGraph(ctx context.Context, source workspace.Capture, options
 	return out, nil
 }
 
+// ValidateGoSemanticGraphEnvelope checks source identity, build-context binding,
+// fingerprint, captured file-set evidence and all edge source spans without
+// invoking go/types. It is suitable for validating output from the pinned
+// analysis helper; it does not independently prove the helper's semantics.
+func ValidateGoSemanticGraphEnvelope(report GoSemanticGraph, source workspace.Capture, options GoSemanticOptions, snapshotDigest string) error {
+	if err := workspace.VerifyCapture(source); err != nil {
+		return err
+	}
+	if !c.ValidDigest(snapshotDigest) || report.SourceSnapshotDigest != snapshotDigest || report.SchemaVersion != c.SchemaVersion || report.Extractor != GoSemanticExtractor || report.ToolchainVersion == "" || len(report.ToolchainVersion) > 64 {
+		return c.Fail(c.StoreIntegrityError, "Go graph worker source/protocol binding mismatch")
+	}
+	normalized, err := NormalizeGoSemanticOptions(options)
+	if err != nil {
+		return err
+	}
+	gotOptions, _ := c.Digest(report.BuildContext)
+	wantOptions, _ := c.Digest(normalized)
+	if gotOptions != wantOptions {
+		return c.Fail(c.StoreIntegrityError, "Go graph worker build context mismatch")
+	}
+	fileSet, err := capturedGoFileSetDigestForSnapshot(source, snapshotDigest)
+	if err != nil || report.FileSetDigest != fileSet {
+		return c.Fail(c.StaleBase, "Go graph worker file set differs from retained capture")
+	}
+	if len(report.Nodes) > maxGoSemanticNodes || len(report.Edges) > maxGoSemanticEdges || len(report.Coverage.Diagnostics) > maxGoSemanticDiagnostics || len(report.Coverage.ExcludedPaths) > maxGoSemanticExcludedPaths {
+		return c.Fail(c.StoreIntegrityError, "Go graph worker output exceeded structural limits")
+	}
+	fingerprint, err := goSemanticGraphDigest(report)
+	if err != nil || !c.ValidDigest(report.Fingerprint) || fingerprint != report.Fingerprint {
+		return c.Fail(c.StoreIntegrityError, "Go graph worker fingerprint mismatch")
+	}
+	entries := make(map[string]c.Entry, len(source.Snapshot.Entries))
+	for _, entry := range source.Snapshot.Entries {
+		entries[entry.Path] = entry
+	}
+	nodes := make(map[string]GoSemanticNode, len(report.Nodes))
+	for _, node := range report.Nodes {
+		if !c.ValidDigest(node.ID) || nodes[node.ID].ID != "" || len(node.Name) > 4096 || len(node.Kind) > 64 || len(node.Path) > 1024 {
+			return c.Fail(c.StoreIntegrityError, "Go graph worker node envelope invalid")
+		}
+		if node.Path != "" {
+			entry, ok := entries[node.Path]
+			if !ok || node.FileDigest != "" && node.FileDigest != entry.Hash || node.Start < 0 || node.End < node.Start || node.End > int(entry.Size) {
+				return c.Fail(c.StoreIntegrityError, "Go graph worker node is outside captured source")
+			}
+		}
+		nodes[node.ID] = node
+	}
+	for _, edge := range report.Edges {
+		if !c.ValidDigest(edge.ID) || nodes[edge.From].ID == "" || nodes[edge.To].ID == "" || edge.EvidencePath == "" {
+			return c.Fail(c.StoreIntegrityError, "Go graph worker edge envelope invalid")
+		}
+		entry, ok := entries[edge.EvidencePath]
+		raw := source.Contents[edge.EvidencePath]
+		if !ok || !c.ValidDigest(edge.EvidenceDigest) || edge.EvidenceStart < 0 || edge.EvidenceEnd <= edge.EvidenceStart || edge.EvidenceEnd > len(raw) || c.HashBytes(raw[edge.EvidenceStart:edge.EvidenceEnd]) != edge.EvidenceDigest || entry.Hash == "" {
+			return c.Fail(c.StoreIntegrityError, "Go graph worker edge evidence is outside captured bytes")
+		}
+	}
+	return nil
+}
+
+// WidenGoSemanticGraphForCapture prevents a worker's fresh materialized view
+// from hiding exclusions recorded by the operator's original capture.
+func WidenGoSemanticGraphForCapture(report *GoSemanticGraph, source workspace.Capture) error {
+	if report == nil || report.SourceSnapshotDigest != source.Snapshot.Digest {
+		return c.Fail(c.InvalidArgument, "source-bound Go graph required")
+	}
+	if len(source.Snapshot.Exclusions) != 0 {
+		addGoUnknown(&report.Coverage, "GO_SOURCE_CAPTURE_EXCLUSIONS_NOT_VISIBLE_TO_HELPER")
+		report.Coverage.WidenCheckSelection = true
+		report.Coverage.Overall = "PARTIAL_SOURCE_BOUND_GO_TYPES_GRAPH"
+		report.Coverage.Unknowns = uniqueSorted(report.Coverage.Unknowns)
+		if err := sealGoSemanticGraph(report); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ValidateGoSemanticGraph(report GoSemanticGraph, source workspace.Capture, options GoSemanticOptions) error {
 	return ValidateGoSemanticGraphContext(context.Background(), report, source, options)
 }
@@ -448,7 +557,13 @@ func ValidateGoSemanticGraphContext(ctx context.Context, report GoSemanticGraph,
 	if err := workspace.VerifyCapture(source); err != nil {
 		return err
 	}
-	expected, err := BuildGoSemanticGraph(ctx, source, options)
+	var expected GoSemanticGraph
+	var err error
+	if containsGoString(report.Coverage.Unknowns, "GO_TYPES_NOT_RUN_IN_COOPERATIVE_PATH") {
+		expected, err = BuildGoSemanticHintsGraph(ctx, source, options)
+	} else {
+		expected, err = BuildGoSemanticGraph(ctx, source, options)
+	}
 	if err != nil {
 		return err
 	}
@@ -547,6 +662,15 @@ func SelectGoTests(graph GoSemanticGraph, changedPaths []string) (GoTestSelectio
 	return out, nil
 }
 
+func containsGoString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
 func SelectCapturedGoTests(ctx context.Context, graph GoSemanticGraph, source workspace.Capture, options GoSemanticOptions, changedPaths []string) (GoTestSelection, error) {
 	if err := ValidateGoSemanticGraphContext(ctx, graph, source, options); err != nil {
 		return GoTestSelection{}, err
@@ -592,6 +716,22 @@ func normalizeGoSemanticOptions(options GoSemanticOptions) (GoSemanticOptions, e
 		}
 	}
 	options.BuildTags = tags
+	return options, nil
+}
+
+// NormalizeGoSemanticOptions returns the exact build-context envelope used by
+// both the cooperative in-process path and the pinned helper protocol.
+func NormalizeGoSemanticOptions(options GoSemanticOptions) (GoSemanticOptions, error) {
+	options, err := normalizeGoSemanticOptions(options)
+	if err != nil {
+		return options, err
+	}
+	if options.GoVersion == "" {
+		options.GoVersion = parseRuntimeGoVersion(runtime.Version())
+	}
+	if options.BuildTags == nil {
+		options.BuildTags = []string{}
+	}
 	return options, nil
 }
 
@@ -643,6 +783,10 @@ func capturedGoModuleInfo(source workspace.Capture) (modulePath, goVersion strin
 }
 
 func capturedGoFileSetDigest(source workspace.Capture) (string, error) {
+	return capturedGoFileSetDigestForSnapshot(source, source.Snapshot.Digest)
+}
+
+func capturedGoFileSetDigestForSnapshot(source workspace.Capture, snapshotDigest string) (string, error) {
 	type capturedFile struct {
 		Path, Digest string
 		Size         int64
@@ -656,7 +800,7 @@ func capturedGoFileSetDigest(source workspace.Capture) (string, error) {
 	return c.Digest(struct {
 		Snapshot string
 		Files    []capturedFile
-	}{source.Snapshot.Digest, items})
+	}{snapshotDigest, items})
 }
 
 func buildGoSemanticPackages(graph *GoSemanticGraph, files []*goSemanticFile, modulePath string, moduleImportsSafe bool) ([]*goSemanticPackage, map[string]*goSemanticPackage, []GoSemanticNode, map[string]string) {

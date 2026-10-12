@@ -296,6 +296,14 @@ def publish(args):
     sums = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(assets.iterdir()))
     (assets / "SHA256SUMS").write_bytes(sums.encode())
     notes = output / "notes.md"
+    cross_version_accepted = all(portable.strict_json(
+        (assets / item["attested_installation"]["path"]).read_bytes()
+    ).get("cross_version", {}).get("status") == "PASS" for item in inventory)
+    managed_scope = (
+        "a compatible earlier public revision upgraded, rolled back and upgraded again without implicit store migration"
+        if cross_version_accepted else
+        "same-revision reinstall/rollback; cross-version upgrade is not claimed"
+    )
     notes.write_text(f"""Engineering snapshot — not a production/stable release. PRD A–D release gates remain CLOSED; doctor.release_ready=false.
 
 Exact source: `{revision}`. All sixteen [native CI/installer/provenance jobs]({run['html_url']}) succeeded. Windows amd64, Linux amd64 and macOS arm64 packages contain the binary, MIT/dependency licenses, CycloneDX SBOM and offline first-task fixtures. No Go compiler or model API key is needed for the sample. The sample deliberately returns exit2/UNVERIFIED and preserves source files.
@@ -306,11 +314,11 @@ gh attestation verify ARCHIVE -R {REPO} --signer-workflow {REPO}/.github/workflo
 ```
 The platform's `*-distribution.json` asset is also attested with the same command. It binds archive bytes to native fresh-archive first-task/manual-uninstall acceptance: PATH empty, Git undiscovered, source preserved and external task store preserved. This scope does not measure automated updates, rollback or certificate signing.
 
-The separately attested `*-installation.json` records native managed installation with actual OIDC verification, first offline task, same-revision reinstall/rollback and owned uninstall. Cross-version upgrades and platform certificate signing are outside this proof.
+The separately attested `*-installation.json` records native managed installation with actual OIDC verification, first offline task, {managed_scope}, and owned uninstall. Platform certificate signing is outside this proof.
 
 Build provenance is not Windows Authenticode/macOS notarization or coding quality. Checksums alone do not authenticate a publisher. [Installation/update/rollback/uninstall](https://github.com/{REPO}/blob/{revision}/docs/INSTALL.md) · [Capabilities and open PRD acceptance](https://github.com/{REPO}/blob/{revision}/docs/CAPABILITIES.md).
 
-Keep stores outside the program directory. Install/update by selecting a fresh versioned directory; no automatic store migration or downgrade. Safe live apply, metadata checkpoint/compaction, aggregate physical quotas, full verification/language tooling, supervisor/extension/worker/eval/pilot acceptance remain open. Provider-key acceptance is separate from these engineering gaps.
+Keep stores outside the program directory. Managed install/update/rollback selects only attested compatible versions while holding registered store owner locks; no automatic store migration or downgrade. Windows live apply has an explicit bounded fixed-NTFS profile; other platforms use candidate/patch fallback. Checkpoint and quota tooling is available, while complete lifecycle, verification, worker, eval and pilot acceptance remains open. Provider-key acceptance is separate from these engineering gaps.
 """, encoding="utf-8")
     paths = sorted(assets.iterdir())
     # Tag lookup returns only PUBLISHED releases. The create response's database
