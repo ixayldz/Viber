@@ -7,6 +7,14 @@ import (
 	"os"
 )
 
+func IsTerminal(file *os.File) bool {
+	if file == nil {
+		return false
+	}
+	var mode uint32
+	return windows.GetConsoleMode(windows.Handle(file.Fd()), &mode) == nil
+}
+
 func Terminal(file *os.File) (func(), bool, error) {
 	input := windows.Handle(file.Fd())
 	output := windows.Handle(os.Stdout.Fd())

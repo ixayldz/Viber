@@ -7,6 +7,14 @@ import (
 	"os"
 )
 
+func IsTerminal(file *os.File) bool {
+	if file == nil {
+		return false
+	}
+	_, err := unix.IoctlGetTermios(int(file.Fd()), unix.TIOCGETA)
+	return err == nil
+}
+
 func Terminal(file *os.File) (func(), bool, error) {
 	fd := int(file.Fd())
 	old, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)

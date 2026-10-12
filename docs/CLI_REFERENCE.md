@@ -688,6 +688,8 @@ Bu arayüz 0.9 engineering dilimidir. Generic extension/MCP, full verifier/frame
 
 ## Proje talimatları, bellek ve yerel analizler
 
+Main source'da `viber start` yeni görev için yönlendirmeli başlangıçtır. Bare `viber`, yalnız stdin/stdout gerçek terminal olduğunda bu akışı açar; pipe/redirect kullanımında yardım davranışı korunur. ChatGPT/Ollama projesi, doğal dil görevi ve açık network seçimi alınır; task/store otomatik ve source dışında oluşturulur. Resmî ChatGPT browser login yalnız `LOGIN` seçilince açılır. Başarılı gerçek terminal akışı mevcut TUI'a geçer; noninteractive `start` next-action verir. Private offline örnek gerçek kullanıcının projesini çalıştırmaz, candidate-only/UNVERIFIED/exit2 kalır. `CANCEL`/`q`, EOF ve bounded UTF-8 input başlangıcı durdurur.
+
 Bu bölüm public `5e6a006` paketinden sonraki main geliştirmesidir. Yeni binary için kaynaktan derleyin; eski pakette bu komutları varsaymayın. [Uygulama planı](COMPETITOR_ADOPTION_IMPLEMENTATION_PLAN.md) ve [kabul sınırları](CAPABILITIES.md) kaynak profillerini ayırır.
 
 TUI'da `/` komut paletini açar; yazdıkça filtreler. ↑/↓ seçer, Tab/Enter komutu girişe koyar, ikinci Enter çalıştırır. Tam komut yazıp Enter doğrudan çalışır. Esc taslağı koruyarak menüyü kapatır. Argüman placeholder'ları girişe kopyalanmaz. Yapıştırma çalıştırmaz; Page Up/Down çıktı içinde kaydırır. `/compact [KEEP_RECENT]` varsayılan son dört mesajı tutar (izin verilen değer 2–64), eski tamamlanmış konuşma bloklarını kaynakla bağlı arşive dönüştürür. Yetersiz geçmiş veya unsettled tool sınırı açıkça reddedilir. `/clear` yalnız görünen çıktıyı temizler; `/exit`, `/quit` ve `/detach` UI'dan ayrılır. Background owner'ın durması veya task cancellation değildir.

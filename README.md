@@ -19,6 +19,16 @@ ChatGPT hesabınızla kullanabilirsiniz. **Bu giriş için OpenAI API anahtarı 
 
 Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension çalıştırmak için gerekir. İnternetsiz demoda ChatGPT hesabı da gerekmez.
 
+## Yeni kaynak sürümünde hızlı başlangıç
+
+**Bu kolay başlangıç main kaynak kodundadır; aşağıda bağlantısı verilen public `5e6a006` paketi henüz içermez.** Önce [kaynaktan kurulum](#kaynaktan-kurulum) ile yeni binary'yi derleyin. Sonra Windows'ta `.\bin\viber.exe`, Linux/macOS'ta `./bin/viber` çalıştırın. PATH'e kurduysanız sadece `viber` yazın.
+
+Başlangıç ekranında **1: ChatGPT**, **2: yerel Ollama**, **3: internetsiz örnek** seçilir. ChatGPT/Ollama için proje klasörünü seçip görevi kendi sözlerinizle yazın. Görev kimliği ve proje dışındaki özel kayıt klasörü otomatik oluşturulur. ChatGPT'ye proje bağlamı gönderilmeden önce `YES` istenir; giriş gerekiyorsa `LOGIN` seçimi resmî tarayıcı akışını açar. Ollama için kurulu modelin adını girin. `CANCEL` veya `q` başlangıcı durdurur.
+
+Gerçek terminalde görev başladıktan sonra TUI otomatik açılır. `/` ile komutlara bakın, `/requests` ile bekleyen öneriyi inceleyin, onayladıktan sonra `/resume` kullanın. `/diff` değişiklikleri gösterir; `/exit` arayüzden ayrılır ve geçmişi korur. İnternetsiz örnek yalnız özel bir `hello.txt` projesinde sabit demo çalıştırır; kendi projenizi okumaz, gerçek model kullanmaz ve **UNVERIFIED / exit 2** kalır.
+
+`viber start` başlangıcı açıkça başlatır. Girdi/çıktı terminal değilse bare `viber` yardım gösterir; scriptler `run` komutunu kullanabilir. Gelişmiş ve önceki public pakete uygun adımlar aşağıdadır.
+
 ## 1. İndirin ve kurun
 
 **Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-5e6a006ff6c0cde18caa8ba48e9341075275d6eb) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:

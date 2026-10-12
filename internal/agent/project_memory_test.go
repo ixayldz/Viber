@@ -313,6 +313,13 @@ func TestProjectMemoryHonorsOperatorContextReadRestriction(t *testing.T) {
 			t.Fatalf("search returned an untyped denial: %v", err)
 		}
 	}
+	for _, kind := range []string{"continuity-info", "context-why", "context-page", "history-page"} {
+		_, observeErr := s.Observe(ctx, options.TaskID, Observation{Kind: kind, Limit: 64})
+		var typed *c.Error
+		if !errors.As(observeErr, &typed) || typed.Code != c.PolicyDenied {
+			t.Fatalf("%s exposed retained context without operator context.read: %v", kind, observeErr)
+		}
+	}
 	state, doc, err := s.Load(ctx, options.TaskID)
 	if err != nil {
 		t.Fatal(err)

@@ -21,6 +21,7 @@ const Version = "0.9.0-dev"
 const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
+  viber [start]                                       interactive first-task wizard
   viber repo-blueprint --root SOURCE --blueprint SPEC_JSON [--git] [--json]
   viber repo-generate --root SOURCE --blueprint MANIFEST_JSON --blueprint-digest SHA --files JSON --output NEW_DIR [--git] [--check-config FILE --task ID --input-sha SHA] [--json]
   viber skills source|propose|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]
@@ -156,7 +157,17 @@ func report(out, errout io.Writer, err error, jsonMode bool) int {
 	return 4
 }
 func Execute(args []string, out, errout io.Writer) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+	if len(args) == 0 {
+		if interactiveOnboarding(out) {
+			return runOnboarding(nil, out, errout)
+		}
+		fmt.Fprint(out, help)
+		return 0
+	}
+	if args[0] == "start" {
+		return runOnboarding(args[1:], out, errout)
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(out, help)
 		return 0
 	}

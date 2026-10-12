@@ -53,6 +53,14 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 	if err != nil {
 		return nil, err
 	}
+	// Retained model requests and context pins can contain exact project bytes.
+	// They share the same current operator gate as history and project memory.
+	switch args.Kind {
+	case "continuity-info", "context-why", "context-page", "history-page":
+		if err = currentOperatorEffect(doc, "context.read"); err != nil {
+			return nil, err
+		}
+	}
 	if args.HistoryDigest != "" && args.Kind != "history-page" {
 		return nil, c.Fail(c.InvalidArgument, "history digest is only valid for history-page")
 	}

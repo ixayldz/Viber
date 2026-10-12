@@ -672,6 +672,12 @@ func (s *Session) projectMemoryContextLocked(ctx context.Context, state c.TaskSt
 	if err != nil {
 		return nil, false, err
 	}
+	// Automatic context is same-task only. The validated current document is
+	// the authoritative artifact inventory, so a task without memory refs has
+	// nothing to discover by replaying the store's journal on every inference.
+	if len(doc.ProjectMemoryRefs) == 0 {
+		return []ProjectMemoryItem{}, false, nil
+	}
 	stored, current, err := s.projectMemoryInventoryScoped(ctx, querySource.ProjectDigest, state.TaskID)
 	if err != nil {
 		return nil, false, err

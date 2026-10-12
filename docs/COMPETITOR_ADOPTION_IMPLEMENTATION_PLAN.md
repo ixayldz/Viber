@@ -8,6 +8,8 @@ TUI/CLI entegrasyonu ve birleşik commit ana ajanda. Instruction discovery, memo
 
 ## 1. Terminal kullanıcı akışı — FR-12/19/22/23/25
 
+Yeni bağımsız raporun P0 onboarding maddesi de bu profile eklendi: bare `viber` gerçek terminalde başlangıç; explicit `start`, otomatik private external store/task, proje ve doğal dil görev seçimi, açık ChatGPT transmission consent/LOGIN ve yerel Ollama seçimi. Mevcut `run/auth/ui` handler'ları korunur. Private offline demo gerçek projenin işi yerine sunulmaz. Noninteractive help ve gelişmiş bayraklar korunur.
+
 - `/` ile görünür ve filtrelenen komut paleti; tek katalogdan menu/help açıklamaları. ↑/↓ seçer, Tab tamamlar, Enter seçimi girişe koyar; açıkça tamamlanan komut ikinci Enter ile çalışır. Tam komut yazıp Enter mevcut doğrudan akışı korur. Esc kapatır. Paste komut çalıştırmaz.
 - Argument isteyen komutlar literal `ID` placeholder'ını çalıştırmaz; sadece komut ve boşluk girişe eklenir, usage ayrı gösterilir. Komut seçimi authority veya approval üretmez.
 - Görünür caret, viewport içinde yatay input kaydırma ve Unicode metin; OSC/escape/control verisi ekrana güvenli alıntı olarak girer. Dar terminalde palet görünür kalır; `--line` erişilebilir alternatif korunur.

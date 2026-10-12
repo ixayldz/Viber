@@ -308,6 +308,8 @@ def publish(args):
 
 Exact source: `{revision}`. All sixteen [native CI/installer/provenance jobs]({run['html_url']}) succeeded. Windows amd64, Linux amd64 and macOS arm64 packages contain the binary, MIT/dependency licenses, CycloneDX SBOM and offline first-task fixtures. No Go compiler or model API key is needed for the sample. The sample deliberately returns exit2/UNVERIFIED and preserves source files.
 
+Run `viber` in a terminal (or `viber start`) for guided project/model/task setup with an automatic private external store. This snapshot adds the `/` command palette (Up/Down, Tab, Enter, Esc), output paging, `/compact`, `/clear` and `/exit`; captured project AGENTS instructions; explicit source-bound `/memory` records/search; and `/workers` for 2–4 fixed local read-only analyzers charged to the parent budget. These analyzers are not model subagents. Use `viber ui TASK --store STORE` to reopen an existing task; see the exact-source [README](https://github.com/{REPO}/blob/{revision}/README.md) and [command guide](https://github.com/{REPO}/blob/{revision}/docs/CLI_REFERENCE.md). ChatGPT browser login needs eligible account/workspace consent; an actual ChatGPT first-task acceptance remains NOT_RUN.
+
 Verify the downloaded archive before extracting/executing:
 ```sh
 gh attestation verify ARCHIVE -R {REPO} --signer-workflow {REPO}/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest {revision}

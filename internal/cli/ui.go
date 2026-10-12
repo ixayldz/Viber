@@ -63,12 +63,13 @@ func runUILines(u uiSession, input io.Reader, out, errout io.Writer) int {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		result, quit, err := u.command(ctx, scan.Text())
 		cancel()
-		if err != nil {
-			fmt.Fprintln(errout, tui.Safe(err.Error()))
-		} else {
+		if result != "" {
 			for _, line := range strings.Split(result, "\n") {
 				fmt.Fprintln(out, tui.Safe(line))
 			}
+		}
+		if err != nil {
+			fmt.Fprintln(errout, tui.Safe(err.Error()))
 		}
 		if quit {
 			return 0
@@ -195,7 +196,7 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 					scrollOffset = min(strings.Count(body, "\n"), scrollOffset+step)
 				}
 			case "suggest":
-				notice = action.Text + " | Complete the command, then press Enter to run."
+				notice = "Complete the command, then press Enter to run. | " + action.Text
 			case "quit":
 				return 0
 			case "interrupt":

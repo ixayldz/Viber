@@ -208,7 +208,7 @@ func renderLines(s Screen, e Editor, width, height int) []string {
 	lines := []string{
 		fmt.Sprintf("Viber | Task %s | %s", Safe(s.Task), Safe(s.State)),
 		"Work: " + Safe(s.Work),
-		"Candidate: " + Safe(s.Candidate) + " | quality: " + Safe(s.Quality) + " | delivery: " + Safe(s.Fulfillment),
+		"Checks: " + Safe(s.Quality) + " | Goal: " + Safe(s.Fulfillment) + " | Candidate: " + Safe(s.Candidate),
 		"Decision: " + Safe(s.Decision),
 		"Budget: " + Safe(s.Budget),
 		"Notice: " + Safe(s.Notice),

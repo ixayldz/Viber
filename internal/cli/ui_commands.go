@@ -138,7 +138,10 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 			return "", false, err
 		}
 		_, err = u.call(ctx, "steer", agent.SteeringInput{CommandID: id, TaskID: u.task, Text: bound})
-		return "Raw input recorded; scope revision is pending. No automatic resume.", false, err
+		if err != nil {
+			return "", false, err
+		}
+		return "Raw input recorded; scope revision is pending. No automatic resume.", false, nil
 	}
 	command, arg, _ := strings.Cut(text, " ")
 	arg = strings.TrimSpace(arg)
