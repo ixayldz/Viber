@@ -132,14 +132,15 @@ func (s *Store) BindPhysicalQuota(ctx context.Context, binding PhysicalQuotaBind
 	if err := s.writableLocked(); err != nil {
 		return err
 	}
-	if err = s.disk.Admit(1<<20, true); err != nil {
-		return err
-	}
 	raw, err := c.CanonicalV1(binding)
 	if err != nil {
 		return err
 	}
 	digest := c.HashBytes(raw)
+	requestDigest := c.HashBytes([]byte("store-bind-physical-quota-sqlite:" + digest))
+	if err = s.admitSQLiteMutation(ctx, 1<<20, true, requestDigest, uint64(len(raw)+64<<10)); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err

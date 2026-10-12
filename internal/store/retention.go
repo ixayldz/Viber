@@ -69,7 +69,9 @@ func (s *Store) SetRetentionCursor(ctx context.Context, expected []byte, next c.
 		return nil
 	}
 	// Optional scheduling must not consume emergency deletion/control reserve.
-	if err = s.disk.Admit(int64(len(raw))*2+64<<10, false); err != nil {
+	digest := c.HashBytes(raw)
+	requestDigest := c.HashBytes([]byte("store-retention-cursor-sqlite:" + digest))
+	if err = s.admitSQLiteMutation(ctx, int64(len(raw))*2+64<<10, false, requestDigest, uint64(2*len(raw)+64<<10)); err != nil {
 		return err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
@@ -77,7 +79,6 @@ func (s *Store) SetRetentionCursor(ctx context.Context, expected []byte, next c.
 		return err
 	}
 	defer tx.Rollback()
-	digest := c.HashBytes(raw)
 	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO payloads(task_id,digest,body) VALUES('',?,?)", digest, raw); err != nil {
 		return err
 	}

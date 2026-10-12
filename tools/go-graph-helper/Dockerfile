@@ -5,7 +5,8 @@ FROM ${VIBER_GRAPH_BUILDER_IMAGE} AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd/viber-go-graph-helper/ ./cmd/viber-go-graph-helper/
+COPY internal/ ./internal/
 RUN test "$(go env GOVERSION)" = "go1.27.2" && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off \
     go build -trimpath -buildvcs=false -ldflags='-buildid=' -o /out/viber-go-graph-helper ./cmd/viber-go-graph-helper

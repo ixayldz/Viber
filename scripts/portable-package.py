@@ -208,20 +208,32 @@ def smoke(binary, folder, expected_target, environment=None, store_parent=None, 
 def quickstart(revision, target):
     windows = target.startswith("windows/")
     command = ".\\viber.exe" if windows else "./viber"
+    shell = "PowerShell" if windows else "Terminal"
+    project_setup = (
+        "$project = 'C:\\Projects\\my-app'\n"
+        "$store = Join-Path $env:LOCALAPPDATA 'ViberData\\my-app'\n"
+        "$delivery = Join-Path $env:LOCALAPPDATA ('ViberData\\delivery-' + [guid]::NewGuid().ToString('N'))"
+        if windows else
+        'project="$HOME/projects/my-app"\n'
+        'store="$HOME/.local/share/viber/tasks/my-app"\n'
+        'delivery="$HOME/.local/share/viber/tasks/delivery-$(date +%s)"'
+    )
     return f"""# Viber engineering snapshot
 
 Source: {revision}; native target: {target}.
 Stable release gates are CLOSED. This is not a production release.
 Build provenance authenticates the build origin, not coding quality.
 
-No Go compiler is needed to use this binary. Extract into a fresh versioned
-directory you own; keep task stores outside this directory. Add that directory
-to your own PATH if desired. No administrator install is required.
+No Go compiler is needed to use this binary. Install GitHub CLI (`gh`) and make
+it available on PATH before archive provenance verification. Extract the
+verified archive into a fresh versioned directory you own; keep task stores
+outside this directory. Add that directory to your own PATH if desired. No
+administrator install is required.
 
 Before extraction/execution, verify the archive with GitHub CLI:
 gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest {revision}
 
-From the extracted directory:
+Open {shell} in the extracted package directory (or `cd` there first):
 {command} version
 {command} doctor --json
 
@@ -231,18 +243,21 @@ To use your ChatGPT plan (no model API key/client secret required):
 {command} auth models --json
 The browser opens the official Sign in with ChatGPT flow. Choose the workspace
 and grant plan usage. A connected identity without plan usage permission cannot
-run the model. Eligible account/model availability is controlled by OpenAI;
-actual account acceptance is not part of this package's offline smoke proof.
+run the model. Eligible account/model availability is controlled by OpenAI.
+ChatGPT account-to-first-task acceptance status for this public package is
+NOT_RUN; its offline smoke does not test account acceptance.
 Linux needs a running Secret Service; macOS needs an accessible Keychain.
 
 Run a reviewed task against YOUR existing project, with a store outside it:
-{command} run "Review the README and propose clearer installation steps" --provider chatgpt --allow-remote --root /YOUR/PROJECT --store ../viber-private-project --task first-task --autonomy review --allow-unverified
-Use an absolute native project path on Windows. --allow-remote permits sending
-selected project context to the model. For an approval request, open the task UI:
-{command} ui first-task --store ../viber-private-project
+{project_setup}
+Replace the project path above with your own. Then run:
+{command} run "Review the README and propose clearer installation steps" --provider chatgpt --allow-remote --root "$project" --store "$store" --task first-task --autonomy review --allow-unverified
+--allow-remote permits sending selected project context to the model.
+For an approval request, open the task UI:
+{command} ui first-task --store "$store"
 Use /requests, /respond REQUEST_ID approve, and /resume as appropriate.
-{command} diff first-task --store ../viber-private-project
-{command} export first-task --store ../viber-private-project --output ../viber-first-task-review
+{command} diff first-task --store "$store"
+{command} export first-task --store "$store" --output "$delivery"
 The output must be a fresh directory. Candidate changes require review; a
 model summary or UNVERIFIED result does not prove the code works.
 

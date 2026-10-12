@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/diskguard"
 	"github.com/ixayldz/Viber/internal/resource"
 )
 
@@ -37,24 +38,25 @@ func (s *Store) attachMutableSQLite(ledger *resource.Ledger) error {
 		}
 		return nil
 	}
-	if err = s.disk.SetAdmissionHook(func(bytes int64, control bool) error {
-		ctx := s.physicalCtx
-		if ctx == nil {
-			ctx = context.Background()
+	if err = s.disk.SetAdmissionHook(func(bytes int64, control bool, admission diskguard.AdmissionScope) error {
+		ctx := context.Background()
+		digest := ""
+		if admission.Context != nil {
+			ctx = admission.Context
 		}
-		digest := s.physicalDigest
+		digest = admission.Digest
 		if !c.ValidDigest(digest) {
 			digest = c.HashBytes([]byte(fmt.Sprintf("store-physical-admission:%d:%t", bytes, control)))
 		}
-		if !control && s.controlReserve != nil {
-			if err := s.controlReserve.Prepare(ctx, digest); err != nil {
+		if !control && controlReserve != nil {
+			if err := controlReserve.Prepare(ctx, digest); err != nil {
 				return err
 			}
 		}
-		if s.mutable == nil {
+		if mutable == nil || !admission.SQLiteMutation {
 			return nil
 		}
-		upper := s.physicalUpper
+		upper := admission.UpperBytes
 		if upper == 0 {
 			var upperErr error
 			upper, upperErr = resource.MutableSQLiteUpper(uint64(bytes))
@@ -76,15 +78,36 @@ func (s *Store) attachMutableSQLite(ledger *resource.Ledger) error {
 		return nil
 	}
 	if err = s.disk.SetReserveReconcileHook(func() error {
-		ctx := s.physicalCtx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		return s.controlReserve.Refresh(ctx)
+		return controlReserve.Refresh(context.Background())
 	}); err != nil {
 		return cleanup(err)
 	}
 	return nil
+}
+
+func sqliteAdmissionScope(ctx context.Context, mutable *resource.MutableSQLite, requestDigest string, transactionBytes uint64) (diskguard.AdmissionScope, error) {
+	if ctx == nil || !c.ValidDigest(requestDigest) {
+		return diskguard.AdmissionScope{}, c.Fail(c.InvalidArgument, "bounded SQLite admission operation required")
+	}
+	scope := diskguard.AdmissionScope{Context: ctx, Digest: requestDigest}
+	if mutable == nil {
+		return scope, nil
+	}
+	upper, err := resource.MutableSQLiteUpper(transactionBytes)
+	if err != nil {
+		return diskguard.AdmissionScope{}, err
+	}
+	scope.UpperBytes = upper
+	scope.SQLiteMutation = true
+	return scope, nil
+}
+
+func (s *Store) admitSQLiteMutation(ctx context.Context, diskBytes int64, control bool, requestDigest string, transactionBytes uint64) error {
+	scope, err := sqliteAdmissionScope(ctx, s.mutable, requestDigest, transactionBytes)
+	if err != nil {
+		return err
+	}
+	return s.disk.AdmitWithScope(diskBytes, control, scope)
 }
 
 // preparePinnedQuotaForOpen attaches the owner's existing ledger before SQLite

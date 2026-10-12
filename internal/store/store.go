@@ -38,9 +38,6 @@ type Store struct {
 	physical       *resource.Ledger
 	mutable        *resource.MutableSQLite
 	controlReserve *resource.ControlReserve
-	physicalCtx    context.Context
-	physicalUpper  uint64
-	physicalDigest string
 }
 type Command struct {
 	ID              string         `json:"command_id"`
@@ -144,7 +141,11 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 			return nil, err
 		}
 		if preflightLedger != nil {
-			if err = disk.Admit(2<<20, true); err != nil {
+			scope, scopeErr := sqliteAdmissionScope(ctx, s.mutable, c.HashBytes([]byte("store-open-preflight-mutable-sqlite:"+root)), 2<<20)
+			if scopeErr != nil {
+				return nil, scopeErr
+			}
+			if err = disk.AdmitWithScope(2<<20, true, scope); err != nil {
 				return nil, err
 			}
 		}
@@ -395,20 +396,11 @@ func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, erro
 		return state, err
 	}
 	control := command.Type != "TaskCreated" && !(command.Payload.Resources != nil && command.Payload.Resources.Action == "RESERVE") && !(command.Payload.Tokens != nil && command.Payload.Tokens.Action == "RESERVE")
-	if s.mutable != nil {
-		transactionBytes := uint64(len(payload) + len(envelope) + 2*len(stateRaw) + 64<<10)
-		s.physicalUpper, err = resource.MutableSQLiteUpper(transactionBytes)
-		if err != nil {
-			return c.TaskState{}, err
-		}
-		s.physicalDigest = c.HashBytes([]byte("store-command-mutable-sqlite:" + digest))
-		s.physicalCtx = ctx
-	}
-	if err := s.disk.Admit(2<<20, control); err != nil {
-		s.physicalUpper, s.physicalDigest, s.physicalCtx = 0, "", nil
+	transactionBytes := uint64(len(payload) + len(envelope) + 2*len(stateRaw) + 64<<10)
+	requestDigest := c.HashBytes([]byte("store-command-mutable-sqlite:" + digest))
+	if err := s.admitSQLiteMutation(ctx, 2<<20, control, requestDigest, transactionBytes); err != nil {
 		return c.TaskState{}, err
 	}
-	s.physicalUpper, s.physicalDigest, s.physicalCtx = 0, "", nil
 	statements := []struct {
 		query string
 		args  []any
@@ -560,6 +552,10 @@ func (s *Store) Checkpoint(ctx context.Context, taskID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	requestDigest := c.HashBytes([]byte("store-task-checkpoint-sqlite:" + taskID + ":" + digest))
+	if err = s.admitSQLiteMutation(ctx, int64(len(raw))+64<<10, true, requestDigest, uint64(len(raw)+64<<10)); err != nil {
+		return "", err
+	}
 	_, err = s.db.ExecContext(ctx, "INSERT INTO checkpoints VALUES(?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET store_seq=excluded.store_seq,task_seq=excluded.task_seq,reducer_version=excluded.reducer_version,state_digest=excluded.state_digest,state=excluded.state", taskID, state.StoreSeq, state.TaskSeq, c.ReducerVersion, digest, raw)
 	return digest, err
 }
@@ -647,5 +643,7 @@ func (s *Store) verifyProjectionsLocked(ctx context.Context) error {
 	return s.verifyCheckpointsLocked(ctx)
 }
 
-func (s *Store) DiskAdmission(bytes int64, control bool) error { return s.disk.Admit(bytes, control) }
-func (s *Store) DiskStatus() (diskguard.Status, error)         { return s.disk.Status() }
+func (s *Store) DiskAdmission(bytes int64, control bool) error {
+	return s.disk.AdmitWithScope(bytes, control, diskguard.AdmissionScope{})
+}
+func (s *Store) DiskStatus() (diskguard.Status, error) { return s.disk.Status() }

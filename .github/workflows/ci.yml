@@ -70,7 +70,24 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -o pipefail
-          go test -race -p 1 -json -count=1 -timeout 15m ./... | tee evidence/race.jsonl
+          # Execute every package once, with owner concurrency first so a
+          # steering/admission regression does not wait behind slow fixtures.
+          task_owner_package='github.com/ixayldz/Viber/internal/owner'
+          task_package_inventory="$(go list ./...)"
+          task_race_packages=()
+          task_owner_found=false
+          while IFS= read -r task_package; do
+            if [[ "$task_package" == "$task_owner_package" ]]; then
+              task_owner_found=true
+            else
+              task_race_packages+=("$task_package")
+            fi
+          done <<< "$task_package_inventory"
+          [[ "$task_owner_found" == true && "${#task_race_packages[@]}" -gt 0 ]]
+          {
+            go test -race -p 1 -json -count=1 -timeout 15m "$task_owner_package" || exit $?
+            go test -race -p 1 -json -count=1 -timeout 15m "${task_race_packages[@]}" || exit $?
+          } | tee evidence/race.jsonl
           python scripts/verify-test-results.py evidence/race.jsonl --privacy --retrieval --delivery --vault-failure
       - name: All fuzz targets
         if: runner.os == 'Linux'
@@ -201,8 +218,9 @@ jobs:
   packages:
     # Fork/PR code receives no signing authority. Build/smoke is separated from
     # the signer, which only downloads archives and never executes a binary.
+    # Unsigned native builds overlap foundation checks; attest-packages still
+    # requires a successful foundation before any signing authority is used.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'ixayldz/Viber'
-    needs: foundation
     timeout-minutes: 15
     strategy:
       fail-fast: false

@@ -255,14 +255,15 @@ func (s *Store) RebindRestoredPrivacyCheckpointPin(ctx context.Context, expected
 }
 
 func (s *Store) writePrivacyCheckpointPinLocked(ctx context.Context, current, next *PrivacyCheckpointPin) error {
-	if err := s.disk.Admit(1<<20, true); err != nil {
-		return err
-	}
 	raw, err := c.CanonicalV1(next)
 	if err != nil {
 		return err
 	}
 	digest := c.HashBytes(raw)
+	requestDigest := c.HashBytes([]byte("store-privacy-checkpoint-sqlite:" + digest))
+	if err = s.admitSQLiteMutation(ctx, 1<<20, true, requestDigest, uint64(2*len(raw)+64<<10)); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
@@ -383,7 +384,9 @@ func (s *Store) ReservePrivacyAuthority(ctx context.Context, raw []byte) error {
 		}
 		return nil
 	}
-	if err = s.disk.Admit(1<<20, true); err != nil {
+	digest := c.HashBytes(raw)
+	requestDigest := c.HashBytes([]byte("store-privacy-allocation-sqlite:" + digest))
+	if err = s.admitSQLiteMutation(ctx, 1<<20, true, requestDigest, uint64(len(raw)+64<<10)); err != nil {
 		return err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
@@ -391,7 +394,6 @@ func (s *Store) ReservePrivacyAuthority(ctx context.Context, raw []byte) error {
 		return err
 	}
 	defer tx.Rollback()
-	digest := c.HashBytes(raw)
 	if _, err = tx.ExecContext(ctx, "INSERT INTO payloads(task_id,digest,body) VALUES('',?,?)", digest, raw); err != nil {
 		return err
 	}
@@ -427,7 +429,9 @@ func (s *Store) BindPrivacyAuthority(ctx context.Context, raw []byte) error {
 		}
 		return nil
 	}
-	if err = s.disk.Admit(1<<20, true); err != nil {
+	digest := c.HashBytes(raw)
+	requestDigest := c.HashBytes([]byte("store-bind-privacy-authority-sqlite:" + digest))
+	if err = s.admitSQLiteMutation(ctx, 1<<20, true, requestDigest, uint64(len(raw)+64<<10)); err != nil {
 		return err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
@@ -435,7 +439,6 @@ func (s *Store) BindPrivacyAuthority(ctx context.Context, raw []byte) error {
 		return err
 	}
 	defer tx.Rollback()
-	digest := c.HashBytes(raw)
 	if pending == nil {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO payloads(task_id,digest,body) VALUES('',?,?)", digest, raw); err != nil {
 			return err

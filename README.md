@@ -4,11 +4,11 @@
 
 ChatGPT hesabınızla kullanabilirsiniz. **Bu giriş için OpenAI API anahtarı gerekmez.** Yerel Ollama ve internetsiz demo da desteklenir.
 
-> **Sürüm durumu:** 0.9.0-dev, engineering ön sürümü. İndirilebilir paket vardır; kararlı üretim sürümü henüz ilan edilmemiştir. Gerçek ChatGPT hesap kabulü tamamlanmadığı için her hesapta çalıştığı iddia edilmez. [Destek durumu](docs/CAPABILITIES.md).
+> **Sürüm durumu:** 0.9.0-dev, engineering ön sürümü. İndirilebilir paket vardır; kararlı üretim sürümü henüz ilan edilmemiştir. Bu public paket için ChatGPT hesabıyla ilk görev kabulü **NOT_RUN**; her hesapta çalıştığı iddia edilmez. [Destek durumu](docs/CAPABILITIES.md).
 
 [İndir](https://github.com/ixayldz/Viber/releases) · [Kurulum ayrıntıları](docs/INSTALL.md) · [CLI kılavuzu](docs/CLI_REFERENCE.md) · [PRD](prd.md) · [MIT lisansı](LICENSE)
 
-İlk kullanımda yapacağınız şey: **paketi açın → ChatGPT ile giriş yapın → proje yolunu seçin → görevi yazın → öneriyi onaylayın → diff'i inceleyip dışarı alın.** Aşağıdaki örnekleri sırayla çalıştırabilirsiniz. Windows için PowerShell, Linux/macOS için Terminal kullanın.
+İlk kullanımda yapacağınız şey: **arşivi doğrulayın → yeni klasöre çıkarın → o klasörde terminal açın → ChatGPT ile giriş yapın → proje yolunu seçin → görevi yazın → öneriyi onaylayın → diff'i inceleyip dışarı alın.** Aşağıdaki örnekleri sırayla çalıştırabilirsiniz. Windows için PowerShell, Linux/macOS için Terminal kullanın.
 
 | Gereken | Ne için? |
 | --- | --- |
@@ -29,7 +29,7 @@ Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension
 | Linux, Intel/AMD 64 bit | `viber-…-linux-amd64.tar.gz` |
 | macOS, Apple Silicon | `viber-…-darwin-arm64.tar.gz` |
 
-Arşivin kaynağını [kurulum kılavuzundaki doğrulama adımıyla](docs/INSTALL.md#indirme-ve-doğrulama) kontrol edin; sonra yeni bir klasöre açın. Program dosyalarının bulunduğu klasörde terminal açın. Windows'ta `viber.exe`, Linux/macOS'ta `viber` dosyasını göreceksiniz.
+Arşivin kaynağını [kurulum kılavuzundaki doğrulama adımıyla](docs/INSTALL.md#indirme-ve-doğrulama) kontrol etmek için GitHub CLI (`gh`) kurulu ve PATH'te olmalıdır. Doğrulamadan sonra arşivi yeni bir klasöre açın. Komutları bu program klasöründe çalıştırın; terminal başka yerde açıksa önce klasöre `cd` edin. Windows'ta `viber.exe`, Linux/macOS'ta `viber` dosyasını göreceksiniz.
 
 Windows PowerShell:
 

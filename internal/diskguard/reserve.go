@@ -4,6 +4,7 @@
 package diskguard
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -25,12 +26,23 @@ type Status struct {
 	LowWaterBytes        uint64 `json:"low_water_bytes"`
 	WorkReady            bool   `json:"work_ready"`
 }
+
+// AdmissionScope carries request-specific metadata to the synchronous quota
+// hook. It is passed per call so concurrent writers cannot borrow a different
+// operation's context, digest, or physical upper bound.
+type AdmissionScope struct {
+	Context        context.Context
+	Digest         string
+	UpperBytes     uint64
+	SQLiteMutation bool
+}
+
 type Reserve struct {
 	mu              sync.Mutex
 	root            *os.Root
 	file            *os.File
 	free            func(*os.Root) (uint64, error)
-	beforeAdmission func(int64, bool) error
+	beforeAdmission func(int64, bool, AdmissionScope) error
 	afterReserve    func() error
 }
 
@@ -86,7 +98,7 @@ func (r *Reserve) Close() error {
 // SetAdmissionHook installs an owner-specific durable admission step that runs
 // before this reserve mutates its control file or authorizes a writer. The hook
 // runs under the reserve lock and must not call methods on this Reserve.
-func (r *Reserve) SetAdmissionHook(hook func(int64, bool) error) error {
+func (r *Reserve) SetAdmissionHook(hook func(int64, bool, AdmissionScope) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.file == nil {
@@ -148,13 +160,19 @@ func (r *Reserve) status() (Status, error) {
 }
 func (r *Reserve) Status() (Status, error) { r.mu.Lock(); defer r.mu.Unlock(); return r.status() }
 func (r *Reserve) Admit(bytes int64, control bool) error {
+	return r.AdmitWithScope(bytes, control, AdmissionScope{})
+}
+
+// AdmitWithScope performs the same serialized admission as Admit, while
+// delivering a call-specific immutable quota context to the owner hook.
+func (r *Reserve) AdmitWithScope(bytes int64, control bool, scope AdmissionScope) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if bytes < 0 || bytes > 64<<20 {
 		return c.Fail(c.InvalidArgument, "disk admission size outside bounded profile")
 	}
 	if r.beforeAdmission != nil {
-		if err := r.beforeAdmission(bytes, control); err != nil {
+		if err := r.beforeAdmission(bytes, control, scope); err != nil {
 			return err
 		}
 	}

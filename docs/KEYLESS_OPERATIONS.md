@@ -16,6 +16,20 @@ $ghBinary = 'C:\Program Files\GitHub CLI\gh.exe'
 .\viber.exe package run --prefix $program -- version
 ```
 
+Linux/macOS Terminal:
+
+```sh
+program="$HOME/.local/share/viber/apps/managed"
+archive="$HOME/Downloads/viber-SHA-linux-amd64.tar.gz" # macOS: darwin-arm64
+revision='PAKETIN_TAM_40_KARAKTER_COMMIT_SHA_DEGERI'
+gh_binary="$(command -v gh)"
+./viber package install --prefix "$program" --archive "$archive" --source-sha "$revision" --gh "$gh_binary" --json
+./viber package status --prefix "$program" --json
+./viber package run --prefix "$program" -- version
+```
+
+`archive` ve `revision` değerlerini indirdiğiniz yayımlanmış sürüme göre değiştirin. `gh_binary` boşsa önce GitHub CLI'yi kurun. Komutlar doğrulanıp açılmış bootstrap paketinin klasöründe çalıştırılır; bootstrap klasörü `program` dışında kalmalıdır.
+
 Store'ları prefix dışında tutun. Yönetilen launcher, child komutunun açık `--store` yolunu kaydeder; yeni store'u child'dan önce hazırlar. Sonraki install/rollback/uninstall, kayıtlı store'ların tamamının fiziksel kimliğini doğrular ve OS owner kilitlerini alır. Aktif owner kilidi alınamıyorsa sürüm geçişi reddedilir. Doğrudan binary ile kullanılan başka store'ları `--store` ile ayrıca kaydedin; launcher bilmediği store'ların quiescence'ını iddia etmez.
 
 ```powershell
