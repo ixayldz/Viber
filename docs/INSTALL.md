@@ -4,31 +4,41 @@ Mevcut kanal **engineering snapshot**; `doctor.release_ready=false`. Kararlı ü
 
 ## İndirme ve doğrulama
 
-Güncel [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-f1b323d437e953411649db6fec2532a20095a524) yayımlandı. Exact source `f1b323d437e953411649db6fec2532a20095a524`; [12 native CI/paket/provenance işi](https://github.com/ixayldz/Viber/actions/runs/38127788489) SUCCESS. Aşağıdaki hedefi seçin; sekiz asset'in GitHub oturumu olmadan indirme/checksum readback'i ve altı OIDC subject'in exact source provenance doğrulaması geçti. Üç native rapor taze archive kurulumu, ilk görev ve manuel kaldırma sırasında dış store'un korunmasını ölçer.
+Güncel [public engineering ön sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) yayımlandı. Exact source `90bc97ebc9318e3542ffbc2507b8cb346dae69e5`; [16/16 native CI, installer ve provenance işi](https://github.com/ixayldz/Viber/actions/runs/38195774589) ve [normal tag publisher](https://github.com/ixayldz/Viber/actions/runs/38198095117) SUCCESS; public release ID `410102479`. Anonim readback'te 11 varlığın tamamı indirildi, dokuz OIDC subject `ci.yml`/`main`/exact source revizyonuna bağlandı ve üç platformun native managed-install raporları arşiv SHA-256'sıyla doğrulandı. Fresh-archive raporları da ilk offline görevi, manuel kaldırmayı ve dış store'un korunmasını kapsar. Stable release değildir; `doctor.release_ready=false` kalır.
 
 | Sistem | İndirilecek asset |
 |---|---|
-| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-windows-amd64.zip) |
-| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-linux-amd64.tar.gz) |
-| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-f1b323d437e953411649db6fec2532a20095a524/viber-f1b323d437e9-darwin-arm64.tar.gz) |
+| Windows x64 | [Windows ZIP](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-windows-amd64.zip) |
+| Linux x64 | [Linux tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-linux-amd64.tar.gz) |
+| macOS Apple Silicon | [macOS tar.gz](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-darwin-arm64.tar.gz) |
 
-Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. Bu yayının [normal tag workflow'u](https://github.com/ixayldz/Viber/actions/runs/38129279040) create/upload/readback/publication kabulünü geçti. Önceki sürümlerin başarısızlık ve recovery kayıtları [VALIDATION](VALIDATION.md) içinde korunur.
+Intel macOS, Windows arm64 ve Linux arm64 bu portable kanalın native kabulüne dahil değildir. `engineering-release` workflow yalnız repo sahibinin explicit full-SHA tag push'unda çalışır; her main commit'ini otomatik yayımlamaz. Prerelease, “Latest” veya stable ürün diye işaretlenmez. `release.json` ve `SHA256SUMS` dahil toplam 11 public asset'in anonim indirme/readback'i geçti. Dokuz attested subject, her platform için arşiv, dağıtım raporu ve managed-install raporunu kapsar; üç `*-installation.json` raporu exact source ve archive digest'ine bağlıdır. Önceki sürümlerin başarısızlık ve recovery kayıtları [VALIDATION](VALIDATION.md) içinde korunur.
 
 [GitHub Actions](https://github.com/ixayldz/Viber/actions/workflows/ci.yml) içinde exact commit'e ait başarılı `core` run'ını açın. Foundation'ın yanında üç `packages` işi ve `attest-packages` da SUCCESS olmalıdır. Bu akış yalnız bu repo'nun `main` push'unda signing yapar; PR/fork paketleri bu güven zincirine girmez.
 
-Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Public release Assets bölümü üç arşiv, üç platforma ait `*-distribution.json` kurulum raporu, birleşik checksum ve `release.json` taşır. Public stable release kapısı kapalıdır.
+Artifact adları `portable-windows-latest-SHA`, `portable-ubuntu-latest-SHA`, `portable-macos-latest-SHA` biçimindedir. Native hedefler sırasıyla Windows amd64, Linux amd64, macOS arm64'tür. Actions artifact download için GitHub hesabıyla oturum gerekir. Artifact wrapper'ını açınca portable ZIP/tar.gz, `SHA256SUMS` ve `distribution.json` bulunur. Public release Assets bölümü üç arşiv, her platform için bir `*-distribution.json` ve bir `*-installation.json`, birleşik checksum ve `release.json` taşır. Public stable release kapısı kapalıdır.
+
+Rapor varlıkları arşivle aynı [release sayfasındadır](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5):
+
+| Platform | Taze arşiv raporu | Managed-install raporu |
+|---|---|---|
+| Windows amd64 | [distribution.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-windows-amd64-distribution.json) | [installation.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-windows-amd64-installation.json) |
+| Linux amd64 | [distribution.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-linux-amd64-distribution.json) | [installation.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-linux-amd64-installation.json) |
+| macOS arm64 | [distribution.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-darwin-arm64-distribution.json) | [installation.json](https://github.com/ixayldz/Viber/releases/download/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5/viber-90bc97ebc931-darwin-arm64-installation.json) |
 
 Portable archive'ı **çalıştırmadan/açmadan önce** resmi GitHub CLI ile repo, signer workflow, source ref ve seçtiğiniz tam SHA'yı doğrulayın:
 
 ```sh
-gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest FULL_40_CHARACTER_COMMIT_SHA
+gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest 90bc97ebc9318e3542ffbc2507b8cb346dae69e5
+gh attestation verify INSTALLATION_JSON -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest 90bc97ebc9318e3542ffbc2507b8cb346dae69e5
+gh attestation verify DISTRIBUTION_JSON -R ixayldz/Viber --signer-workflow ixayldz/Viber/.github/workflows/ci.yml --source-ref refs/heads/main --source-digest 90bc97ebc9318e3542ffbc2507b8cb346dae69e5
 ```
 
 SHA'yı indirdiğiniz JSON içinden körlemesine güvenerek seçmeyin; GitHub'da incelemeyi seçtiğiniz commit ile karşılaştırın. Checksum taşıma hasarını gösterir; tek başına yayımlayanın kimliğini doğrulamaz. GitHub CLI authentication/model API credential farklıdır; paket kullanmak OpenAI/Anthropic anahtarı istemez. [Resmi verification sözleşmesi](https://cli.github.com/manual/gh_attestation_verify).
 
 GitHub CLI doğrulamada oturum istiyorsa `gh auth login --hostname github.com --web` ile GitHub hesabınıza bağlanın, ardından attestation komutunu yeniden çalıştırın. Bu, Viber'ın `auth login` ile yaptığı ChatGPT girişinden ayrı bir işlemdir; model API anahtarı oluşturmanızı gerektirmez. [Resmî GitHub CLI giriş kılavuzu](https://cli.github.com/manual/gh_auth_login).
 
-Platformunuzun `*-distribution.json` dosyasını da aynı komutta ARCHIVE yerine vererek doğrulayın. İmzalı raporun source revision/platform/archive SHA-256/byte sayısı indirdiğiniz arşivle aynı olmalıdır. `archive_install_smoke.scope=FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY` kabulü PATH boşken ve Git bulunmazken ilk görevi çalıştırır; kaynak ve dış store korunur. Otomatik güncelleme veya farklı store formatına rollback bu raporun kapsamına girmez.
+Platformunuza ait `*-installation.json` ve `*-distribution.json` varlıklarını aynı provenance komutuyla ayrı ayrı doğrulayın. Installation raporu exact source, platform ve arşiv SHA-256'sını bağlar. Üç rapor da managed install, ilk offline fixture görevi, aynı revizyonu yeniden kurma/geri seçme, owned uninstall ve dış store'un korunması için PASS verir; cross-version upgrade/rollback **NOT_RUN**. Distribution raporundaki `archive_install_smoke.scope=FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY` PATH boşken ve Git bulunmazken ilk görevi çalıştırır, kaynakla dış store'u korur ve manuel uninstall yapar. Gerçek uygun ChatGPT hesabıyla ilk görev kabulü ayrıca **NOT_RUN**.
 
 GitHub OIDC build provenance, archive byte'larının bu workflow/commit'ten çıktığını bağlar. Windows Authenticode veya macOS Developer ID/notarization değildir; OS bunları unsigned uygulama olarak gösterebilir. Provenance ürün kalitesi veya PRD evaluator verdict'i değildir.
 
@@ -59,12 +69,12 @@ echo $? # 2
 
 Her demo için yeni store seçin; store kaynak/paket dizininin dışında olmalıdır. Beklenen sonuç `TERMINATED / FINISHED / UNVERIFIED / SATISFIED`, run exit2'dir. Kaynak `hello.txt` aynı kalır, candidate exact `hello, Viber\n` üretir. Bu model muhakemesi veya production verification değildir. `doctor` mevcut capabilities'i bildirir; bütün sandbox/provider testlerini çalıştırmaz. Linux store directory-sync destekleyen yerel filesystem gerektirir; Docker Desktop/Windows bind-store native kabulü bu engineering profilinde geçmemiştir.
 
-## Güncelleme, geri dönüş ve kaldırma
+## Yönetilen kurulum, güncelleme, geri dönüş ve kaldırma
 
-11 Ekim çalışma ağacında eklenen yönetilen installer/rollback/uninstall komutları ve exact kabul sınırı [anahtarsız operasyonlar kılavuzundadır](KEYLESS_OPERATIONS.md). Aşağıdaki manuel yol, halen yayımlanmış `f1b323d` paketi için geçerlidir; yeni komutların kabulünü bu eski paketten çıkarmaz.
+Portable arşivdeki binary bootstrap aracıdır. Önce arşivle iki raporu doğrulayın; ardından bootstrap klasöründen [managed install akışını](KEYLESS_OPERATIONS.md#yönetilen-kurulum) çalıştırın. `package install`, seçilen arşivi operatorün verdiği GitHub CLI ve exact source SHA ile yeniden doğrular; `--prefix` program dosyalarını ayrı sürüm dizininde tutar. `package status` seçili revizyonu gösterir, `package run` yönetilen binary'yi başlatır. Store'ları prefix dışında tutun ve geçiş öncesi çalışan owner'ı durdurun. Launcher yalnız açıkça kaydettiğiniz store owner'larının kilidini alır.
 
-Yeni archive'ı aynı provenance kontrolünden geçirip farklı sürüm dizinine açın. Aktif çalışmayı pause/settle edin, ilgili store owner'ını kapatın ve yeni binary'ye geçin. Eski dizini saklayın. Aktif kritik task üzerinde otomatik kernel/schema update yapılmaz; bu dağıtım manuel sürüm seçer. Kurulum store'u taşımaz veya migrate etmez.
+Bu exact-source release için Windows, Linux ve macOS managed-install raporları actual OIDC doğrulamasını, ilk offline fixture görevini, aynı revizyonun reinstall/rollback akışını, owned uninstall'ı ve dış store'un korunmasını PASS olarak bağlar. Farklı revizyonlar arasında cross-version upgrade/rollback **NOT_RUN**; bu yayın başlangıç sürümü olarak pinlendi ve sonraki kaynak CI'ı iki revizyonlu akışı ayrıca ölçecek. Bu kabul otomatik updater veya store migration anlamına gelmez. [Anahtarsız operasyonlar kılavuzu](KEYLESS_OPERATIONS.md#yönetilen-kurulum) install, status, rollback, deactivate ve uninstall komutlarını açıklar.
 
 Store formatı değişiyorsa [CLI migration/backup yönergelerini](CLI_REFERENCE.md#eski-storeu-yükseltme) kullanın; validated backup ve explicit migration gerekir. Önceki binary'ye geri dönmek store/authority downgrade izni değildir. Incompatible format/policy read-only/fail-closed kalır; metadata'yı elle silerek devam etmeyin.
 
-Kaldırma yalnız owner kapatıldıktan sonra seçtiğiniz program sürüm dizinini kaldırır. Task/store, backup ve credentials ayrı açık silme/revoke işlemi olmadan korunur. Dağıtımda otomatik updater/installer servisi veya OS certificate/notarization kabulü henüz yoktur. Public stable tag, yalnız bütün ilgili PRD kabulü kapandıktan sonra yayımlanabilir.
+Uninstall yalnız yönetilen program dosyalarını kaldırır; task/store, backup ve credentials korunur. Windows Authenticode, macOS Developer ID/notarization ve stable PRD readiness bu engineering kabulünün dışındadır.

@@ -1,5 +1,17 @@
 # Doğrulama kaydı
 
+## 12 Ekim yönetilen engineering yayını
+
+Exact source `90bc97ebc9318e3542ffbc2507b8cb346dae69e5` [core CI38195774589](https://github.com/ixayldz/Viber/actions/runs/38195774589) **16/16 SUCCESS**, skip/failure olan iş yoktur. Üç OS native/full/vet/vulnerability/migration, Linux full race/tüm fuzz, rootful/rootless, iki native vault, üç portable build/fresh archive smoke, foundation, package attestation, üç yönetilen installer ve installation attestation geçti. Paketler yalnız foundation başarılı olduktan sonra imzalandı.
+
+Gerçek Docker job114637951530: `TestGoSemanticWorkerPinnedDockerIntegration` PASS 0.38s ve `TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess` PASS 12.55s. Fixture şema drift'i ve PACKAGE envelope düzeltmeleri exact-source gerçek süreçte doğrulandı. Bu pinned kaynak helper/read-only protocol profili kabulüdür; genel LSP/runtime/effectiveness kapanışı değildir. SQLite admission düzeltmesinin Linux full race kabulü de geçti; önceki DATA RACE kaydı korunur.
+
+Üç yönetilen installer gerçek OIDC doğrulamasıyla install → ilk offline görev → reinstall/aynı-revision rollback → owned uninstall yaptı. İlk görev `OFFLINE_FIXTURE_UNVERIFIED_EXIT_2`; dış store korundu. Üç imzalı `*-installation.json` aynı source/platform/archive SHA-256'a bağlıdır. Farklı revision upgrade ve gerçek ChatGPT model görevi bu yayın için **NOT_RUN**.
+
+[Publisher38198095117](https://github.com/ixayldz/Viber/actions/runs/38198095117) SUCCESS; [public release](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) ID410102479, draft=false, prerelease=true. Public Assets'teki 11 dosya **GitHub oturumu olmadan** indirilip byte sayısı/API digest/10 checksum satırı doğrulandı. Arşiv, distribution ve installation için toplam dokuz OIDC subject resmî GitHub CLI ile repo/ci.yml/main/exact source'a bağlandı. Manifest ve üç kurulum raporu readback PASS. Yerelde indirilen binary yeniden çalıştırılmadı; native çalıştırma CI kanıtıdır. Readback raporu `.cache/public-download-90bc97ebc931/anonymous-acceptance.json` içindedir.
+
+Bu ilk uygun managed public sürüm `scripts/upgrade-baseline.json` içine exact SHA ile pinlendi. Sonraki kaynak CI'ı bu gerçek arşivlerle mevcut görev projection'ını koruyan compatible upgrade → rollback → upgrade ölçer; henüz tamamlanmış kabul sayılmaz. Store migration/downgrade veya OS certificate signing/notarization iddiası yoktur. `doctor.release_ready=false`, stable A–D kapıları ve geniş anahtarsız PRD işleri açık kalır. Yeni yerel full suite veya yeni test eklenmedi; mevcut CI ve public consumer kanıtı kullanıldı.
+
 ## 12 Ekim gerçek Docker takip düzeltmesi
 
 `16a188184dd328977596d527d33f5801f3abb6e5` [CI38192831918](https://github.com/ixayldz/Viber/actions/runs/38192831918) üç native test işi, Linux full race/bütün fuzz, rootless, iki native vault ve üç portable paket işinde SUCCESS. Eski owner steering parent'ı Linux normal turda 0.87s, race turunda 1.87s PASS; SQLite admission DATA RACE bu exact-source turunda görülmedi. Bu sonuçlar sonraki revision'a otomatik kabul olarak aktarılmaz.

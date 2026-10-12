@@ -1,5 +1,13 @@
 # Anahtarsız PRD uygulaması — orkestrasyon planı
 
+## 12 Ekim teslim ilerlemesi
+
+İlk managed [public engineering sürümü](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) yayımlandı: exact source `90bc97ebc9318e3542ffbc2507b8cb346dae69e5`, 16/16 CI SUCCESS, üç native yönetilen kurulum/ilk offline görev/reinstall/aynı revision rollback/owned uninstall ve dokuz OIDC subject kabulü. Public 11 dosya oturumsuz indirme/checksum/provenance readback PASS. Gerçek Docker MCP ve pinned Go helper kabulü de geçti. Sealed parent budget/child allocation ve Windows bounded exclusive NTFS profili aynı kaynağın kabulüne dahildir; bunlar aşağıdaki ilk planın açık satırları olarak yeniden yapılmaz.
+
+Bu sürüm sonraki kaynak CI'ının cross-revision baseline'ıdır. Bir sonraki dağıtım kabulü mevcut görev projection'ını koruyan compatible upgrade → rollback → upgrade ölçer; iki-revision PASS henüz bu ilk yayına atfedilmez. README, INSTALL ve CAPABILITIES güncel yayına bağlandı. Gereksiz yeni/full yerel test eklenmedi; zorunlu mevcut CI kapıları korundu.
+
+Kalan geniş PRD kapsamı: bütün catalog/anchor/UNKNOWN/legacy owner yaşam döngüsü; bütün mutable metadata/fence fiziksel writer profilleri; genel protected verifier/runtime coverage ve diğer dillerde LSP; typed multi-worker DAG/AgentLease/mutex/integration ve measured routing; authenticated team/remote executor; bağımsız effectiveness/pilot/reference performans. Gerçek eligible ChatGPT hesap/model ve Ollama endpoint kabulü de anahtarsız dış kabul olarak açık kalır. OS certificate/notarization kimliği API anahtarı işi değildir. Yalnız gerçek ücretli OpenAI/Anthropic provider kabulü model API anahtarı bekler. Bu belge %100/stable tamamlanma beyanı değildir.
+
 11 Ekim 2026. Kaynak başlangıcı `4d58d7e`; runtime `f1b323d`. Yetkili kapsam bütün PRD'dir. Girdi: [kendi kapsam denetimi](PRD_AUDIT_2026_10_11.md) ve kullanıcının 11 Ekim bağımsız analizi. Tamamlanma yalnız çalışan entegrasyon ve uygulanabilir kabul ile kaydedilir; yeni interface, plan veya unsupported yanıtı özelliği tamamlamaz.
 
 ## Rapor karşılaştırması

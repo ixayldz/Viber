@@ -21,7 +21,7 @@ Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension
 
 ## 1. İndirin ve kurun
 
-**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-f1b323d437e953411649db6fec2532a20095a524) Assets bölümünden işletim sisteminize uygun arşivi indirin:
+**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
 
 | Bilgisayarınız | Dosya |
 | --- | --- |
@@ -48,6 +48,8 @@ Linux / macOS:
 `doctor` içinde `release_ready: false` mevcut ön sürüm için beklenen durumdur. İlk kurulumda Docker gerekmez. Projenin testlerini izole süreçte çalıştırmak için ayrıca desteklenen Docker ve kayıtlı check yapılandırması gerekir.
 
 Main branch, son public paketten daha yeni geliştirmeler içerebilir. **Releases'ten indirilen pakette bütün main komutları bulunduğunu varsaymayın.** Güncel kaynak kodunu kullanmak için aşağıdaki [kaynaktan kurulum](#kaynaktan-kurulum) yolunu izleyin.
+
+Bu exact-source paket için üç native platformda yönetilen kurulum, aynı revizyonu yeniden kurma ve geri seçme, ardından yalnız yönetilen program dosyalarını kaldırma kabulü geçti. Farklı revizyonlar arası yükseltme/geri dönüş **NOT_RUN**; bu yayın baseline olarak pinlendi ve sonraki kaynak CI iki sürümlü akışı ayrıca ölçecek. `package install`, `status`, `rollback` ve `uninstall` adımları [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#yönetilen-kurulum) anlatılır.
 
 ## 2. ChatGPT hesabınızla giriş yapın
 
@@ -131,7 +133,7 @@ delivery="$HOME/.local/share/viber/tasks/delivery-$(date +%s)"
 ./viber export first-task --store "$store" --output "$delivery" --json
 ```
 
-Çıktı dizini yeni olmalıdır. Paket `changes.patch`, `report.json`, `manifest.json` ve değişen dosyaların exact before/after içeriğini taşır. Patch'i inceleyin; projenizdeki kullanıcı düzenlemeleriyle çakışmaları ayrıca değerlendirin. Public ön sürüm canlı proje dosyalarına otomatik apply/restore yapmaz.
+Çıktı dizini yeni olmalıdır. Paket `changes.patch`, `report.json`, `manifest.json` ve değişen dosyaların exact before/after içeriğini taşır. Patch'i inceleyin; projenizdeki kullanıcı düzenlemeleriyle çakışmaları ayrıca değerlendirin. Varsayılan apply/restore canlı kaynak dosyalarına yazmaz. Windows'ta yerel fixed NTFS üzerinde sınırlı `--exclusive-ntfs` profili opt-in olarak kullanılabilir; kapsamı ve geçen Windows CI kabulü [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#güvenli-teslim) açıklanır. Linux/macOS live apply/restore desteklenmez.
 
 | Görev çıkış kodu | Anlamı |
 | --- | --- |
