@@ -195,6 +195,16 @@ func runPackage(args []string, out, errout io.Writer) int {
 			return report(out, errout, err, *jsonMode)
 		}
 	}
+	if action == "install" || action == "rollback" {
+		// Manager activation reopens every registered owner lock, performs the
+		// runtime-capability scan, and holds those locks through selection publish.
+		for i := len(locked) - 1; i >= 0; i-- {
+			if err = locked[i].Close(); err != nil {
+				return report(out, errout, err, *jsonMode)
+			}
+		}
+		locked = nil
+	}
 	var state distribution.Status
 	switch action {
 	case "install":

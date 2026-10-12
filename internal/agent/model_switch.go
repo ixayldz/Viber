@@ -152,12 +152,12 @@ func (s *Session) SwitchModel(ctx context.Context, command ModelSwitch) (c.TaskS
 		return state, c.Fail(c.Conflict, "final delivery boundary cannot switch models")
 	}
 	probe.Messages = append(probe.Messages, model.Message{Role: "user", Text: "Kernel model profile changed at a settled protocol boundary. Goal, constraints, candidate, checks, plan, budget and historical receipts are unchanged. Old opaque continuation was discarded; historical observations are not current evidence."})
-	request, _, manifest, err := compileOfflineRequest(probe, state, s.layers(state, probe))
+	request, _, manifest, err := s.compileOfflineRequestForCurrentCandidate(ctx, probe, state, s.layers(state, probe), probe.Budget.MaxOutputTokens)
 	if err != nil {
 		compacted, _, compactErr := s.compactDocument(probe, 8)
 		if compactErr == nil {
 			probe = compacted
-			request, _, manifest, err = compileOfflineRequest(probe, state, s.layers(state, probe))
+			request, _, manifest, err = s.compileOfflineRequestForCurrentCandidate(ctx, probe, state, s.layers(state, probe), probe.Budget.MaxOutputTokens)
 		}
 	}
 	if err != nil {

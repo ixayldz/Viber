@@ -92,41 +92,44 @@ type Document struct {
 	Config                *config.Resolved             `json:"retained_config,omitempty"`
 	ResourcePolicy        *c.ResourcePolicy            `json:"store_resource_policy,omitempty"`
 	Compactions           []CompactionRef              `json:"compactions,omitempty"`
-	Pins                  []ContextPin                 `json:"context_pins,omitempty"`
-	ProfileHistory        []RuntimeProfileRef          `json:"profile_history,omitempty"`
-	AttemptOrigin         *AttemptOrigin               `json:"attempt_origin,omitempty"`
-	TaskKind              string                       `json:"task_kind,omitempty"`
-	MaxRepairs            int                          `json:"max_repairs,omitempty"`
-	RepairAttempts        int                          `json:"repair_attempts,omitempty"`
-	FinalArtifactDigest   string                       `json:"final_artifact_digest,omitempty"`
-	CheckRuntime          *CheckRuntime                `json:"check_runtime,omitempty"`
-	CheckRuns             []CheckRunRef                `json:"check_runs,omitempty"`
-	StoreTokens           *c.TokenLimits               `json:"store_token_limits,omitempty"`
-	Runtime               *LocalRuntime                `json:"runtime,omitempty"`
-	Plan                  *plan.State                  `json:"plan,omitempty"`
-	Protection            *verify.CheckOrigin          `json:"protected_check_origin,omitempty"`
-	Context               *ContextAudit                `json:"context,omitempty"`
-	Requests              []UserRequest                `json:"requests,omitempty"`
-	SchemaVersion         int                          `json:"schema_version"`
-	TaskID                string                       `json:"task_id"`
-	Spec                  c.TaskSpec                   `json:"spec"`
-	Baseline              artifact.Ref                 `json:"baseline"`
-	Candidate             artifact.Ref                 `json:"candidate"`
-	Messages              []model.Message              `json:"messages"`
-	ToolCursor            int64                        `json:"tool_cursor"`
-	PendingReplies        []model.Reply                `json:"pending_replies"`
-	Budget                Budget                       `json:"budget"`
-	AllowUnverified       bool                         `json:"allow_unverified"`
-	Autonomy              string                       `json:"autonomy"`
-	FixtureDigest         string                       `json:"fixture_digest"`
-	FixtureCursor         int64                        `json:"fixture_cursor"`
-	Pending               *Pending                     `json:"pending"`
-	UnknownEffect         bool                         `json:"unknown_effect"`
-	Blocker               string                       `json:"blocker"`
-	FinalSummary          string                       `json:"final_summary"`
-	FinalReady            bool                         `json:"final_ready"`
-	LastNoDispatch        bool                         `json:"last_no_dispatch,omitempty"`
-	LastResponseBlob      string                       `json:"last_response_blob"`
+	// ProjectMemoryRefs is omitted for pre-memory documents, preserving their
+	// canonical bytes; older strict decoders reject documents that carry refs.
+	ProjectMemoryRefs   []ProjectMemoryRef  `json:"project_memory_refs,omitempty"`
+	Pins                []ContextPin        `json:"context_pins,omitempty"`
+	ProfileHistory      []RuntimeProfileRef `json:"profile_history,omitempty"`
+	AttemptOrigin       *AttemptOrigin      `json:"attempt_origin,omitempty"`
+	TaskKind            string              `json:"task_kind,omitempty"`
+	MaxRepairs          int                 `json:"max_repairs,omitempty"`
+	RepairAttempts      int                 `json:"repair_attempts,omitempty"`
+	FinalArtifactDigest string              `json:"final_artifact_digest,omitempty"`
+	CheckRuntime        *CheckRuntime       `json:"check_runtime,omitempty"`
+	CheckRuns           []CheckRunRef       `json:"check_runs,omitempty"`
+	StoreTokens         *c.TokenLimits      `json:"store_token_limits,omitempty"`
+	Runtime             *LocalRuntime       `json:"runtime,omitempty"`
+	Plan                *plan.State         `json:"plan,omitempty"`
+	Protection          *verify.CheckOrigin `json:"protected_check_origin,omitempty"`
+	Context             *ContextAudit       `json:"context,omitempty"`
+	Requests            []UserRequest       `json:"requests,omitempty"`
+	SchemaVersion       int                 `json:"schema_version"`
+	TaskID              string              `json:"task_id"`
+	Spec                c.TaskSpec          `json:"spec"`
+	Baseline            artifact.Ref        `json:"baseline"`
+	Candidate           artifact.Ref        `json:"candidate"`
+	Messages            []model.Message     `json:"messages"`
+	ToolCursor          int64               `json:"tool_cursor"`
+	PendingReplies      []model.Reply       `json:"pending_replies"`
+	Budget              Budget              `json:"budget"`
+	AllowUnverified     bool                `json:"allow_unverified"`
+	Autonomy            string              `json:"autonomy"`
+	FixtureDigest       string              `json:"fixture_digest"`
+	FixtureCursor       int64               `json:"fixture_cursor"`
+	Pending             *Pending            `json:"pending"`
+	UnknownEffect       bool                `json:"unknown_effect"`
+	Blocker             string              `json:"blocker"`
+	FinalSummary        string              `json:"final_summary"`
+	FinalReady          bool                `json:"final_ready"`
+	LastNoDispatch      bool                `json:"last_no_dispatch,omitempty"`
+	LastResponseBlob    string              `json:"last_response_blob"`
 }
 type Session struct {
 	retentionFault          func(string) error
@@ -318,6 +321,9 @@ func (s *Session) loadDocument(state c.TaskState) (c.TaskState, Document, error)
 	if err = validateTaskConfig(doc); err != nil {
 		return state, doc, err
 	}
+	if _, err = s.validateProjectMemoryRefs(context.Background(), state, doc, nil); err != nil {
+		return state, doc, err
+	}
 	if doc.SkillRegistry != nil {
 		if err = doc.SkillRegistry.Validate(); err != nil {
 			return state, doc, err
@@ -419,7 +425,7 @@ func (s *Session) record(ctx context.Context, state c.TaskState, doc Document, k
 			return state, c.Fail(c.StoreIntegrityError, "task work budget can only be sealed at creation")
 		}
 		extra.WorkBudget = workBudgetSnapshot(doc)
-	} else if state.WorkBudget != nil && (kind == "SessionRecorded" || kind == "CandidateRecorded") {
+	} else if state.WorkBudget != nil && (kind == "SessionRecorded" || kind == "CandidateRecorded" || kind == "ReadWorkersAdmitted") {
 		extra.WorkBudget = workBudgetSnapshot(doc)
 	}
 	if err := recordTokenMutation(state, doc, kind, &extra); err != nil {
@@ -997,12 +1003,12 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 				continue
 			}
 		}
-		request, encoded, manifest, err := compileOfflineRequestWithOutput(doc, state, s.layers(state, doc), headroom.MaxOutputTokens)
+		request, encoded, manifest, err := s.compileOfflineRequestForCurrentCandidate(ctx, doc, state, s.layers(state, doc), headroom.MaxOutputTokens)
 		var contextError *c.Error
 		if errors.As(err, &contextError) && contextError.Code == c.ContextTooSmall && len(doc.Messages) > 9 {
 			compacted, _, compactErr := s.compactDocument(doc, 8)
 			if compactErr == nil {
-				freshRequest, freshBytes, freshManifest, compileErr := compileOfflineRequestWithOutput(compacted, state, s.layers(state, compacted), headroom.MaxOutputTokens)
+				freshRequest, freshBytes, freshManifest, compileErr := s.compileOfflineRequestForCurrentCandidate(ctx, compacted, state, s.layers(state, compacted), headroom.MaxOutputTokens)
 				if compileErr == nil {
 					doc = compacted
 					state, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})

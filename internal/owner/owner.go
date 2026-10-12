@@ -381,6 +381,64 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.Session.GoalQueue(ctx, request.TaskID)
+	case "read-workers":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "read workers require a quiescent owner")
+		}
+		var command agent.ReadWorkersRequest
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.OperationID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "read worker envelope binding mismatch")
+		}
+		return o.Session.RunReadWorkers(ctx, request.TaskID, command)
+	case "project-memory-search":
+		var query struct {
+			Query  string `json:"query,omitempty"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		return o.Session.SearchProjectMemory(ctx, request.TaskID, query.Query, query.Offset, query.Limit)
+	case "project-memory-record", "project-memory-correct", "project-memory-retire":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "project memory mutation requires a quiescent owner")
+		}
+		var command struct {
+			CommandID    string `json:"command_id"`
+			Kind         string `json:"kind,omitempty"`
+			Key          string `json:"key,omitempty"`
+			Text         string `json:"text,omitempty"`
+			TargetID     string `json:"target_id,omitempty"`
+			TargetDigest string `json:"target_digest,omitempty"`
+		}
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.CommandID != request.ID {
+			return nil, c.Fail(c.InvalidArgument, "project memory envelope binding mismatch")
+		}
+		switch request.Command {
+		case "project-memory-record":
+			if command.TargetID != "" || command.TargetDigest != "" {
+				return nil, c.Fail(c.InvalidArgument, "memory record takes no correction target")
+			}
+			return o.Session.RecordProjectMemory(ctx, request.TaskID, command.CommandID, command.Kind, command.Key, command.Text)
+		case "project-memory-correct":
+			return o.Session.CorrectProjectMemory(ctx, request.TaskID, command.CommandID, command.TargetID, command.TargetDigest, command.Kind, command.Key, command.Text)
+		default:
+			if command.Kind != "" || command.Key != "" || command.Text != "" {
+				return nil, c.Fail(c.InvalidArgument, "memory retirement takes only the exact target")
+			}
+			return o.Session.RetireProjectMemory(ctx, request.TaskID, command.CommandID, command.TargetID, command.TargetDigest)
+		}
 	case "goal-control":
 		var command agent.GoalCommand
 		if err := c.DecodeStrict(request.Payload, &command); err != nil {

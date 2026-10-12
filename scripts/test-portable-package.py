@@ -39,6 +39,10 @@ def main():
         root = parent / "bundle"
         root.mkdir()
         original = fixture(root)
+        generated = portable.package_manifest(REV, "windows/amd64", "b" * 64, "go version go1.27.2 windows/amd64", {}, {"LICENSE": b"fixture"})
+        if generated.get("runtime_capabilities") != ["project_memory_v1", "read_workers_v1"]:
+            raise AssertionError("portable manifest omits the exact supported runtime capabilities")
+        count += 1
         portable.bundle_files(root, REV)
         for name, mutate in [
             ("foreign revision", lambda p: p.update(source_revision="c" * 40)),

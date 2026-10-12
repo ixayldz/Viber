@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,7 +66,9 @@ func runUILines(u uiSession, input io.Reader, out, errout io.Writer) int {
 		if err != nil {
 			fmt.Fprintln(errout, tui.Safe(err.Error()))
 		} else {
-			fmt.Fprintln(out, tui.Safe(result))
+			for _, line := range strings.Split(result, "\n") {
+				fmt.Fprintln(out, tui.Safe(line))
+			}
 		}
 		if quit {
 			return 0
@@ -77,10 +80,16 @@ func runUILines(u uiSession, input io.Reader, out, errout io.Writer) int {
 	return 0
 }
 func screen(view owner.View, notice, details string) tui.Screen {
+	if details == "" && view.Summary != "" {
+		details = "Assistant message (untrusted; see quality/checks separately):\n" + view.Summary
+	}
 	work := "awaiting command"
 	if view.Plan != nil {
-		raw, _ := json.Marshal(view.Plan)
-		work = string(raw)
+		if node := view.Plan.Active(); node != nil {
+			work = node.Goal
+		} else {
+			work = fmt.Sprintf("%d planned steps; /plan for details", len(view.Plan.Progress))
+		}
 	}
 	decision := view.Blocker
 	if view.State.InputBarrier {
@@ -89,7 +98,7 @@ func screen(view owner.View, notice, details string) tui.Screen {
 	if view.State.OpenRequiredObligations > 0 {
 		decision += fmt.Sprintf(" | %d required obligations", view.State.OpenRequiredObligations)
 	}
-	budget := fmt.Sprintf("input %d + reserved %d / %d; output %d + reserved %d / %d", view.Budget.UsedInput, view.Budget.ReservedInput, view.Budget.MaxInputTokens, view.Budget.UsedOutput, view.Budget.ReservedOutput, view.Budget.MaxOutputTokens)
+	budget := fmt.Sprintf("steps %d/%d; calls %d/%d; input %d (+%d)/%d; output %d (+%d)/%d; active %d/%dms", view.Budget.Steps, view.Budget.MaxSteps, view.Budget.ToolCalls, view.Budget.MaxToolCalls, view.Budget.UsedInput, view.Budget.ReservedInput, view.Budget.MaxInputTokens, view.Budget.UsedOutput, view.Budget.ReservedOutput, view.Budget.MaxOutputTokens, view.Budget.ActiveMillis, view.Budget.MaxActiveMillis)
 	return tui.Screen{Task: view.State.TaskID, State: string(view.State.Execution), Candidate: view.State.CandidateDigest, Quality: string(view.State.Quality), Fulfillment: string(view.State.Fulfillment), Work: work, Decision: decision, Budget: budget, Notice: notice, Details: details}
 }
 
@@ -125,17 +134,38 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 	results := make(chan uiResult, 2)
 	editor := tui.Editor{}
 	utf := []byte{}
-	notice := "Connected; /quit detaches."
+	notice := "Connected. Type / to browse commands; @file selects captured source."
 	details := ""
+	scrollOffset := 0
+	clearedSummary := ""
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	busy, polling := false, false
 	interrupts := 0
+	lastFrame := ""
+	lastWidth, lastHeight, lastRow, lastColumn := 0, 0, 0, 0
 	draw := func() {
 		w, h := tui.Size()
-		fmt.Fprint(out, "\x1b[H\x1b[2J"+tui.Render(screen(view, notice, details), editor, w, h))
+		s := screen(view, notice, details)
+		if details == "" && view.Summary == clearedSummary {
+			s.Details = ""
+		}
+		s.ScrollOffset = scrollOffset
+		row, column := tui.CursorPosition(s, editor, w, h)
+		frame := tui.Render(s, editor, w, h)
+		if frame == lastFrame && w == lastWidth && h == lastHeight && row == lastRow && column == lastColumn {
+			return
+		}
+		lastFrame, lastWidth, lastHeight, lastRow, lastColumn = frame, w, h, row, column
+		fmt.Fprint(out, "\x1b[?25l\x1b[H\x1b[2J"+frame)
+		fmt.Fprintf(out, "\x1b[%d;%dH\x1b[?25h", row, column)
 	}
 	dispatch := func(text string) {
+		if strings.TrimSpace(text) == "/clear" {
+			details, clearedSummary, scrollOffset = "", view.Summary, 0
+			notice = "Display cleared. Task history and source files are retained."
+			return
+		}
 		busy = true
 		go func() {
 			callCtx, stop := context.WithTimeout(ctx, 15*time.Second)
@@ -155,6 +185,17 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 		case b := <-keys:
 			action := editor.Feed(b)
 			switch action.Kind {
+			case "scroll":
+				_, height := tui.Size()
+				step := max(1, height-10)
+				body := screen(view, notice, details).Details
+				if action.Text == "up" {
+					scrollOffset = max(0, scrollOffset-step)
+				} else {
+					scrollOffset = min(strings.Count(body, "\n"), scrollOffset+step)
+				}
+			case "suggest":
+				notice = action.Text + " | Complete the command, then press Enter to run."
 			case "quit":
 				return 0
 			case "interrupt":
@@ -169,6 +210,9 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 					dispatch("/cancel")
 				}
 			case "submit":
+				if strings.TrimSpace(action.Text) == "" {
+					break
+				}
 				if busy {
 					editor.Text = []rune(action.Text)
 					editor.Cursor = len(editor.Text)
@@ -215,8 +259,15 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 			} else {
 				busy = false
 				details = result.text
+				scrollOffset = 0
+				if len(details) <= 32768 && json.Valid([]byte(details)) {
+					var pretty bytes.Buffer
+					if json.Indent(&pretty, []byte(details), "", "  ") == nil {
+						details = pretty.String()
+					}
+				}
 				if len(details) > 32768 {
-					details = details[:32768]
+					details = details[:32768] + "\n[Output clipped; use the CLI JSON command for the full bounded response.]"
 				}
 				notice = "Command settled."
 			}
@@ -228,6 +279,7 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 			}
 			draw()
 		case <-ticker.C:
+			editor.FlushEscape()
 			if !polling {
 				polling = true
 				go func() {

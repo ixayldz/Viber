@@ -1,8 +1,10 @@
 # Anahtarsız çalışma yüzeyleri
 
-Bu kılavuzun komutları [12 Ekim engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) bulunur. Exact source `90bc97ebc9318e3542ffbc2507b8cb346dae69e5`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38195774589) başarılıdır. Üç platformdaki gerçek yönetilen kurulum kabulü ve public indirme/provenance readback'i geçti. Stable readiness ayrı PRD kapısıdır.
+Aşağıda ayrıca main geliştirmesi olarak belirtilen yeni komutlar haricinde bu kılavuzun komutları [12 Ekim engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-5e6a006ff6c0cde18caa8ba48e9341075275d6eb) bulunur. Exact source `5e6a006ff6c0cde18caa8ba48e9341075275d6eb`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38224054501) başarılıdır. Üç platformdaki gerçek yönetilen kurulum kabulü ve public indirme/provenance readback'i geçti. Stable readiness ayrı PRD kapısıdır.
 
 ## Yönetilen kurulum
+
+Main'deki yeni `/memory`, `/workers`, slash palette ve captured instruction profilleri için [CLI referansını](CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler) okuyun. Bunlar public `5e6a006` paketinden sonraki geliştirmelerdir. Yeni managed pakette kullanılan memory/read-worker capability'sini okuyamayan eski binary'ye rollback engellenir; yeni manifesti tanımayan bootstrap yerine yeni doğrulanmış portable binary gerekir.
 
 İlk bootstrap binary'sini doğrulanmış portable paketten ayrı bir dizine açın. `package install` aynı byte snapshot'ında GitHub provenance'ını repo/workflow/ref/full SHA ile doğrular; checksum tek başına yeterli değildir. `--gh` PATH yerine operatörün seçtiği GitHub CLI'nin tam yoludur.
 
@@ -67,7 +69,7 @@ store="$HOME/.local/share/viber/tasks/my-app"
 
 Rollback yalnız önceden doğrulanmış kurulum kaydı bulunan ve mevcut store/reducer sözleşmesiyle uyumlu sürümü seçer. Schema migration/downgrade yapmaz. Deactivate seçimden çıkarır ve dosyaları saklar. Uninstall exact inventory ve kalıcı retirement kaydıyla yalnız program dosyalarını siler; kesintiden sonra aynı komutla devam eder. Değişmiş/eklenmiş dosyaları silme yetkisi saymaz. Audit/seçim/store kayıtları kalır. Retire edilmiş aynı revision'ı yeniden kurmak için yeni prefix kullanın. Windows'ta uninstall için çalışan bootstrap prefix dışında olmalıdır.
 
-Üç native CI işi gerçek GitHub provenance ile yeni paketi kurdu, ilk offline görevi çalıştırdı; aynı revision reinstall/rollback ve owned uninstall sırasında dış store korundu. İmzalı platform `*-installation.json` dosyaları public Assets bölümündedir. Bu yayın iki farklı revision upgrade kabulü içermez. Yayımlanan exact source sonraki CI için başlangıç sürümü olarak pinlendi; mevcut görevle upgrade → rollback → upgrade ayrıca ölçülür. Store formatı migration/downgrade, OS sertifika/notarization ve gerçek model başarısı bu kabulün kapsamı değildir.
+Üç native CI işi gerçek GitHub provenance ile yeni paketi kurdu, ilk offline görevi çalıştırdı; aynı revision reinstall/rollback ve owned uninstall sırasında dış store korundu. İmzalı platform `*-installation.json` dosyaları public Assets bölümündedir. Public `90bc97` başlangıç sürümünden bu exact source'a üç platformda actual OIDC ile upgrade → rollback → upgrade PASS; mevcut task projection korundu. Store formatı migration/downgrade, OS sertifika/notarization ve gerçek model başarısı bu kabulün kapsamı değildir.
 
 ## Gizlilik checkpoint'i ve fiziksel kota
 
@@ -125,7 +127,7 @@ Dataset asset inventory, condition/build/source/recipe ve single-use STARTED kay
 
 | Kaynak/platform | Live apply/restore profili | Kabul sınırı |
 |---|---|---|
-| Windows fixed NTFS / yayımlanan `90bc97ebc931` | `apply --exclusive-ntfs` ile opt-in; exact owned checkpoint üzerinden restore ve read-only `delivery-reconcile`. | Exact-source Windows hostile-writer/checkpoint CI geçti. Mevcut single-link regular dosya içerikleriyle sınırlı profil; genel dosya oluşturma/silme yetkisi değildir. |
+| Windows fixed NTFS / yayımlanan `5e6a006ff6c0` | `apply --exclusive-ntfs` ile opt-in; exact owned checkpoint üzerinden restore ve read-only `delivery-reconcile`. | Exact-source Windows hostile-writer/checkpoint CI geçti. Mevcut single-link regular dosya içerikleriyle sınırlı profil; genel dosya oluşturma/silme yetkisi değildir. |
 | Current main / Linux veya macOS | Doğrudan live apply/restore unsupported; fresh review package ve patch üretilebilir. | Advisory lock/hash/path kontrolü hostile writer'ı durdurmadığından fail-closed; PRD §13.3'ün candidate/patch fallback'idir, tek başına koşulsuz PRD açığı değildir. |
 | Yayımlanmış eski `engineering-f1b323d…` paket | Yeni main live-delivery komut/profili yok; yayımlanmış export akışını kullanın. | Main'deki değişiklik ve kabul eski public binary'ye aktarılmaz. |
 

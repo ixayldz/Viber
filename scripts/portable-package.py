@@ -20,6 +20,8 @@ import tarfile
 import tempfile
 import zipfile
 
+RUNTIME_CAPABILITIES = ["project_memory_v1", "read_workers_v1"]
+
 MAX_FILES = 256
 MAX_BYTES = 128 << 20
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -316,6 +318,16 @@ def verify_archive(archive, prefix, content, binary_name):
         fail("archive omitted a required file")
 
 
+def package_manifest(revision, target, source_digest, go_version, native, content):
+    return {"schema_version": 1, "channel": "engineering", "release_ready": False,
+            "source_revision": revision, "source_archive_sha256": source_digest,
+            "platform": target, "build_go_version": go_version,
+            "store_format_min": 2, "store_format_max": 2, "reducer_version": 1,
+            "runtime_capabilities": list(RUNTIME_CAPABILITIES), "native_smoke": native,
+            "files": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                      for name, raw in sorted(content.items())]}
+
+
 def private_inventory(root):
     inventory, total = {}, 0
     for path in sorted(root.rglob("*")):
@@ -405,7 +417,7 @@ def build(args):
         binary = stage / binary_name
         binary.chmod(0o755)
         native = smoke(binary, stage, target)
-        package = {"schema_version": 1, "channel": "engineering", "release_ready": False, "source_revision": args.revision, "source_archive_sha256": proof["source_archive_sha256"], "platform": target, "build_go_version": proof["go_version"], "store_format_min": 2, "store_format_max": 2, "reducer_version": 1, "native_smoke": native, "files": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in sorted(content.items())]}
+        package = package_manifest(args.revision, target, proof["source_archive_sha256"], proof["go_version"], native, content)
         content["package.json"] = canonical(package)
         name = f"viber-{args.revision[:12]}-{target.replace('/', '-')}"
         archive = output / (name + (".zip" if target.startswith("windows/") else ".tar.gz"))

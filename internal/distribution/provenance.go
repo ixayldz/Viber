@@ -111,6 +111,23 @@ func (m *Manager) RunActive(ctx context.Context, args []string, stdin io.Reader,
 	if state.Binary == "" {
 		return 4, c.Fail(c.UnsupportedCapability, "no active installed version")
 	}
+	manifest, err := m.version(state.Active.Revision, state.Active.ManifestDigest)
+	if err != nil {
+		return 4, err
+	}
+	if !hasAllRuntimeCapabilities(manifest) {
+		locked, required, lockErr := m.lockRegisteredStoreCapabilities(ctx)
+		if lockErr != nil {
+			return 4, lockErr
+		}
+		compatibilityErr := requireRuntimeCapabilities(manifest, required)
+		if closeErr := closeStoreLocks(locked); closeErr != nil {
+			return 4, errors.Join(compatibilityErr, closeErr)
+		}
+		if compatibilityErr != nil {
+			return 4, compatibilityErr
+		}
+	}
 	command := exec.CommandContext(ctx, state.Binary, args...)
 	command.Stdin = stdin
 	command.Stdout = stdout
@@ -124,4 +141,21 @@ func (m *Manager) RunActive(ctx context.Context, args []string, stdin io.Reader,
 		return exit.ExitCode(), nil
 	}
 	return 4, err
+}
+
+// A package declaring every known runtime capability needs no store inspection
+// before launch: its bounded support set already covers every feature this
+// launcher can discover. Legacy and partial packages still require the
+// exclusive, fail-closed compatibility scan.
+func hasAllRuntimeCapabilities(manifest Manifest) bool {
+	declared := make(map[string]bool, len(manifest.RuntimeCapabilities))
+	for _, capability := range manifest.RuntimeCapabilities {
+		declared[capability] = true
+	}
+	for _, capability := range supportedRuntimeCapabilities {
+		if !declared[capability] {
+			return false
+		}
+	}
+	return true
 }

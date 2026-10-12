@@ -72,6 +72,8 @@ Usage:
   viber replay TASK --store PATH [--until TASK_SEQ] [--json]
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
   viber ui TASK --store PATH
+  viber project-memory search|record|correct|retire --task TASK --store PATH [--kind FACT|DECISION|CONVENTION --key KEY --text TEXT] [--id ID --digest SHA --command-id ID] [--query QUERY --offset N --limit N] [--json]
+  viber read-workers TASK --store PATH --candidate SHA [--workers inventory,requirements --query TEXT --timeout-ms N] [--json]
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber goal-queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
@@ -187,6 +189,10 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runRepoGraph(args[1:], out, errout)
 	case "goal-queue":
 		return runGoalQueue(args[1:], out, errout)
+	case "project-memory":
+		return runProjectMemory(args[1:], out, errout)
+	case "read-workers":
+		return runReadWorkers(args[1:], out, errout)
 	case "apply", "delivery-apply":
 		return runDeliveryApply(args[1:], out, errout)
 	case "restore", "delivery-restore":

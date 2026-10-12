@@ -169,6 +169,11 @@ func (g *gcTracer) document(task, digest string) error {
 			return err
 		}
 	}
+	for _, ref := range doc.ProjectMemoryRefs {
+		if err = g.blob(task, ref.Digest); err != nil {
+			return err
+		}
+	}
 	for _, pin := range doc.Pins {
 		if err = g.snapshot(artifact.Ref{SchemaVersion: 1, TaskID: task, SnapshotDigest: pin.Candidate}); err != nil {
 			return err

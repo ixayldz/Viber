@@ -379,7 +379,7 @@ func (s *Session) Continuity(ctx context.Context, command ContinuityCommand) (c.
 	if err = s.validateContinuity(doc); err != nil {
 		return state, err
 	}
-	if _, _, _, err = compileOfflineRequest(doc, state, s.layers(state, doc)); err != nil {
+	if _, _, _, err = s.compileOfflineRequestForCurrentCandidate(ctx, doc, state, s.layers(state, doc), doc.Budget.MaxOutputTokens); err != nil {
 		return state, err
 	}
 	raw, err := c.CanonicalV1(doc)

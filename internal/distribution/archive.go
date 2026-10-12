@@ -25,18 +25,19 @@ type File struct {
 	Digest string `json:"sha256"`
 }
 type Manifest struct {
-	SchemaVersion  int             `json:"schema_version"`
-	Channel        string          `json:"channel"`
-	ReleaseReady   bool            `json:"release_ready"`
-	Revision       string          `json:"source_revision"`
-	SourceDigest   string          `json:"source_archive_sha256"`
-	Platform       string          `json:"platform"`
-	GoVersion      string          `json:"build_go_version"`
-	NativeSmoke    json.RawMessage `json:"native_smoke"`
-	StoreFormatMin int             `json:"store_format_min,omitempty"`
-	StoreFormatMax int             `json:"store_format_max,omitempty"`
-	ReducerVersion int             `json:"reducer_version,omitempty"`
-	Files          []File          `json:"files"`
+	SchemaVersion       int             `json:"schema_version"`
+	Channel             string          `json:"channel"`
+	ReleaseReady        bool            `json:"release_ready"`
+	Revision            string          `json:"source_revision"`
+	SourceDigest        string          `json:"source_archive_sha256"`
+	Platform            string          `json:"platform"`
+	GoVersion           string          `json:"build_go_version"`
+	NativeSmoke         json.RawMessage `json:"native_smoke"`
+	StoreFormatMin      int             `json:"store_format_min,omitempty"`
+	StoreFormatMax      int             `json:"store_format_max,omitempty"`
+	ReducerVersion      int             `json:"reducer_version,omitempty"`
+	RuntimeCapabilities []string        `json:"runtime_capabilities,omitempty"`
+	Files               []File          `json:"files"`
 }
 type Bundle struct {
 	Manifest       Manifest
@@ -144,7 +145,7 @@ func ParseArchive(raw []byte, kind, revision, platform string) (Bundle, error) {
 		return Bundle{}, c.Fail(c.InvalidArgument, "package manifest invalid")
 	}
 	m := result.Manifest
-	if m.SchemaVersion != 1 || m.Channel != "engineering" || m.ReleaseReady || m.Revision != revision || m.Platform != platform || !c.ValidDigest(m.SourceDigest) || len(m.Files) < 4 || len(m.Files)+1 != len(files) {
+	if m.SchemaVersion != 1 || m.Channel != "engineering" || m.ReleaseReady || m.Revision != revision || m.Platform != platform || !c.ValidDigest(m.SourceDigest) || len(m.Files) < 4 || len(m.Files)+1 != len(files) || validateRuntimeCapabilities(m.RuntimeCapabilities) != nil {
 		return Bundle{}, c.Fail(c.InvalidArgument, "package identity/inventory mismatch")
 	}
 	seen := map[string]bool{}

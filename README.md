@@ -21,7 +21,7 @@ Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension
 
 ## 1. İndirin ve kurun
 
-**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-90bc97ebc9318e3542ffbc2507b8cb346dae69e5) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
+**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-5e6a006ff6c0cde18caa8ba48e9341075275d6eb) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
 
 | Bilgisayarınız | Dosya |
 | --- | --- |
@@ -49,7 +49,7 @@ Linux / macOS:
 
 Main branch, son public paketten daha yeni geliştirmeler içerebilir. **Releases'ten indirilen pakette bütün main komutları bulunduğunu varsaymayın.** Güncel kaynak kodunu kullanmak için aşağıdaki [kaynaktan kurulum](#kaynaktan-kurulum) yolunu izleyin.
 
-Bu exact-source paket için üç native platformda yönetilen kurulum, aynı revizyonu yeniden kurma ve geri seçme, ardından yalnız yönetilen program dosyalarını kaldırma kabulü geçti. Farklı revizyonlar arası yükseltme/geri dönüş **NOT_RUN**; bu yayın baseline olarak pinlendi ve sonraki kaynak CI iki sürümlü akışı ayrıca ölçecek. `package install`, `status`, `rollback` ve `uninstall` adımları [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#yönetilen-kurulum) anlatılır.
+Bu exact-source paket için üç native platformda yönetilen kurulum, ilk offline görev, önceki public `90bc97` sürümünden yükseltme → geri dönüş → yeniden yükseltme ve yalnız yönetilen program dosyalarını kaldırma kabulü geçti. Mevcut görevin durumu ve dış store korundu. `package install`, `status`, `rollback` ve `uninstall` adımları [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#yönetilen-kurulum) anlatılır.
 
 ## 2. ChatGPT hesabınızla giriş yapın
 
@@ -108,6 +108,34 @@ Görev onay bekliyorsa arayüzü açın:
 ```
 
 Linux/macOS'ta aynı komut `./viber ui first-task --store "$store"` olur. Arayüzde `/requests` bekleyen önerileri gösterir. İncelediğiniz isteği `/respond REQUEST_ID approve` ile onaylayın, ardından `/resume` yazın. `/diff` değişiklikleri, `/status` durumu, `/help` mevcut komutları gösterir. `REQUEST_ID` yerine ekrandaki gerçek kimliği yazın.
+
+**Yeni main arayüzü:** `/` yazınca komut menüsü açılır. Bu menü ve aşağıdaki yeni bellek/analiz komutları public `5e6a006` paketinden sonraki geliştirmelerdir; kullanmak için [kaynaktan kurulum](#kaynaktan-kurulum) adımını izleyin.
+
+| Tuş / komut | Ne yapar? |
+| --- | --- |
+| `/`, ardından birkaç harf | Komutları gösterir ve filtreler |
+| ↑ / ↓ | Menüde komut seçer; menü kapalıyken giriş geçmişini gösterir |
+| Tab veya Enter | Seçilen komutu girişe tamamlar; kısmi seçim kendiliğinden çalışmaz |
+| Sonraki Enter | Tamamladığınız komutu çalıştırır; tam komut yazıp Enter da çalışır |
+| Esc | Menüyü kapatır, yazdığınızı korur |
+| Page Up / Page Down | Komut çıktısını kaydırır |
+| `/compact 4` | Son dört mesajı tutarak eski konuşmayı kaynak referanslarıyla arşivler |
+| `/clear` | Görünen çıktıyı temizler; görev geçmişi saklanır |
+| `/exit` veya `/quit` | Arayüzden ayrılır; arka plandaki görevi sürdürür |
+| Ctrl+C | İlk basışta pause; sonraki basışta cancel ister |
+
+Metin yapıştırmak komut çalıştırmaz. Normal metin göreve yeni yönlendirme olarak kaydedilir; kapsam değişikliği `/revise` ile açıkça yapılır. Ekran okuyucu veya basit terminal için `ui first-task --store … --line` kullanın.
+
+Görev içinde proje kararı kaydetmek ve API anahtarı olmadan kaynak analizi yapmak için:
+
+```text
+/memory record DECISION storage Yerel görev günlüğünde SQLite kullan
+/memory search SQLite
+/workers inventory,requirements
+/workers inventory,search TODO
+```
+
+Bellek sonuçları kaynak ve politika durumuna göre ACTIVE, STALE veya CONFLICT gösterir. Bunlar kullanıcı beyanıdır; doğrulama sonucu değildir. Düzeltme/saklamadan çıkarma için `/help` içindeki `correct`/`retire` biçimini ve sonuçtaki ID/digest değerlerini kullanın; işlemi kaydın oluşturulduğu görevde yapın. Aynı projenin diğer görevlerindeki kayıtlar elle aranabilir. Modele otomatik eklenen bellek yalnız mevcut görevin güncel kayıtlarıdır. `/workers` tamamlanmamış, boşta ve pending input/effect bulunmayan görevde 2–4 sabit yerel analiz çalıştırır; model çağırmaz ve görev bütçesine önceden yazar. [Detaylı kullanım ve sınırlar](docs/CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler).
 
 Programı yeniden açınca aynı task ve store ile durum/geçmiş okunabilir. Yeni görev için farklı bir `--task` kimliği kullanın.
 

@@ -198,30 +198,31 @@ type TaskWorkBudget struct {
 }
 
 type TaskState struct {
-	Deletion                *TaskDeletion    `json:"content_deletion,omitempty"`
-	WorkBudget              *TaskWorkBudget  `json:"work_budget,omitempty"`
-	DeliveryEffects         []DeliveryEffect `json:"delivery_effects,omitempty"`
-	GoalQueue               []GoalSchedule   `json:"goal_queue,omitempty"`
-	PromptQueue             []PromptRef      `json:"prompt_queue,omitempty"`
-	Resources               *ResourceAccount `json:"resource_account,omitempty"`
-	Tokens                  *TokenAccount    `json:"token_account,omitempty"`
-	DocumentDigest          string           `json:"document_digest,omitempty"`
-	BaselineDigest          string           `json:"baseline_digest,omitempty"`
-	CandidateDigest         string           `json:"candidate_digest,omitempty"`
-	SchemaVersion           int              `json:"schema_version"`
-	TaskID                  string           `json:"task_id"`
-	SpecVersion             int64            `json:"spec_version"`
-	Execution               ExecutionState   `json:"execution_state"`
-	Outcome                 Outcome          `json:"terminal_outcome"`
-	Quality                 Quality          `json:"quality_verdict"`
-	Fulfillment             Fulfillment      `json:"fulfillment_status"`
-	TaskSeq                 int64            `json:"task_seq"`
-	StoreSeq                int64            `json:"journal_seq"`
-	KernelGeneration        int64            `json:"kernel_generation"`
-	PolicyEpoch             int64            `json:"policy_epoch"`
-	InputBarrier            bool             `json:"input_barrier"`
-	PendingInputIDs         []string         `json:"pending_input_ids"`
-	OpenRequiredObligations int              `json:"open_required_obligations"`
+	Deletion                *TaskDeletion         `json:"content_deletion,omitempty"`
+	WorkBudget              *TaskWorkBudget       `json:"work_budget,omitempty"`
+	ReadWorkerAdmissions    []ReadWorkerAdmission `json:"read_worker_admissions,omitempty"`
+	DeliveryEffects         []DeliveryEffect      `json:"delivery_effects,omitempty"`
+	GoalQueue               []GoalSchedule        `json:"goal_queue,omitempty"`
+	PromptQueue             []PromptRef           `json:"prompt_queue,omitempty"`
+	Resources               *ResourceAccount      `json:"resource_account,omitempty"`
+	Tokens                  *TokenAccount         `json:"token_account,omitempty"`
+	DocumentDigest          string                `json:"document_digest,omitempty"`
+	BaselineDigest          string                `json:"baseline_digest,omitempty"`
+	CandidateDigest         string                `json:"candidate_digest,omitempty"`
+	SchemaVersion           int                   `json:"schema_version"`
+	TaskID                  string                `json:"task_id"`
+	SpecVersion             int64                 `json:"spec_version"`
+	Execution               ExecutionState        `json:"execution_state"`
+	Outcome                 Outcome               `json:"terminal_outcome"`
+	Quality                 Quality               `json:"quality_verdict"`
+	Fulfillment             Fulfillment           `json:"fulfillment_status"`
+	TaskSeq                 int64                 `json:"task_seq"`
+	StoreSeq                int64                 `json:"journal_seq"`
+	KernelGeneration        int64                 `json:"kernel_generation"`
+	PolicyEpoch             int64                 `json:"policy_epoch"`
+	InputBarrier            bool                  `json:"input_barrier"`
+	PendingInputIDs         []string              `json:"pending_input_ids"`
+	OpenRequiredObligations int                   `json:"open_required_obligations"`
 }
 type Event struct {
 	SchemaVersion    int    `json:"schema_version"`
@@ -240,6 +241,7 @@ type Event struct {
 type EventPayload struct {
 	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
 	WorkBudget          *TaskWorkBudget           `json:"work_budget,omitempty"`
+	ReadWorkerAdmission *ReadWorkerAdmission      `json:"read_worker_admission,omitempty"`
 	DeliveryEffect      *DeliveryEffect           `json:"delivery_effect,omitempty"`
 	Goal                *GoalMutation             `json:"goal,omitempty"`
 	Verification        *VerificationFinalization `json:"verification,omitempty"`

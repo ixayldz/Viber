@@ -10,6 +10,7 @@ import (
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/owner"
+	"github.com/ixayldz/Viber/internal/tui"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,6 +37,12 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 	case agent.RetentionOptions:
 		id = value.CommandID
 	case agent.GoalCommand:
+		id = value.CommandID
+	case agent.ReadWorkersRequest:
+		id = value.OperationID
+	case agent.ContinuityCommand:
+		id = value.CommandID
+	case projectMemoryMutationRequest:
 		id = value.CommandID
 	}
 	task := u.task
@@ -136,6 +143,76 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	command, arg, _ := strings.Cut(text, " ")
 	arg = strings.TrimSpace(arg)
 	switch command {
+	case "/clear":
+		if arg != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/clear takes no arguments")
+		}
+		return "Displayed output cleared; task history and source files are retained.", false, nil
+	case "/compact":
+		keep := 4
+		if arg != "" {
+			var err error
+			keep, err = strconv.Atoi(arg)
+			if err != nil || keep < 2 || keep > 64 {
+				return "", false, c.Fail(c.InvalidArgument, "/compact [KEEP_RECENT] requires 2..64")
+			}
+		}
+		view, err := u.status(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		id, err := resolveCommandID("")
+		if err != nil {
+			return "", false, err
+		}
+		raw, err := u.call(ctx, "context-edit", agent.ContinuityCommand{CommandID: id, TaskID: u.task, ExpectedTaskSeq: view.State.TaskSeq, Action: "compact", Keep: keep})
+		return string(raw), false, err
+	case "/memory":
+		return u.memoryCommand(ctx, arg)
+	case "/workers":
+		view, err := u.status(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		kinds, query, _ := strings.Cut(arg, " ")
+		if kinds == "" {
+			kinds = "inventory,requirements"
+		}
+		id, err := resolveCommandID("")
+		if err != nil {
+			return "", false, err
+		}
+		workers := []agent.ReadWorkerKind{}
+		for _, kind := range strings.Split(kinds, ",") {
+			workers = append(workers, agent.ReadWorkerKind(strings.TrimSpace(kind)))
+		}
+		raw, err := u.call(ctx, "read-workers", agent.ReadWorkersRequest{OperationID: id, CandidateDigest: view.State.CandidateDigest, ExpectedDocumentDigest: view.State.DocumentDigest, Workers: workers, Query: query, TimeoutMillis: 2000})
+		if err != nil {
+			return "", false, err
+		}
+		var result agent.ReadWorkersResult
+		if err = c.DecodeStrict(raw, &result); err != nil {
+			return "", false, err
+		}
+		var summary strings.Builder
+		fmt.Fprintf(&summary, "Local read-only analysis: %s\nParent charge: %d steps, %d calls, %d ms ceiling\n", result.Status, result.Charge.Admission.ChargedSteps, result.Charge.Admission.ChargedToolCalls, result.Charge.Admission.ChargedActiveMillis)
+		for _, worker := range result.Workers {
+			switch {
+			case worker.Inventory != nil:
+				fmt.Fprintf(&summary, "Inventory: %d files, %d bytes\n", worker.Inventory.Files, worker.Inventory.TotalBytes)
+			case worker.GoGraph != nil:
+				fmt.Fprintf(&summary, "Go graph: %d parsed files, %d nodes, %d edges; %s\n", worker.GoGraph.ParsedFiles, worker.GoGraph.Nodes, worker.GoGraph.Edges, worker.GoGraph.Coverage)
+			case worker.Requirements != nil:
+				fmt.Fprintf(&summary, "Requirements: %d total, %d required\n", worker.Requirements.Total, worker.Requirements.Required)
+			case worker.Search != nil:
+				fmt.Fprintf(&summary, "Search: %d displayed hits\n", len(worker.Search.Hits))
+				for _, hit := range worker.Search.Hits[:min(5, len(worker.Search.Hits))] {
+					fmt.Fprintf(&summary, "  %s:%d\n", hit.Path, hit.Line)
+				}
+			}
+		}
+		summary.WriteString("Source hints are advisory; required checks remain in force.")
+		return summary.String(), false, nil
 	case "/retention":
 		if arg == "" {
 			raw, err := u.call(ctx, "retention-status", nil)
@@ -189,10 +266,10 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		}
 		raw, err := u.call(ctx, action, nil)
 		return string(raw), false, err
-	case "/quit", "/detach":
+	case "/quit", "/detach", "/exit":
 		return "UI detached; background task continues.", true, nil
-	case "/help":
-		return "/status /diff /plan /pause /resume /cancel /model ID /queue [add TEXT|remove ID|activate ID] /goal [add CHILD_ID TEXT|cancel ID|activate ID|recover ID] /context /why /evidence /budget /capacity [replenish|retire-operations] /retention [keep REV|expires UTC REV CONSENT|run-due] /trace /requests /respond ID approve|reject /revise [FRESH_FIXTURE] /read PATH /quit\nPlain text records steering and pauses; /queue adds future steering on this task, while /goal schedules a separate child task from the captured source snapshot. @file selects captured source. /resume starts a detached invocation. Capacity is an instant observation; replenish restores only bounded control reserve. Retire-operations removes only inactive typed restore leases; owner scopes, UNKNOWN effects and process fences are retained. Retention defaults to KEEP; expires requires explicit managed-content deletion consent and the current revision. Entire shared backups can be removed, including other tasks' restore paths; advancing the system UTC clock can trigger expiry early. Due expiry preserves risk and waits for quiescence. Candidate-only delivery is available; live restore/apply needs its exclusive backend.", false, nil
+	case "/", "/help":
+		return tui.CommandHelp() + "\nPlain text records steering and pauses. @file selects captured source. /resume starts background work. /quit detaches without cancellation. Retention defaults to KEEP; expiry requires explicit deletion consent and the current revision. Backups shared with other tasks can also be removed by consented expiry. Cancel does not undo source files. Review/diff/export remains the default delivery path.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")

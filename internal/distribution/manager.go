@@ -202,7 +202,7 @@ func (m *Manager) version(revision, digest string) (Manifest, error) {
 	if err != nil {
 		return manifest, err
 	}
-	if c.DecodeStrict(raw, &manifest) != nil || manifest.Revision != revision || manifest.Platform != runtime.GOOS+"/"+runtime.GOARCH || manifest.SchemaVersion != 1 || manifest.ReleaseReady || manifest.Channel != "engineering" || c.HashBytes(raw) != digest {
+	if c.DecodeStrict(raw, &manifest) != nil || manifest.Revision != revision || manifest.Platform != runtime.GOOS+"/"+runtime.GOARCH || manifest.SchemaVersion != 1 || manifest.ReleaseReady || manifest.Channel != "engineering" || c.HashBytes(raw) != digest || validateRuntimeCapabilities(manifest.RuntimeCapabilities) != nil {
 		return manifest, c.Fail(c.StoreIntegrityError, "installed manifest identity changed")
 	}
 	if len(manifest.Files) > MaxFiles {
@@ -285,7 +285,7 @@ func (m *Manager) Status() (Status, error) {
 	return s, nil
 }
 func compatible(m Manifest) bool {
-	return m.StoreFormatMin > 0 && m.StoreFormatMin <= 2 && m.StoreFormatMax >= 2 && m.StoreFormatMax <= 2 && m.ReducerVersion == c.ReducerVersion
+	return m.StoreFormatMin > 0 && m.StoreFormatMin <= 2 && m.StoreFormatMax >= 2 && m.StoreFormatMax <= 2 && m.ReducerVersion == c.ReducerVersion && validateRuntimeCapabilities(m.RuntimeCapabilities) == nil
 }
 func (m *Manager) publish(state Status, selection Selection) (Status, error) {
 	selection.SchemaVersion = 1
@@ -306,11 +306,28 @@ func (m *Manager) publish(state Status, selection Selection) (Status, error) {
 
 // Install only accepts the already-verified immutable bundle bytes. Verification
 // is performed by the CLI on the same byte snapshot before this method is called.
-func (m *Manager) Install(ctx context.Context, bundle Bundle) (Status, error) {
-	state, err := m.Status()
+func (m *Manager) Install(ctx context.Context, bundle Bundle) (state Status, resultErr error) {
+	state, resultErr = m.Status()
+	if resultErr != nil {
+		return state, resultErr
+	}
+	manifest, err := verifiedBundleManifest(bundle)
 	if err != nil {
 		return state, err
 	}
+	locked, required, err := m.lockRegisteredStoreCapabilities(ctx)
+	if err != nil {
+		return state, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, closeStoreLocks(locked)) }()
+	if err = requireRuntimeCapabilities(manifest, required); err != nil {
+		return state, err
+	}
+	return m.install(ctx, bundle, state)
+}
+
+func (m *Manager) install(ctx context.Context, bundle Bundle, state Status) (Status, error) {
+	var err error
 	if err = ctx.Err(); err != nil {
 		return state, err
 	}
@@ -411,11 +428,21 @@ func (m *Manager) Install(ctx context.Context, bundle Bundle) (Status, error) {
 	}
 	return m.publish(state, Selection{Action: "INSTALL", Revision: bundle.Manifest.Revision, ManifestDigest: bundle.ManifestDigest, ArchiveDigest: bundle.ArchiveDigest})
 }
-func (m *Manager) Rollback(revision string) (Status, error) {
-	state, err := m.Status()
+func (m *Manager) Rollback(revision string) (state Status, resultErr error) {
+	state, resultErr = m.Status()
+	if resultErr != nil {
+		return state, resultErr
+	}
+	locked, required, err := m.lockRegisteredStoreCapabilities(context.Background())
 	if err != nil {
 		return state, err
 	}
+	defer func() { resultErr = errors.Join(resultErr, closeStoreLocks(locked)) }()
+	return m.rollback(revision, state, required)
+}
+
+func (m *Manager) rollback(revision string, state Status, required []string) (Status, error) {
+	var err error
 	if !Revision(revision) {
 		return state, c.Fail(c.InvalidArgument, "exact installed rollback revision required")
 	}
@@ -430,6 +457,9 @@ func (m *Manager) Rollback(revision string) (Status, error) {
 	}
 	if !compatible(manifest) {
 		return state, c.Fail(c.UnsupportedCapability, "rollback incompatible with current store/reducer")
+	}
+	if err = requireRuntimeCapabilities(manifest, required); err != nil {
+		return state, err
 	}
 	archive := ""
 	for i := 1; i <= state.Active.Sequence; i++ {

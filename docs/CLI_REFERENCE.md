@@ -686,6 +686,42 @@ Secretsiz global config varsayılan olarak OS user config dizinindeki `viber/con
 
 Bu arayüz 0.9 engineering dilimidir. Generic extension/MCP, full verifier/framework kapsamı, exclusive live apply/restore, tam lifecycle deletion ve beta/platform kabulü ayrı geliştirme gerektirir. [Yürütme planı](KEYLESS_EXECUTION_PLAN.md) gerçek kapsamı, [ADR 0012](adr/0012-queue-terminal-and-config.md) sınırları kaydeder.
 
+## Proje talimatları, bellek ve yerel analizler
+
+Bu bölüm public `5e6a006` paketinden sonraki main geliştirmesidir. Yeni binary için kaynaktan derleyin; eski pakette bu komutları varsaymayın. [Uygulama planı](COMPETITOR_ADOPTION_IMPLEMENTATION_PLAN.md) ve [kabul sınırları](CAPABILITIES.md) kaynak profillerini ayırır.
+
+TUI'da `/` komut paletini açar; yazdıkça filtreler. ↑/↓ seçer, Tab/Enter komutu girişe koyar, ikinci Enter çalıştırır. Tam komut yazıp Enter doğrudan çalışır. Esc taslağı koruyarak menüyü kapatır. Argüman placeholder'ları girişe kopyalanmaz. Yapıştırma çalıştırmaz; Page Up/Down çıktı içinde kaydırır. `/compact [KEEP_RECENT]` varsayılan son dört mesajı tutar (izin verilen değer 2–64), eski tamamlanmış konuşma bloklarını kaynakla bağlı arşive dönüştürür. Yetersiz geçmiş veya unsettled tool sınırı açıkça reddedilir. `/clear` yalnız görünen çıktıyı temizler; `/exit`, `/quit` ve `/detach` UI'dan ayrılır. Background owner'ın durması veya task cancellation değildir.
+
+Yakalanan projenin `AGENTS.override.md` / `AGENTS.md` dosyaları model isteğine otomatik eklenir. Aynı dizinde override önceliklidir; root→hedef dizin sırasıyla, mevcut candidate hash'i ve read scope üzerinden okunur. Host/global dosyalar okunmaz. Dosya başına 4 KiB, toplam 16 KiB metin ve 32 dosya sınırı vardır; aşım PARTIAL/omission olarak bildirilir. Talimat metni permissions, spec, protected checks veya verification yetkisi vermez. Compaction ve model-switch token preflight aynı bağlamı sayar.
+
+Bellek kullanıcı tarafından kaydedilen FACT, DECISION veya CONVENTION beyanıdır. Görev artifact'larına ve append-only journal'a bağlanır:
+
+```sh
+./viber project-memory record --store STORE --task TASK --command-id memory-001 --kind DECISION --key storage --text 'Use SQLite for the local journal' --json
+./viber project-memory search --store STORE --task TASK --query SQLite --limit 20 --json
+./viber project-memory correct --store STORE --task ORIGIN_TASK --command-id memory-002 --id ENTRY_ID --digest ENTRY_DIGEST --kind DECISION --key storage --text 'Corrected decision' --json
+./viber project-memory retire --store STORE --task ORIGIN_TASK --command-id memory-003 --id ENTRY_ID --digest ENTRY_DIGEST --json
+```
+
+Windows'ta `./viber` yerine `.\viber.exe` kullanın; STORE/TASK/ENTRY değerlerini gerçek çıktıdan alın. Mutation için stabil `--command-id` gerekir; retry aynı komutu ikinci kez yazmaz. TUI karşılıkları `/memory`, `/memory search QUERY`, `/memory record KIND KEY TEXT`, `/memory correct ID DIGEST KIND KEY TEXT` ve `/memory retire ID DIGEST` biçimindedir.
+
+Arama aynı store ve exact project scope içinde diğer görevleri de okuyabilir. Kaynak snapshot, baseline, güncel policy ve origin task değişirse kayıt STALE olur; aynı key'in çelişen içerikleri CONFLICT olur. Policy artık içeriği göstermeye izin vermiyorsa sonuç metni redacted olur. Correction/retire yalnız origin task üzerinden yapılır. Retire raw purge değildir: eski event audit'te kalır. Task-content deletion, backup/restore ve GC kayıtların mevcut artifact closure'ını kullanır.
+
+Model bağlamına otomatik ekleme **SAME_TASK_ONLY**: en çok sekiz ACTIVE kayıt, 8 KiB kayıt metni ve 12 KiB envelope. Cross-task kayıtların otomatik prompt kopyası kapalıdır; önce bu türetilmiş kopyalar için kayıtlı privacy lineage gerekir. Elle arama, bağımsız doğrulama veya otomatik global öğrenme sayılmaz.
+
+Yerel analiz çağrısı exact candidate digest ister:
+
+```sh
+./viber status TASK --store STORE --json
+./viber read-workers TASK --store STORE --candidate CANDIDATE_DIGEST --workers inventory,requirements --timeout-ms 2000 --json
+./viber read-workers TASK --store STORE --candidate CANDIDATE_DIGEST --workers inventory,search --query TODO --json
+./viber read-workers TASK --store STORE --candidate CANDIDATE_DIGEST --workers inventory,go-graph --changed-paths internal/example.go --json
+```
+
+`CANDIDATE_DIGEST` status'tan alınır. Görev nonterminal, quiescent ve pending input/effect içermeyen durumda olmalıdır; bitmiş görev yeniden çalıştırılmaz. TUI'da `/workers` varsayılan `inventory,requirements`; `/workers inventory,search TODO` literal arama yapar. İki ila dört farklı sabit analyzer seçilir: inventory, go-graph, requirements, search. Bunlar local Go fonksiyonlarıdır; LLM, subprocess veya full multi-agent orchestration değildir. Read policy ve active plan scope dışında byte hydrate edilmez. Maksimum 10.000 dosya / 32 MiB input, 64 KiB output, 128 search hit; timeout 250–30.000 ms ve cooperative cancellation'dır. Dispatch'ten **önce** worker sayısı kadar step/tool-call ve tam timeout parent bütçesine kalıcı yazılır; cancel/crash ücretsiz retry oluşturmaz. Child allocation için tutulmuş headroom korunur. Stale source sonucu discarded olur; analyzer sonucu advisory'dir, PASS verdict veya required-check azaltma yetkisi değildir.
+
+Yeni paket manifesti `project_memory_v1` ve `read_workers_v1` runtime capability'lerini taşır. Yönetilen install/rollback kayıtlı store'ları OS owner lock altında tarar; kullanılan capability'yi desteklemeyen paketi seçmez. Legacy-only store uyumlu eski sürümle çalışabilir. Schema/reducer migration yapılmaz. Eski bootstrap yeni manifesti tanımıyorsa yeni doğrulanmış portable binary'yi prefix dışında bootstrap olarak kullanın.
+
 ## Bağımsız V4 davranış doğrulaması
 
 Önceden kurulu pinned Linux Docker image'ıyla, model API anahtarı olmadan:

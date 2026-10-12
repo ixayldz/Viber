@@ -123,6 +123,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		}
 		next.PendingInputIDs = append([]string{}, state.PendingInputIDs...)
 		next.PromptQueue = append([]c.PromptRef{}, state.PromptQueue...)
+		next.ReadWorkerAdmissions = append([]c.ReadWorkerAdmission{}, state.ReadWorkerAdmissions...)
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
@@ -167,6 +168,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		case "SessionRecorded":
 			if event.Actor != "kernel" || !nonterminal(next.Execution) || !c.ValidDigest(p.DocumentDigest) {
 				return next, c.Fail(c.InvalidArgument, "invalid durable session update")
+			}
+			next.DocumentDigest = p.DocumentDigest
+		case "ReadWorkersAdmitted":
+			if event.Actor != "kernel" || !nonterminal(next.Execution) || !c.ValidDigest(p.DocumentDigest) {
+				return next, c.Fail(c.InvalidArgument, "invalid read-worker budget admission")
 			}
 			next.DocumentDigest = p.DocumentDigest
 		case "DeliveryEffectRecorded":
@@ -524,6 +530,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 	if p.Deletion != nil && event.Type != "TaskContentDeleted" && event.Type != "TaskDeletionPurged" {
 		return next, c.Fail(c.PolicyDenied, "content deletion only allowed in explicit deletion events")
 	}
+	if p.ReadWorkerAdmission != nil && event.Type != "ReadWorkersAdmitted" {
+		return next, c.Fail(c.PolicyDenied, "read-worker budget admission only allowed in its explicit event")
+	}
 	if p.DeliveryEffect != nil && event.Type != "DeliveryEffectRecorded" && event.Type != "DeliveryEffectReconciled" && event.Type != "DeliveryAuthorityRebound" {
 		return next, c.Fail(c.PolicyDenied, "delivery effect only allowed in its explicit durable event")
 	}
@@ -558,6 +567,11 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 	}
 	if err := c.ValidateResourceTokenPair(next.Resources, p.Resources, p.Tokens); err != nil {
 		return next, err
+	}
+	if event.Type == "ReadWorkersAdmitted" {
+		if err := applyReadWorkerAdmission(state, &next, event, p); err != nil {
+			return next, err
+		}
 	}
 	if err := applyTaskWorkBudget(state, &next, event, p); err != nil {
 		return next, err

@@ -115,7 +115,7 @@ func taskWorkBudgetUpdateAllowed(event c.Event, state *c.TaskState) bool {
 		return event.Type == "TaskCreated" && event.Actor == "kernel"
 	}
 	switch event.Type {
-	case "SessionRecorded", "CandidateRecorded":
+	case "SessionRecorded", "CandidateRecorded", "ReadWorkersAdmitted":
 		return event.Actor == "kernel"
 	case "ModelRiskReconciled", "NativeRiskReconciled", "NativeCleanupObserved":
 		return event.Actor == "user"
@@ -125,7 +125,7 @@ func taskWorkBudgetUpdateAllowed(event c.Event, state *c.TaskState) bool {
 }
 
 func applyTaskWorkBudget(state *c.TaskState, next *c.TaskState, event c.Event, payload c.EventPayload) error {
-	updateEvent := event.Type == "SessionRecorded" || event.Type == "CandidateRecorded" ||
+	updateEvent := event.Type == "SessionRecorded" || event.Type == "CandidateRecorded" || event.Type == "ReadWorkersAdmitted" ||
 		event.Type == "ModelRiskReconciled" || event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved"
 	if payload.WorkBudget == nil {
 		if state != nil && state.WorkBudget != nil && updateEvent {
