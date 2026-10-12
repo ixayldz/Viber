@@ -705,11 +705,14 @@ Quiescent tamamlanmış veya yeniden açılmış görevde de bellek yönetilebil
 ./viber project-memory search --store STORE --task TASK --query SQLite --limit 20 --json
 ./viber project-memory correct --store STORE --task ORIGIN_TASK --command-id memory-002 --id ENTRY_ID --digest ENTRY_DIGEST --kind DECISION --key storage --text 'Corrected decision' --json
 ./viber project-memory retire --store STORE --task ORIGIN_TASK --command-id memory-003 --id ENTRY_ID --digest ENTRY_DIGEST --json
+./viber project-memory copy --store STORE --from SOURCE_TASK --to TARGET_TASK --command-id memory-copy-001 --id ENTRY_ID --digest ENTRY_DIGEST --json
 ```
 
-Windows'ta `./viber` yerine `.\viber.exe` kullanın; STORE/TASK/ENTRY değerlerini gerçek çıktıdan alın. Mutation için stabil `--command-id` gerekir; retry aynı komutu ikinci kez yazmaz. TUI karşılıkları `/memory`, `/memory search QUERY`, `/memory record KIND KEY TEXT`, `/memory correct ID DIGEST KIND KEY TEXT` ve `/memory retire ID DIGEST` biçimindedir.
+Windows'ta `./viber` yerine `.\viber.exe` kullanın; STORE/TASK/ENTRY değerlerini gerçek çıktıdan alın. Mutation için stabil `--command-id` gerekir; retry aynı komutu ikinci kez yazmaz. Copy yalnız kullanıcının verdiği exact source task, entry ID ve digest'i pinler; proje genelinde arama yapmaz. Kaynak ve hedef aynı privacy authority/project içinde olmalıdır. TUI karşılıkları `/memory`, `/memory search QUERY`, `/memory record KIND KEY TEXT`, `/memory correct ID DIGEST KIND KEY TEXT`, `/memory retire ID DIGEST` ve açık hedef task olarak arayüzde açık olan task'ı kullanan `/memory copy SOURCE_TASK ITEM_ID DIGEST` biçimindedir.
 
 Arama aynı store ve exact project scope içinde diğer görevleri de okuyabilir. Kaynak snapshot, baseline, güncel policy ve origin task değişirse kayıt STALE olur; aynı key'in çelişen içerikleri CONFLICT olur. Policy artık içeriği göstermeye izin vermiyorsa sonuç metni redacted olur. Correction/retire yalnız origin task üzerinden yapılır. Retire raw purge değildir: eski event audit'te kalır. Task-content deletion, backup/restore ve GC kayıtların mevcut artifact closure'ını kullanır.
+
+Copy receipt kaynak ve hedef task'ı, kaynak entry ID/digest'ini ve target pin ID/digest'ini gösterir. Receipt'in `COPIED` durumu değişmez; bu, kopyalama işleminin o zamanki sonucudur. Hedef task kaydı kaynak entry'yi pinlediğinden hedef pin'i koruduğu sürece kaynak task'ın deletion planı engellenir. Pin'in hâlen durup durmadığını öğrenmek için güncel deletion/retention durumunu kontrol edin. Copy açık bir lineage kaydıdır, purge değildir; harici backup, dışa aktarılmış dosya veya fiziksel medyanın silindiğini kanıtlamaz.
 
 Model bağlamına otomatik ekleme **SAME_TASK_ONLY**: en çok sekiz ACTIVE kayıt, 8 KiB kayıt metni ve 12 KiB envelope. Cross-task kayıtların otomatik prompt kopyası kapalıdır; önce bu türetilmiş kopyalar için kayıtlı privacy lineage gerekir. Elle arama, bağımsız doğrulama veya otomatik global öğrenme sayılmaz.
 
@@ -724,7 +727,15 @@ Yerel analiz çağrısı exact candidate digest ister:
 
 `CANDIDATE_DIGEST` status'tan alınır. Görev nonterminal, quiescent ve pending input/effect içermeyen durumda olmalıdır; bitmiş görev yeniden çalıştırılmaz. TUI'da `/workers` varsayılan `inventory,requirements`; `/workers inventory,search TODO` literal arama yapar. İki ila dört farklı sabit analyzer seçilir: inventory, go-graph, requirements, search. Bunlar local Go fonksiyonlarıdır; LLM, subprocess veya full multi-agent orchestration değildir. Read policy ve active plan scope dışında byte hydrate edilmez. Maksimum 10.000 dosya / 32 MiB input, 64 KiB output, 128 search hit; timeout 250–30.000 ms ve cooperative cancellation'dır. Dispatch'ten **önce** worker sayısı kadar step/tool-call ve tam timeout parent bütçesine kalıcı yazılır; cancel/crash ücretsiz retry oluşturmaz. Child allocation için tutulmuş headroom korunur. Stale source sonucu discarded olur; analyzer sonucu advisory'dir, PASS verdict veya required-check azaltma yetkisi değildir.
 
-Yeni paket manifesti `project_memory_v1` ve `read_workers_v1` runtime capability'lerini taşır. Yönetilen install/rollback kayıtlı store'ları OS owner lock altında tarar; kullanılan capability'yi desteklemeyen paketi seçmez. Legacy-only store uyumlu eski sürümle çalışabilir. Schema/reducer migration yapılmaz. Eski bootstrap yeni manifesti tanımıyorsa yeni doğrulanmış portable binary'yi prefix dışında bootstrap olarak kullanın.
+Kayıtlı bir `fs_search` çağrısı/yanıt çiftini bağımsız değerlendirme için dışa aktarın:
+
+```sh
+./viber retrieval-report TASK --store STORE --call-id SEARCH_CALL_ID --json
+```
+
+`SEARCH_CALL_ID` görevin kayıtlı mesajlarındaki model çağrı kimliğidir. Rapor yalnız halihazırda korunmuş, eşlenmiş ve başarılı bir ranked arama sayfasını dışa aktarır: literal mod, hatalı yanıt, compaction sonrası geçmiş ve pending/unknown effect reddedilir. Rapor anlık görev belgesine bağlıdır; task/policy/candidate değişirse `STALE_AUTHORITY` ile yeniden kontrol reddedilir. Rapor mevcut policy'nin okuduğu kaynak kümelerini ve policy digest'ini yeniden türetir; read scope dışındaki kaynaklar asla hydrate edilmez ve rapor bunlara bağlı değildir. Çıktı `release_evidence`, `adoption_allowed` veya kalite iddiası değildir; [çevrimdışı puanlama aracı](RETRIEVAL_EVALUATION.md) ile birlikte kullanılır.
+
+Yeni paket manifesti `project_memory_copy_v1`, `project_memory_v1` ve `read_workers_v1` runtime capability'lerini taşır. Yönetilen install/rollback kayıtlı store'ları OS owner lock altında tarar; kullanılan capability'yi desteklemeyen paketi seçmez. Bellek kopyası kullanılmış bir store, kopya desteklemeyen eski pakete geri alınamaz. Legacy-only store uyumlu eski sürümle çalışabilir. Schema/reducer migration yapılmaz. Eski bootstrap yeni manifesti tanımıyorsa yeni doğrulanmış portable binary'yi prefix dışında bootstrap olarak kullanın.
 
 Legacy/partial pakette launcher'ın çalıştırma ön kontrolü anlık durumdur; child kendi store owner lock'unu alır. Aynı store'u araya giren doğrudan başka bir binary'nin değiştirmesine karşı atomik eski-süreç handoff desteği yoktur; eski decoder yeni kayıtları reddeder. Yeni tam capability paketi aktif owner'a `/status`/UI ile bağlanabilir. Install/rollback lock'ları seçimin yayınlanmasına kadar tutulur ve Ctrl+C ile scan iptal edilebilir.
 

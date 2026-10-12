@@ -82,6 +82,27 @@ type ManagedCopy struct {
 	RestoreWatermark          int64         `json:"restore_watermark,omitempty"`
 	RestoreCurrentWatermark   int64         `json:"restore_current_watermark,omitempty"`
 }
+type privacyMemoryScope struct {
+	InstanceID   string `json:"instance_id"`
+	Directory    string `json:"directory"`
+	PhysicalRoot string `json:"physical_root"`
+}
+type privacyMemoryCopy struct {
+	Scope                privacyMemoryScope  `json:"scope"`
+	Origin               ProjectMemorySource `json:"origin"`
+	Target               ProjectMemorySource `json:"target"`
+	TransferPolicyDigest string              `json:"transfer_policy_digest"`
+	RequestDigest        string              `json:"request_digest"`
+	CopyDigest           string              `json:"copy_digest"`
+	CopyBytes            int64               `json:"copy_bytes"`
+	TargetDocument       string              `json:"target_document_digest"`
+	SourceItemID         string              `json:"source_item_id"`
+	SourceItemDigest     string              `json:"source_item_digest"`
+	CommandID            string              `json:"command_id"`
+	CopyID               string              `json:"copy_id"`
+	TargetTaskSequence   int64               `json:"target_task_sequence"`
+	Status               string              `json:"status"`
+}
 type privacyRecord struct {
 	SchemaVersion int                     `json:"schema_version"`
 	Sequence      int64                   `json:"sequence"`
@@ -91,21 +112,101 @@ type privacyRecord struct {
 	Command       *DeletionCommand        `json:"command,omitempty"`
 	Attempt       *privacyAttempt         `json:"attempt,omitempty"`
 	Retention     *privacyRetentionRecord `json:"retention,omitempty"`
+	MemoryCopy    *privacyMemoryCopy      `json:"memory_copy,omitempty"`
 }
 type privacyView struct {
-	Sequence           int64
-	RecordCount        int64
-	Tail               string
-	Watermark          int64
-	Copies             []ManagedCopy
-	CopySequences      map[string]int64
-	Deletions          map[string]DeletionCommand
-	DeletionSequences  map[string]int64
-	Attempts           []privacyAttempt
-	AttemptSequences   map[string]int64
-	Retentions         map[string]privacyRetentionRecord
-	RetentionSequences map[string]int64
-	RetentionCommands  map[string]privacyRetentionRecord
+	Sequence            int64
+	RecordCount         int64
+	Tail                string
+	Watermark           int64
+	Copies              []ManagedCopy
+	CopySequences       map[string]int64
+	Deletions           map[string]DeletionCommand
+	DeletionSequences   map[string]int64
+	Attempts            []privacyAttempt
+	AttemptSequences    map[string]int64
+	Retentions          map[string]privacyRetentionRecord
+	RetentionSequences  map[string]int64
+	RetentionCommands   map[string]privacyRetentionRecord
+	MemoryCopies        []privacyMemoryCopy
+	MemoryCopySequences map[string]int64
+	MemoryCopyCommands  map[string]string
+}
+
+func validPrivacyMemoryScope(scope privacyMemoryScope) bool {
+	if len(scope.InstanceID) != 32 || !filepath.IsAbs(scope.Directory) || len(scope.Directory) > 2048 || !c.ValidDigest(scope.PhysicalRoot) {
+		return false
+	}
+	for _, r := range scope.InstanceID {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
+}
+
+func (copy privacyMemoryCopy) validate() error {
+	if !validPrivacyMemoryScope(copy.Scope) || copy.Origin.TaskID == "" || copy.Target.TaskID == "" || copy.Origin.TaskID == copy.Target.TaskID ||
+		copy.Origin.ProjectDigest != copy.Target.ProjectDigest || copy.TargetTaskSequence != copy.Target.TaskSeq+1 || copy.TargetTaskSequence < 2 ||
+		copy.TargetTaskSequence > 1<<53 || !c.ValidDigest(copy.RequestDigest) || !c.ValidDigest(copy.CopyDigest) || !c.ValidDigest(copy.TargetDocument) ||
+		!c.ValidDigest(copy.TransferPolicyDigest) || copy.CopyBytes < 1 || copy.CopyBytes > projectMemoryEventMaxBytes ||
+		!projectMemoryCopyIDPattern.MatchString(copy.CopyID) || copy.CopyID != "pmcopy-"+copy.RequestDigest[:32] ||
+		!projectMemoryIDPattern.MatchString(copy.SourceItemID) || !c.ValidDigest(copy.SourceItemDigest) || !validProjectMemoryCommandID(copy.CommandID) ||
+		(copy.Status != "PREPARED" && copy.Status != "ACTIVE") {
+		return c.Fail(c.StoreIntegrityError, "invalid privacy project memory copy lineage")
+	}
+	for _, source := range []ProjectMemorySource{copy.Origin, copy.Target} {
+		if _, err := artifact.ScopedBlobPath(source.TaskID, c.HashBytes(nil)); err != nil || source.TaskSeq < 1 || source.TaskSeq > 1<<53 || source.PolicyEpoch < 0 ||
+			!c.ValidDigest(source.DocumentDigest) || !c.ValidDigest(source.BaselineDigest) || !c.ValidDigest(source.CandidateDigest) ||
+			!c.ValidDigest(source.ProjectDigest) || !c.ValidDigest(source.PolicyDigest) {
+			return c.Fail(c.StoreIntegrityError, "invalid privacy project memory source cursor")
+		}
+	}
+	return nil
+}
+
+func samePrivacyMemoryCopy(left, right privacyMemoryCopy) bool {
+	left.Status, right.Status = "", ""
+	leftDigest, _ := c.Digest(left)
+	rightDigest, _ := c.Digest(right)
+	return leftDigest == rightDigest
+}
+
+func privacyMemoryScopeFromOwner(scope privacyScope) privacyMemoryScope {
+	return privacyMemoryScope{InstanceID: scope.InstanceID, Directory: scope.Directory, PhysicalRoot: scope.PhysicalRoot}
+}
+
+func privacyCopyWouldCycle(view privacyView, _ privacyMemoryScope, sourceTask, targetTask string) bool {
+	if sourceTask == targetTask {
+		return true
+	}
+	children := make(map[string][]string, len(view.MemoryCopies)+len(view.Attempts))
+	for _, copy := range view.MemoryCopies {
+		children[copy.Origin.TaskID] = append(children[copy.Origin.TaskID], copy.Target.TaskID)
+	}
+	for _, attempt := range view.Attempts {
+		children[attempt.ParentTask] = append(children[attempt.ParentTask], attempt.ChildTask)
+	}
+	seen := map[string]bool{}
+	stack := []string{targetTask}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		task := stack[last]
+		stack = stack[:last]
+		if task == sourceTask {
+			return true
+		}
+		if seen[task] {
+			continue
+		}
+		seen[task] = true
+		for _, child := range children[task] {
+			if !seen[child] {
+				stack = append(stack, child)
+			}
+		}
+	}
+	return false
 }
 
 func (authority PrivacyAuthority) validate() error {
@@ -222,6 +323,20 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			reservedDeletionIDs[key] = true
 		}
 	}
+	for commandID := range view.RetentionCommands {
+		key := sha256.Sum256([]byte(commandID))
+		if reservedDeletionIDs[key] {
+			return view, c.Fail(c.StoreIntegrityError, "checkpoint privacy command namespace collision")
+		}
+		reservedDeletionIDs[key] = true
+	}
+	for _, memoryCopy := range view.MemoryCopies {
+		key := sha256.Sum256([]byte(memoryCopy.CommandID))
+		if reservedDeletionIDs[key] {
+			return view, c.Fail(c.StoreIntegrityError, "checkpoint privacy command namespace collision")
+		}
+		reservedDeletionIDs[key] = true
+	}
 	var retentionGenesis []byte
 	retentionAuthority := ""
 	if checkpoint != nil {
@@ -288,7 +403,7 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 		}
 		switch record.Type {
 		case "MANAGED_COPY":
-			if record.Copy == nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || validateManagedCopy(*record.Copy) != nil {
+			if record.Copy == nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || record.MemoryCopy != nil || validateManagedCopy(*record.Copy) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "managed copy record invalid")
 			}
 			if i, replaced := copies[record.Copy.Directory]; replaced {
@@ -303,7 +418,7 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			}
 			view.CopySequences[record.Copy.Directory] = record.Sequence
 		case "DELETE_INTENT":
-			if record.Command == nil || record.Copy != nil || record.Attempt != nil || record.Retention != nil || validateDeletionCommand(*record.Command) != nil {
+			if record.Command == nil || record.Copy != nil || record.Attempt != nil || record.Retention != nil || record.MemoryCopy != nil || validateDeletionCommand(*record.Command) != nil {
 				return view, c.Fail(c.StoreIntegrityError, "privacy intent invalid")
 			}
 			command := *record.Command
@@ -332,7 +447,7 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			view.Deletions[command.Plan.TaskID] = command
 			view.DeletionSequences[command.Plan.TaskID] = record.Sequence
 		case "ATTEMPT_LINEAGE":
-			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Retention != nil || record.Attempt.validate() != nil {
+			if record.Attempt == nil || record.Command != nil || record.Copy != nil || record.Retention != nil || record.MemoryCopy != nil || record.Attempt.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid durable attempt lineage")
 			}
 			key := struct{ Root, Task string }{record.Attempt.Scope.PhysicalRoot, record.Attempt.ChildTask}
@@ -349,7 +464,7 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			view.Attempts = append(view.Attempts, *record.Attempt)
 			view.AttemptSequences[privacyAttemptKey(*record.Attempt)] = record.Sequence
 		case "RETENTION_POLICY":
-			if record.Retention == nil || record.Command != nil || record.Copy != nil || record.Attempt != nil || record.Retention.validate() != nil {
+			if record.Retention == nil || record.Command != nil || record.Copy != nil || record.Attempt != nil || record.MemoryCopy != nil || record.Retention.validate() != nil {
 				return view, c.Fail(c.StoreIntegrityError, "invalid retention record")
 			}
 			retention := *record.Retention
@@ -377,6 +492,57 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 			view.Retentions[retention.Policy.TaskID] = retention
 			view.RetentionCommands[retention.CommandID] = retention
 			view.RetentionSequences[retention.CommandID] = record.Sequence
+		case "MEMORY_COPY_PREPARED":
+			if record.MemoryCopy == nil || record.Copy != nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || record.MemoryCopy.validate() != nil || record.MemoryCopy.Status != "PREPARED" {
+				return view, c.Fail(c.StoreIntegrityError, "privacy memory-copy preparation invalid")
+			}
+			memoryCopy := *record.MemoryCopy
+			if _, deleted := view.Deletions[memoryCopy.Origin.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "memory copy was prepared after source deletion")
+			}
+			if _, deleted := view.Deletions[memoryCopy.Target.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "memory copy was prepared after target deletion")
+			}
+			commandKey := sha256.Sum256([]byte(memoryCopy.CommandID))
+			if reservedDeletionIDs[commandKey] || view.MemoryCopyCommands[memoryCopy.CommandID] != "" {
+				return view, c.Fail(c.StoreIntegrityError, "memory-copy command namespace collision")
+			}
+			for _, prior := range view.MemoryCopies {
+				if prior.CopyID == memoryCopy.CopyID || prior.CommandID == memoryCopy.CommandID {
+					return view, c.Fail(c.StoreIntegrityError, "memory-copy lineage identity was registered twice")
+				}
+			}
+			if privacyCopyWouldCycle(view, memoryCopy.Scope, memoryCopy.Origin.TaskID, memoryCopy.Target.TaskID) {
+				return view, c.Fail(c.StoreIntegrityError, "memory-copy lineage would create a task cycle")
+			}
+			reservedDeletionIDs[commandKey] = true
+			view.MemoryCopyCommands[memoryCopy.CommandID] = memoryCopy.CopyID
+			view.MemoryCopies = append(view.MemoryCopies, memoryCopy)
+			view.MemoryCopySequences[memoryCopy.CopyID] = record.Sequence
+		case "MEMORY_COPY_ACTIVE":
+			if record.MemoryCopy == nil || record.Copy != nil || record.Command != nil || record.Attempt != nil || record.Retention != nil || record.MemoryCopy.validate() != nil || record.MemoryCopy.Status != "ACTIVE" {
+				return view, c.Fail(c.StoreIntegrityError, "privacy memory-copy activation invalid")
+			}
+			memoryCopy := *record.MemoryCopy
+			index := -1
+			for i := range view.MemoryCopies {
+				if view.MemoryCopies[i].CopyID == memoryCopy.CopyID {
+					index = i
+					break
+				}
+			}
+			if index < 0 || view.MemoryCopies[index].Status != "PREPARED" || !samePrivacyMemoryCopy(view.MemoryCopies[index], memoryCopy) ||
+				view.MemoryCopyCommands[memoryCopy.CommandID] != memoryCopy.CopyID {
+				return view, c.Fail(c.StoreIntegrityError, "memory-copy activation does not match its exact prepared intent")
+			}
+			if _, deleted := view.Deletions[memoryCopy.Origin.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "memory copy activated after source deletion")
+			}
+			if _, deleted := view.Deletions[memoryCopy.Target.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "memory copy activated after target deletion")
+			}
+			view.MemoryCopies[index] = memoryCopy
+			view.MemoryCopySequences[memoryCopy.CopyID] = record.Sequence
 		default:
 			return view, c.Fail(c.StoreIntegrityError, "unknown privacy journal record")
 		}
@@ -391,6 +557,21 @@ func readPrivacyMode(root *os.Root, checkpointRecovery bool) (privacyView, error
 		current, err := fileguard.ReadRegular(root, "authority.json", 4096)
 		if err != nil || !bytes.Equal(current, retentionGenesis) {
 			return view, c.Fail(c.StoreIntegrityError, "retention authority changed during replay")
+		}
+	}
+	if len(view.MemoryCopies) > 0 {
+		scopes, _, scopeErr := readPrivacyScopes(root)
+		if scopeErr != nil {
+			return view, scopeErr
+		}
+		registered := map[privacyMemoryScope]bool{}
+		for _, scope := range scopes {
+			registered[privacyMemoryScopeFromOwner(scope)] = true
+		}
+		for _, memoryCopy := range view.MemoryCopies {
+			if !registered[memoryCopy.Scope] {
+				return view, c.Fail(c.StaleAuthority, "memory-copy owner lineage is absent from the registered catalog")
+			}
 		}
 	}
 	genesis, genesisErr := fileguard.ReadRegular(root, "authority.json", 4096)

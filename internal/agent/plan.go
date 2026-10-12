@@ -38,12 +38,15 @@ func (s *Session) validatePlan(doc Document) error {
 	if err := doc.Plan.Validate(doc.Spec, planChecks(doc), doc.Candidate.SnapshotDigest, doc.Plan.Definition.PolicyEpoch); err != nil {
 		return err
 	}
-	if _, err := s.Archive.Get(artifact.Ref{SchemaVersion: 1, TaskID: doc.TaskID, SnapshotDigest: doc.Plan.Definition.BaseCandidate}); err != nil {
+	// Retained plan references are validated as digest-bound manifests. Bytes
+	// are hydrated only at their point of use, so a privacy-purged or
+	// policy-denied blob cannot make an otherwise intact task unloadable.
+	if _, err := s.Archive.ReadManifest(artifact.Ref{SchemaVersion: 1, TaskID: doc.TaskID, SnapshotDigest: doc.Plan.Definition.BaseCandidate}); err != nil {
 		return c.Fail(c.StoreIntegrityError, "plan base candidate unavailable")
 	}
 	for _, progress := range doc.Plan.Progress {
 		if progress.Status == "IMPLEMENTED" {
-			if _, err := s.Archive.Get(artifact.Ref{SchemaVersion: 1, TaskID: doc.TaskID, SnapshotDigest: progress.Candidate}); err != nil {
+			if _, err := s.Archive.ReadManifest(artifact.Ref{SchemaVersion: 1, TaskID: doc.TaskID, SnapshotDigest: progress.Candidate}); err != nil {
 				return c.Fail(c.StoreIntegrityError, "plan node candidate unavailable")
 			}
 			raw, err := s.Archive.GetBytes(doc.TaskID, progress.OutputDigest)

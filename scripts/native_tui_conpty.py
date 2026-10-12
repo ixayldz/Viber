@@ -28,7 +28,9 @@ class WindowsConPTY:
     def __init__(self, argv: list[str], cwd: Path, env: dict[str, str]):
         if os.name != "nt":
             raise ConPTYFailure("conpty_platform")
-        if len(argv) != 5 or argv[1] != "ui" or argv[3] != "--store":
+        onboarding = len(argv) == 1
+        existing_ui = len(argv) == 5 and argv[1] == "ui" and argv[3] == "--store"
+        if not (onboarding or existing_ui):
             raise ConPTYFailure("conpty_arguments")
         helper = Path(__file__).with_name("native-tui-conpty.ps1").resolve(strict=True)
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
@@ -49,25 +51,25 @@ class WindowsConPTY:
         startup.wShowWindow = subprocess.SW_HIDE
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         try:
+            helper_argv = [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(helper),
+                "-Binary",
+                argv[0],
+            ]
+            if onboarding:
+                helper_argv.append("-Onboarding")
+            else:
+                helper_argv.extend(["-Task", argv[2], "-Store", argv[4]])
+            helper_argv.extend(["-WorkingDirectory", str(cwd)])
             self.process = subprocess.Popen(
-                [
-                    powershell,
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(helper),
-                    "-Binary",
-                    argv[0],
-                    "-Task",
-                    argv[2],
-                    "-Store",
-                    argv[4],
-                    "-WorkingDirectory",
-                    str(cwd),
-                ],
+                helper_argv,
                 cwd=str(cwd),
                 env=env,
                 stdin=subprocess.PIPE,
@@ -81,7 +83,7 @@ class WindowsConPTY:
             raise ConPTYFailure("conpty_helper_start")
         self.reader = threading.Thread(target=self._read_stdout, name="viber-conpty-reader", daemon=True)
         self.reader.start()
-        first = self._next_line(20.0, "conpty_helper_start")
+        first = self._next_line(10.0 if onboarding else 20.0, "conpty_helper_start")
         if first != b"READY":
             self._raise_protocol_error(first, "conpty_helper_start")
 

@@ -452,3 +452,87 @@ func TestProjectMemoryCorrectionBackupGCAndPrivacyDeletion(t *testing.T) {
 		t.Fatal("managed restored copy survived deletion", err)
 	}
 }
+
+func TestProjectMemoryCopyRestoreAndDeletionClosure(t *testing.T) {
+	ctx := context.Background()
+	s, source, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	target := projectMemorySibling(t, s, source, "copy-target-task", []Turn{{Text: "done", UsageKnown: true}})
+	if _, err := s.Run(ctx, source.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Run(ctx, target.TaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	assertion, err := s.RecordProjectMemory(ctx, source.TaskID, "copy-source-record", "DECISION", "build.validation", "Run the focused lifecycle test before release.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyReceipt, err := s.CopyProjectMemory(ctx, source.TaskID, target.TaskID, "copy-source-to-target", assertion.ItemID, assertion.EventDigest)
+	if err != nil || copyReceipt.Status != "COPIED" || !copyReceipt.AdvisoryOnly {
+		t.Fatal("explicit copy was not durably recorded", copyReceipt, err)
+	}
+
+	backup := filepath.Join(t.TempDir(), "copy-backup")
+	if _, err = s.Backup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	restoredPath := filepath.Join(t.TempDir(), "copy-restored")
+	if _, err = RestoreBackup(ctx, backup, restoredPath); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenExisting(ctx, restoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, doc, err := restored.Load(ctx, target.TaskID)
+	if err != nil {
+		restored.Close()
+		t.Fatal("restored copy did not validate against its current owner pin", err)
+	}
+	if state.ProjectMemoryCopyCount != 1 || len(doc.ProjectMemoryRefs) == 0 || doc.ProjectMemoryRefs[len(doc.ProjectMemoryRefs)-1].Type != "PROJECT_MEMORY_COPY" {
+		restored.Close()
+		t.Fatal("restored target lost its durable copy marker", state.ProjectMemoryCopyCount, doc.ProjectMemoryRefs)
+	}
+	search, err := restored.SearchProjectMemory(ctx, target.TaskID, "lifecycle", 0, 20)
+	if err != nil {
+		restored.Close()
+		t.Fatal(err)
+	}
+	if item := projectMemoryItemByID(t, search, copyReceipt.CopyID); item.Status != "ACTIVE" || item.EvidenceClass != "USER_COPIED" {
+		restored.Close()
+		t.Fatal("restored current copy lost its advisory lineage", item)
+	}
+	if err = restored.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = s.DeletionPreview(ctx, source.TaskID); err == nil {
+		t.Fatal("source deletion preview ignored an unpurged explicit copy")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.PolicyDenied {
+			t.Fatal("unpurged copy did not block source deletion with policy denial", err)
+		}
+	}
+	targetPlan, err := s.DeletionPreview(ctx, target.TaskID)
+	if err != nil {
+		t.Fatal("copied target could not be purged", err)
+	}
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-memory-copy-target", Plan: targetPlan}); err != nil {
+		t.Fatal("target copy purge failed", err)
+	}
+	retry, err := s.CopyProjectMemory(ctx, source.TaskID, target.TaskID, "copy-source-to-target", assertion.ItemID, assertion.EventDigest)
+	if err != nil || retry != copyReceipt {
+		t.Fatal("post-purge retry changed the immutable historical copy receipt", retry, copyReceipt, err)
+	}
+
+	sourcePlan, err := s.DeletionPreview(ctx, source.TaskID)
+	if err != nil {
+		t.Fatal("source remained pinned after every registered copy target was purged", err)
+	}
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-memory-copy-source", Plan: sourcePlan}); err != nil {
+		t.Fatal("source purge failed after copy target purge", err)
+	}
+}

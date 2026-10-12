@@ -221,7 +221,7 @@ func (s *Session) executeCheck(ctx context.Context, state c.TaskState, doc *Docu
 			return nil, c.Fail(c.PolicyDenied, "check is outside active plan node")
 		}
 	}
-	if err := s.validateProtection(*doc); err != nil {
+	if err := s.validateProtectionBytes(*doc); err != nil {
 		return nil, err
 	}
 	materialized, err := s.Archive.Materialize(doc.Candidate)

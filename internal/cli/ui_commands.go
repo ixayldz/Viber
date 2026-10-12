@@ -44,6 +44,8 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 		id = value.CommandID
 	case projectMemoryMutationRequest:
 		id = value.CommandID
+	case projectMemoryCopyRequest:
+		id = value.CommandID
 	}
 	task := u.task
 	if action == "retention-run" || action == "privacy-capacity" || action == "privacy-reserve-replenish" || action == "privacy-operation-retire" {

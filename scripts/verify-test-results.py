@@ -30,6 +30,10 @@ EXPECTED_TEST_PACKAGES = {
     "TestExclusiveNTFSApplyAndOwnedRestoreTouchOnlyReceiptedFiles": "github.com/ixayldz/Viber/internal/agent",
     "TestExclusiveNTFSRestorePreservesPostApplyUserEdit": "github.com/ixayldz/Viber/internal/agent",
     "TestExclusiveNTFSReconcileCompletesCrashAfterWriteBeforeReceipt": "github.com/ixayldz/Viber/internal/agent",
+    "TestCapturedRetrievalReportExportsActualRuntimePair": "github.com/ixayldz/Viber/internal/agent",
+    "TestCapturedRetrievalReportRejectsStaleCurrentPolicyBinding": "github.com/ixayldz/Viber/internal/agent",
+    "TestCapturedRetrievalReportDoesNotHydrateDeniedCandidateBlob": "github.com/ixayldz/Viber/internal/agent",
+    "TestProjectMemoryCopyRestoreAndDeletionClosure": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority": "github.com/ixayldz/Viber/internal/agent",
@@ -210,6 +214,9 @@ if args.retrieval:
         "TestOwnerLazyPartitionsExposePartialCoverageAndBindCursorAndPolicy",
         "TestRankedPartitionArgumentsRejectNullUnboundedAndOtherToolUse",
         "TestPartitionCapacityFallbackExplicitlyLabelsFullLiteralScope",
+        "TestCapturedRetrievalReportExportsActualRuntimePair",
+        "TestCapturedRetrievalReportRejectsStaleCurrentPolicyBinding",
+        "TestCapturedRetrievalReportDoesNotHydrateDeniedCandidateBlob",
     }
 if args.disk_pressure:
     required.add("TestActualBoundedFilesystemPressurePreservesControlPublicationAndReopen")
@@ -260,6 +267,7 @@ if args.privacy:
         "TestPrivacyDuplicateCommandIDRejectedBeforeIrreversibleIntent",
         "TestPrivacyCLIThroughOwnerPreviewDeleteDedupAndDeletedObservations",
         "TestPrivacyMissingStoreAndTaskCommandMismatchHaveNoEffects",
+        "TestProjectMemoryCopyRestoreAndDeletionClosure",
         "TestPrivacyAuthorityWriteOnceCASSurvivesReplayAndRejectsCorruption",
         "TestTaskDeletionPreservesHistoricalLedgerButRevokesContentSuccess",
         "TestTaskDeletionCannotWaiveRiskOrManufactureQuality",

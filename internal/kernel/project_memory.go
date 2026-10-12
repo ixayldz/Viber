@@ -12,6 +12,12 @@ func ApplyProjectMemoryRecorded(state *c.TaskState, next *c.TaskState, event c.E
 	if state.ProjectMemoryRevision == int64(^uint64(0)>>1) {
 		return c.Fail(c.BudgetLimitReached, "project memory revision counter is exhausted")
 	}
+	if m := payload.ProjectMemoryMutation; m.Action == "COPY" {
+		if state.ProjectMemoryCopyCount == int64(^uint64(0)>>1) {
+			return c.Fail(c.BudgetLimitReached, "project memory copy count is exhausted")
+		}
+		next.ProjectMemoryCopyCount = state.ProjectMemoryCopyCount + 1
+	}
 	next.DocumentDigest = payload.DocumentDigest
 	next.ProjectMemoryRevision = state.ProjectMemoryRevision + 1
 	return nil

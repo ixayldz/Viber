@@ -21,7 +21,7 @@ func TestRunActiveWithAllRuntimeCapabilitiesSkipsStoreOwnerLock(t *testing.T) {
 	defer manager.Close()
 
 	storeDir := filepath.Join(parent, "task-store")
-	createRuntimeCapabilityStore(t, storeDir, false, false)
+	createRuntimeCapabilityStore(t, storeDir, false, false, false)
 	if err = manager.RegisterStore(storeDir); err != nil {
 		t.Fatal(err)
 	}

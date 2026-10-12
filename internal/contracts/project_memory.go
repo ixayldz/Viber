@@ -29,7 +29,7 @@ func (m ProjectMemoryMutation) Validate() error {
 		return Fail(InvalidArgument, "invalid project memory mutation binding")
 	}
 	switch m.Action {
-	case "ASSERT", "CORRECT", "RETIRE":
+	case "ASSERT", "CORRECT", "RETIRE", "COPY":
 		return nil
 	default:
 		return Fail(InvalidArgument, "invalid project memory mutation action")

@@ -50,6 +50,41 @@ func (s *Session) validateProtection(doc Document) error {
 		}
 		return nil
 	}
+	if doc.Protection.SchemaVersion != 1 || doc.Protection.TaskID != doc.TaskID || doc.Protection.InitialSpecVersion != 1 || doc.Spec.Version < doc.Protection.InitialSpecVersion || doc.Protection.BaselineDigest != doc.Baseline.SnapshotDigest {
+		return c.Fail(c.StoreIntegrityError, "protected check origin binding mismatch")
+	}
+	found := false
+	for _, input := range doc.Spec.Inputs {
+		if input.ID == "initial" && input.Digest == doc.Protection.InputDigest {
+			found = true
+		}
+	}
+	if !found {
+		return c.Fail(c.StoreIntegrityError, "protected origin raw intent binding missing")
+	}
+	// Retained protected references are validated as digest-bound manifests so
+	// a missing, purged or policy-denied blob cannot make an otherwise intact
+	// task unloadable. Byte-level origin re-derivation and protected-closure
+	// guarding run at their point of use with fresh hydration: check dispatch,
+	// frozen checks, observed evidence, candidate publication, delivery
+	// reverification and verified finals.
+	if _, err := s.Archive.ReadManifest(doc.Baseline); err != nil {
+		return err
+	}
+	if _, err := s.Archive.ReadManifest(doc.Candidate); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateProtectionBytes re-derives the protected check origin from the
+// retained baseline bytes and guards the current candidate against protected
+// closure changes with full hydration. Verification-quality authority gates
+// call it at their point of use.
+func (s *Session) validateProtectionBytes(doc Document) error {
+	if doc.Protection == nil {
+		return s.validateProtection(doc)
+	}
 	baseline, err := s.Archive.Get(doc.Baseline)
 	if err != nil {
 		return err

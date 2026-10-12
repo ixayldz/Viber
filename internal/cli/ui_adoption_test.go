@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -27,6 +28,17 @@ func TestUICommandPaletteMemoryAndWorkersUseOwner(t *testing.T) {
 	if _, err = session.Create(ctx, agent.StartOptions{Root: source, TaskID: "ui-adoption", Prompt: []byte("Inspect this project"), Budget: agent.DefaultBudget(), Autonomy: "review", Fixture: fixture}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = session.Create(ctx, agent.StartOptions{Root: source, TaskID: "ui-source", Prompt: []byte("Record an explicit project fact"), Budget: agent.DefaultBudget(), Autonomy: "review", Fixture: fixture}); err != nil {
+		t.Fatal(err)
+	}
+	cliSource, err := session.RecordProjectMemory(ctx, "ui-source", "memory-copy-cli-source", "FACT", "cli.copy", "User explicitly selected this source entry for the target task.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uiSource, err := session.RecordProjectMemory(ctx, "ui-source", "memory-copy-ui-source", "FACT", "ui.copy", "User explicitly selected this separate entry for the target task.")
+	if err != nil {
+		t.Fatal(err)
+	}
 	host, err := owner.Open(ctx, directory, session)
 	if err != nil {
 		t.Fatal(err)
@@ -34,8 +46,25 @@ func TestUICommandPaletteMemoryAndWorkersUseOwner(t *testing.T) {
 	defer host.Close()
 	ui := uiSession{"ui-adoption", directory}
 	menu, quit, err := ui.command(ctx, "/")
-	if err != nil || quit || !strings.Contains(menu, "/memory") || !strings.Contains(menu, "/workers") {
+	if err != nil || quit || !strings.Contains(menu, "/memory") || !strings.Contains(menu, "copy SOURCE_TASK ITEM_ID DIGEST") || !strings.Contains(menu, "/workers") {
 		t.Fatal("command discovery missing", menu, err)
+	}
+	var copyOut, copyErr bytes.Buffer
+	cliArgs := []string{"project-memory", "copy", "--store", directory, "--from", "ui-source", "--to", "ui-adoption", "--id", cliSource.ItemID, "--digest", cliSource.EventDigest, "--command-id", "cli-memory-copy", "--json"}
+	if exit := Execute(cliArgs, &copyOut, &copyErr); exit != 0 {
+		t.Fatal("CLI copy did not route through the active owner", exit, copyOut.String(), copyErr.String())
+	}
+	var cliReceipt agent.ProjectMemoryCopyReceipt
+	if err = json.Unmarshal(copyOut.Bytes(), &cliReceipt); err != nil || cliReceipt.Status != "COPIED" || cliReceipt.SourceTask != "ui-source" || cliReceipt.TargetTask != "ui-adoption" || cliReceipt.SourceItemID != cliSource.ItemID || cliReceipt.SourceItemDigest != cliSource.EventDigest || !cliReceipt.AdvisoryOnly {
+		t.Fatal("CLI copy receipt lost exact source/target lineage", err, string(copyOut.Bytes()), cliReceipt)
+	}
+	var retryOut, retryErr bytes.Buffer
+	if exit := Execute(cliArgs, &retryOut, &retryErr); exit != 0 || !bytes.Equal(copyOut.Bytes(), retryOut.Bytes()) {
+		t.Fatal("exact owner retry did not return the original immutable copy receipt", exit, string(retryOut.Bytes()), retryErr.String())
+	}
+	copyText, _, err := ui.command(ctx, "/memory copy ui-source "+uiSource.ItemID+" "+uiSource.EventDigest)
+	if err != nil || !strings.Contains(copyText, "ui-source → ui-adoption") || !strings.Contains(copyText, "While the target retains its pin, source deletion is blocked") || !strings.Contains(copyText, "Check current deletion/retention status") {
+		t.Fatal("owner-backed TUI copy lost visible lineage or privacy caveat", copyText, err)
 	}
 	if _, _, err = ui.command(ctx, "/memory record DECISION storage Use SQLite for the local journal"); err != nil {
 		t.Fatal(err)

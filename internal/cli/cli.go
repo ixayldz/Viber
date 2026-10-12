@@ -74,6 +74,8 @@ Usage:
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
   viber ui TASK --store PATH
   viber project-memory search|record|correct|retire --task TASK --store PATH [--kind FACT|DECISION|CONVENTION --key KEY --text TEXT] [--id ID --digest SHA --command-id ID] [--query QUERY --offset N --limit N] [--json]
+  viber project-memory copy --store PATH --from SOURCE_TASK --to TARGET_TASK --id ID --digest SHA --command-id ID [--json]
+  viber retrieval-report TASK --store PATH --call-id ID [--json]
   viber read-workers TASK --store PATH --candidate SHA [--workers inventory,requirements --query TEXT --timeout-ms N] [--json]
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber goal-queue TASK --store PATH [--command-file FILE] [--json]
@@ -216,6 +218,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runUI(args[1:], out, errout)
 	case "support":
 		return runSupport(args[1:], out, errout)
+	case "retrieval-report":
+		return runRetrievalReport(args[1:], out, errout)
 	case "privacy-capacity":
 		return runPrivacyCapacity(args[1:], out, errout)
 	case "retention":

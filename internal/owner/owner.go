@@ -405,6 +405,25 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.Session.SearchProjectMemory(ctx, request.TaskID, query.Query, query.Offset, query.Limit)
+	case "project-memory-copy":
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.active != nil {
+			return nil, c.Fail(c.Conflict, "project memory copy requires a quiescent owner")
+		}
+		var command struct {
+			CommandID  string `json:"command_id"`
+			SourceTask string `json:"source_task"`
+			ItemID     string `json:"item_id"`
+			ItemDigest string `json:"item_digest"`
+		}
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		if command.CommandID != request.ID || command.SourceTask == "" || command.SourceTask == request.TaskID || command.ItemID == "" || !c.ValidDigest(command.ItemDigest) {
+			return nil, c.Fail(c.InvalidArgument, "memory copy envelope must bind distinct source/target tasks and an exact item ID/digest")
+		}
+		return o.Session.CopyProjectMemory(ctx, command.SourceTask, request.TaskID, command.CommandID, command.ItemID, command.ItemDigest)
 	case "project-memory-record", "project-memory-correct", "project-memory-retire":
 		o.mu.Lock()
 		defer o.mu.Unlock()
@@ -502,6 +521,27 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "GC envelope ID mismatch")
 		}
 		return o.Session.CollectGarbage(ctx, command)
+	case "retrieval-report":
+		var query struct {
+			CallID string `json:"call_id"`
+		}
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		if query.CallID == "" {
+			return nil, c.Fail(c.InvalidArgument, "retained fs_search call ID required")
+		}
+		// Serialize this read against run admission. Captured reports require a
+		// settled current document and must never race an active model/tool turn.
+		o.control.Lock()
+		defer o.control.Unlock()
+		o.mu.Lock()
+		busy := o.closed || o.active != nil
+		o.mu.Unlock()
+		if busy {
+			return nil, c.Fail(c.Conflict, "retrieval export requires a quiescent owner")
+		}
+		return o.Session.CapturedRetrievalReport(ctx, request.TaskID, query.CallID)
 	case "source-list", "source-page", "context-why", "context-page", "checks", "check-output", "verification", "report", "history-page", "continuity-info", "resources", "runtime-info":
 		var args agent.Observation
 		if err := c.DecodeStrict(request.Payload, &args); err != nil {

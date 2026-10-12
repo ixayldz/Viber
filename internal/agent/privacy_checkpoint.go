@@ -44,23 +44,28 @@ type privacyCheckpointRetention struct {
 	Sequence  int64                  `json:"sequence"`
 	Retention privacyRetentionRecord `json:"retention"`
 }
+type privacyCheckpointMemoryCopy struct {
+	Sequence   int64             `json:"sequence"`
+	MemoryCopy privacyMemoryCopy `json:"memory_copy"`
+}
 type privacyCheckpoint struct {
-	SchemaVersion   int                          `json:"schema_version"`
-	AuthorityDigest string                       `json:"authority_digest"`
-	PhysicalRoot    string                       `json:"physical_root"`
-	Generation      int64                        `json:"generation"`
-	BaseSequence    int64                        `json:"base_sequence"`
-	BaseTail        string                       `json:"base_tail"`
-	Sequence        int64                        `json:"sequence"`
-	Tail            string                       `json:"tail"`
-	Watermark       int64                        `json:"watermark"`
-	ScopeDigest     string                       `json:"scope_digest"`
-	Scopes          []privacyScope               `json:"scopes"`
-	SourceRecords   []privacyCheckpointSource    `json:"source_records"`
-	Copies          []privacyCheckpointCopy      `json:"copies"`
-	Deletions       []privacyCheckpointDeletion  `json:"deletions"`
-	Attempts        []privacyCheckpointAttempt   `json:"attempts"`
-	Retentions      []privacyCheckpointRetention `json:"retentions"`
+	SchemaVersion   int                           `json:"schema_version"`
+	AuthorityDigest string                        `json:"authority_digest"`
+	PhysicalRoot    string                        `json:"physical_root"`
+	Generation      int64                         `json:"generation"`
+	BaseSequence    int64                         `json:"base_sequence"`
+	BaseTail        string                        `json:"base_tail"`
+	Sequence        int64                         `json:"sequence"`
+	Tail            string                        `json:"tail"`
+	Watermark       int64                         `json:"watermark"`
+	ScopeDigest     string                        `json:"scope_digest"`
+	Scopes          []privacyScope                `json:"scopes"`
+	SourceRecords   []privacyCheckpointSource     `json:"source_records"`
+	Copies          []privacyCheckpointCopy       `json:"copies"`
+	Deletions       []privacyCheckpointDeletion   `json:"deletions"`
+	Attempts        []privacyCheckpointAttempt    `json:"attempts"`
+	Retentions      []privacyCheckpointRetention  `json:"retentions"`
+	MemoryCopies    []privacyCheckpointMemoryCopy `json:"memory_copies,omitempty"`
 }
 type privacyCheckpointAnchor struct {
 	SchemaVersion    int    `json:"schema_version"`
@@ -125,7 +130,8 @@ func emptyPrivacyView() privacyView {
 		Deletions: map[string]DeletionCommand{}, DeletionSequences: map[string]int64{},
 		Attempts: []privacyAttempt{}, AttemptSequences: map[string]int64{},
 		Retentions: map[string]privacyRetentionRecord{}, RetentionSequences: map[string]int64{},
-		RetentionCommands: map[string]privacyRetentionRecord{},
+		RetentionCommands: map[string]privacyRetentionRecord{}, MemoryCopies: []privacyMemoryCopy{},
+		MemoryCopySequences: map[string]int64{}, MemoryCopyCommands: map[string]string{},
 	}
 }
 
@@ -372,7 +378,7 @@ func validatePrivacyCheckpoint(checkpoint privacyCheckpoint, authority PrivacyAu
 		checkpoint.AuthorityDigest != mustDigest(authority) || checkpoint.PhysicalRoot != authority.PhysicalRoot || len(checkpoint.Scopes) == 0 ||
 		len(checkpoint.Scopes) > privacyCatalogLimit || len(checkpoint.SourceRecords) > privacyRecordLimit ||
 		len(checkpoint.Copies) > privacyRecordLimit || len(checkpoint.Deletions) > privacyRecordLimit || len(checkpoint.Attempts) > privacyRecordLimit ||
-		len(checkpoint.Retentions) > privacyRecordLimit {
+		len(checkpoint.Retentions) > privacyRecordLimit || len(checkpoint.MemoryCopies) > privacyRecordLimit {
 		return c.Fail(c.StoreIntegrityError, "privacy checkpoint binding or quota invalid")
 	}
 	if (checkpoint.Sequence == 0 && checkpoint.Tail != "") || (checkpoint.Sequence > 0 && !c.ValidDigest(checkpoint.Tail)) {
@@ -441,7 +447,7 @@ func privacyViewFromCheckpoint(checkpoint privacyCheckpoint, authority PrivacyAu
 		typeName string
 		index    int
 	}
-	entries := make([]entry, 0, len(checkpoint.Copies)+len(checkpoint.Deletions)+len(checkpoint.Attempts)+len(checkpoint.Retentions))
+	entries := make([]entry, 0, len(checkpoint.Copies)+len(checkpoint.Deletions)+len(checkpoint.Attempts)+len(checkpoint.Retentions)+len(checkpoint.MemoryCopies))
 	for i, item := range checkpoint.Copies {
 		entries = append(entries, entry{item.Sequence, "MANAGED_COPY", i})
 	}
@@ -454,6 +460,9 @@ func privacyViewFromCheckpoint(checkpoint privacyCheckpoint, authority PrivacyAu
 	for i, item := range checkpoint.Retentions {
 		entries = append(entries, entry{item.Sequence, "RETENTION_POLICY", i})
 	}
+	for i, item := range checkpoint.MemoryCopies {
+		entries = append(entries, entry{item.Sequence, "MEMORY_COPY", i})
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].sequence < entries[j].sequence })
 	for i := 1; i < len(entries); i++ {
 		if entries[i-1].sequence == entries[i].sequence {
@@ -465,6 +474,7 @@ func privacyViewFromCheckpoint(checkpoint privacyCheckpoint, authority PrivacyAu
 	retentionRevisions := map[string]int64{}
 	copyPaths := map[string]bool{}
 	attempts := map[string]bool{}
+	memoryCopyIDs := map[string]bool{}
 	for _, item := range entries {
 		if item.sequence < 1 || item.sequence > checkpoint.Sequence {
 			return view, c.Fail(c.StoreIntegrityError, "checkpoint fact sequence out of range")
@@ -546,6 +556,23 @@ func privacyViewFromCheckpoint(checkpoint privacyCheckpoint, authority PrivacyAu
 			view.Retentions[retention.Policy.TaskID] = retention
 			view.RetentionCommands[retention.CommandID] = retention
 			view.RetentionSequences[retention.CommandID] = item.sequence
+		case "MEMORY_COPY":
+			memoryCopy := checkpoint.MemoryCopies[item.index].MemoryCopy
+			if memoryCopy.validate() != nil || memoryCopyIDs[memoryCopy.CopyID] || view.MemoryCopyCommands[memoryCopy.CommandID] != "" ||
+				reservedIDs[sha256.Sum256([]byte(memoryCopy.CommandID))] || privacyCopyWouldCycle(view, memoryCopy.Scope, memoryCopy.Origin.TaskID, memoryCopy.Target.TaskID) {
+				return view, c.Fail(c.StoreIntegrityError, "checkpoint memory-copy lineage invalid or cyclic")
+			}
+			if _, deleted := view.Deletions[memoryCopy.Origin.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "checkpoint memory copy follows source deletion")
+			}
+			if _, deleted := view.Deletions[memoryCopy.Target.TaskID]; deleted {
+				return view, c.Fail(c.StoreIntegrityError, "checkpoint memory copy follows target deletion")
+			}
+			memoryCopyIDs[memoryCopy.CopyID] = true
+			view.MemoryCopyCommands[memoryCopy.CommandID] = memoryCopy.CopyID
+			view.MemoryCopies = append(view.MemoryCopies, memoryCopy)
+			view.MemoryCopySequences[memoryCopy.CopyID] = item.sequence
+			reservedIDs[sha256.Sum256([]byte(memoryCopy.CommandID))] = true
 		}
 	}
 	if int64(len(view.Deletions)) != checkpoint.Watermark || checkpoint.Watermark != view.Watermark || len(entries) == 0 && checkpoint.Sequence != 0 {
@@ -999,10 +1026,18 @@ func buildPrivacyCheckpoint(root *os.Root, authority PrivacyAuthority, view priv
 		}
 		checkpoint.Retentions = append(checkpoint.Retentions, privacyCheckpointRetention{Sequence: sequence, Retention: retention})
 	}
+	for _, memoryCopy := range view.MemoryCopies {
+		sequence := view.MemoryCopySequences[memoryCopy.CopyID]
+		if sequence < 1 {
+			return checkpoint, c.Fail(c.StoreIntegrityError, "project memory copy lineage lost its source sequence")
+		}
+		checkpoint.MemoryCopies = append(checkpoint.MemoryCopies, privacyCheckpointMemoryCopy{Sequence: sequence, MemoryCopy: memoryCopy})
+	}
 	sort.Slice(checkpoint.Copies, func(i, j int) bool { return checkpoint.Copies[i].Sequence < checkpoint.Copies[j].Sequence })
 	sort.Slice(checkpoint.Deletions, func(i, j int) bool { return checkpoint.Deletions[i].Sequence < checkpoint.Deletions[j].Sequence })
 	sort.Slice(checkpoint.Attempts, func(i, j int) bool { return checkpoint.Attempts[i].Sequence < checkpoint.Attempts[j].Sequence })
 	sort.Slice(checkpoint.Retentions, func(i, j int) bool { return checkpoint.Retentions[i].Sequence < checkpoint.Retentions[j].Sequence })
+	sort.Slice(checkpoint.MemoryCopies, func(i, j int) bool { return checkpoint.MemoryCopies[i].Sequence < checkpoint.MemoryCopies[j].Sequence })
 	return checkpoint, validatePrivacyCheckpoint(checkpoint, authority)
 }
 

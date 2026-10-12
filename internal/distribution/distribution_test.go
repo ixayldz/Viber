@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ixayldz/Viber/internal/agent"
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/store"
@@ -69,7 +72,7 @@ func nativePlatform(t *testing.T) string {
 	return platform
 }
 
-func createRuntimeCapabilityStore(t *testing.T, directory string, projectMemory, readWorkers bool) {
+func createRuntimeCapabilityStore(t *testing.T, directory string, projectMemory, projectMemoryCopy, readWorkers bool) {
 	t.Helper()
 	ctx := context.Background()
 	archive, err := artifact.Open(filepath.Join(directory, "artifacts"))
@@ -91,7 +94,7 @@ func createRuntimeCapabilityStore(t *testing.T, directory string, projectMemory,
 		}
 	}()
 	document := []byte(`{}`)
-	if projectMemory {
+	if projectMemory && !projectMemoryCopy {
 		document = []byte(`{"project_memory_refs":[{"id":"memory-entry"}]}`)
 	}
 	documentDigest, err := archive.PutBytes("task-one", document)
@@ -106,6 +109,29 @@ func createRuntimeCapabilityStore(t *testing.T, directory string, projectMemory,
 	state, err := owner.Execute(ctx, store.Command{ID: "create-task", TaskID: "task-one", Actor: "kernel", Type: "TaskCreated", Payload: payload})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if projectMemoryCopy {
+		copyDocument := []byte(`{"project_memory_refs":[{"id":"memory-entry","type":"PROJECT_MEMORY_COPY"}]}`)
+		copyDigest, putErr := archive.PutBytes("task-one", copyDocument)
+		if putErr != nil {
+			t.Fatal(putErr)
+		}
+		mutation := &c.ProjectMemoryMutation{
+			SourceDocumentDigest: state.DocumentDigest,
+			EventDigest:          c.HashBytes([]byte("copy event")),
+			CommandID:            "record-memory-copy",
+			EventBytes:           128,
+			SourceTaskSeq:        state.TaskSeq,
+			SpecVersion:          state.SpecVersion,
+			PolicyEpoch:          state.PolicyEpoch,
+			KernelGeneration:     state.KernelGeneration,
+			Action:               "COPY",
+		}
+		state, err = owner.Execute(ctx, store.Command{ID: mutation.CommandID, TaskID: "task-one", Actor: "user", ExpectedTaskSeq: state.TaskSeq,
+			Type: "ProjectMemoryRecorded", Payload: c.EventPayload{DocumentDigest: copyDigest, ProjectMemoryMutation: mutation}})
+		if err != nil || state.ProjectMemoryCopyCount != 1 {
+			t.Fatalf("copy event did not persist its typed task-state marker: count=%d err=%v", state.ProjectMemoryCopyCount, err)
+		}
 	}
 	if !readWorkers {
 		return
@@ -144,9 +170,9 @@ func TestRuntimeCapabilityManifestCompatibilityIsStrict(t *testing.T) {
 		t.Fatalf("legacy manifest must remain readable: %v", err)
 	}
 	newRevision := strings.Repeat("5", 40)
-	capabilities := []string{RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityReadWorkersV1}
+	capabilities := []string{RuntimeCapabilityProjectMemoryCopyV1, RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityReadWorkersV1}
 	newer, err := ParseArchive(fixtureArchiveCapabilities(t, newRevision, capabilities, nil), "zip", newRevision, platform)
-	if err != nil || len(newer.Manifest.RuntimeCapabilities) != 2 {
+	if err != nil || len(newer.Manifest.RuntimeCapabilities) != 3 {
 		t.Fatalf("supported runtime capability manifest rejected: %v", err)
 	}
 	var preCapabilityManifest struct {
@@ -167,9 +193,10 @@ func TestRuntimeCapabilityManifestCompatibilityIsStrict(t *testing.T) {
 		t.Fatal("old strict package reader silently accepted a manifest with unknown runtime semantics")
 	}
 	for name, invalid := range map[string][]string{
-		"unknown":   {RuntimeCapabilityProjectMemoryV1, "future_feature_v9"},
-		"duplicate": {RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityProjectMemoryV1},
-		"unsorted":  {RuntimeCapabilityReadWorkersV1, RuntimeCapabilityProjectMemoryV1},
+		"unknown":                     {RuntimeCapabilityProjectMemoryV1, "future_feature_v9"},
+		"duplicate":                   {RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityProjectMemoryV1},
+		"unsorted":                    {RuntimeCapabilityReadWorkersV1, RuntimeCapabilityProjectMemoryV1},
+		"copy_without_project_memory": {RuntimeCapabilityProjectMemoryCopyV1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			revision := strings.Repeat("6", 40)
@@ -177,6 +204,62 @@ func TestRuntimeCapabilityManifestCompatibilityIsStrict(t *testing.T) {
 				t.Fatal("invalid runtime capability declaration accepted")
 			}
 		})
+	}
+}
+
+func TestRuntimeCapabilityStateRetainsMemoryCopyAfterPurge(t *testing.T) {
+	legacyState, err := json.Marshal(c.TaskState{TaskID: "legacy-task"})
+	if err != nil || bytes.Contains(legacyState, []byte("project_memory_copy_count")) {
+		t.Fatalf("zero copy counter changed legacy task-state encoding: %s (%v)", legacyState, err)
+	}
+	state := c.TaskState{
+		ProjectMemoryRevision:  1,
+		ProjectMemoryCopyCount: 1,
+		Deletion:               &c.TaskDeletion{Status: "PURGED"},
+	}
+	used := map[string]bool{}
+	if err := applyTaskRuntimeCapabilities(state, used); err != nil {
+		t.Fatal(err)
+	}
+	if !used[RuntimeCapabilityProjectMemoryV1] || !used[RuntimeCapabilityProjectMemoryCopyV1] {
+		t.Fatalf("purged task lost its durable copy capability marker: %#v", used)
+	}
+	for _, invalid := range []c.TaskState{
+		{ProjectMemoryRevision: -1},
+		{ProjectMemoryRevision: 1, ProjectMemoryCopyCount: -1},
+		{ProjectMemoryRevision: 1, ProjectMemoryCopyCount: 2},
+	} {
+		if err := applyTaskRuntimeCapabilities(invalid, map[string]bool{}); err == nil {
+			t.Fatalf("invalid project-memory counters accepted: %+v", invalid)
+		}
+	}
+}
+
+func TestRuntimeCapabilityScanFindsCopyAfterLegacyMemoryDocument(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	archive, err := artifact.Open(filepath.Join(directory, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	legacyDigest, err := archive.PutBytes("task-one", []byte(`{"project_memory_refs":[{"id":"legacy-entry"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyDigest, err := archive.PutBytes("task-one", []byte(`{"project_memory_refs":[{"id":"copy-entry","type":"PROJECT_MEMORY_COPY"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]c.TaskState{"task-one": {TaskID: "task-one"}}
+	refs := []store.DocumentRef{{TaskID: "task-one", Digest: legacyDigest}, {TaskID: "task-one", Digest: copyDigest}}
+	projectMemory, projectMemoryCopy, _, err := scanStoreProjectMemory(ctx, directory, states, refs, maxRuntimeCapabilityBytes)
+	if err != nil || !projectMemory || !projectMemoryCopy {
+		t.Fatalf("historical scan missed typed copy after an ordinary project-memory document: memory=%v copy=%v err=%v", projectMemory, projectMemoryCopy, err)
 	}
 }
 
@@ -189,7 +272,7 @@ func TestInstallAndRollbackRespectProjectMemoryCompatibility(t *testing.T) {
 	}
 	defer manager.Close()
 	legacyStore := filepath.Join(parent, "legacy-store")
-	createRuntimeCapabilityStore(t, legacyStore, false, false)
+	createRuntimeCapabilityStore(t, legacyStore, false, false, false)
 	if err = manager.RegisterStore(legacyStore); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +287,7 @@ func TestInstallAndRollbackRespectProjectMemoryCompatibility(t *testing.T) {
 	}
 
 	memoryStore := filepath.Join(parent, "memory-store")
-	createRuntimeCapabilityStore(t, memoryStore, true, false)
+	createRuntimeCapabilityStore(t, memoryStore, true, false, false)
 	if err = manager.RegisterStore(memoryStore); err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +325,172 @@ func TestInstallAndRollbackRespectProjectMemoryCompatibility(t *testing.T) {
 	}
 }
 
+func TestInstallAndRollbackRespectProjectMemoryCopyCompatibility(t *testing.T) {
+	platform := nativePlatform(t)
+	parent := t.TempDir()
+	manager, err := Open(filepath.Join(parent, "program"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	legacyRevision := strings.Repeat("d", 40)
+	legacy, err := ParseArchive(fixtureArchive(t, legacyRevision, nil), "zip", legacyRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	copyStore := filepath.Join(parent, "copy-store")
+	createRuntimeCapabilityStore(t, copyStore, false, true, false)
+	if err = manager.RegisterStore(copyStore); err != nil {
+		t.Fatal(err)
+	}
+	projectMemoryRevision := strings.Repeat("e", 40)
+	projectMemoryOnly, err := ParseArchive(fixtureArchiveCapabilities(t, projectMemoryRevision, []string{RuntimeCapabilityProjectMemoryV1}, nil), "zip", projectMemoryRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(context.Background(), projectMemoryOnly); err == nil {
+		t.Fatal("package without project-memory-copy support activated after a registered store retained a typed copy reference")
+	}
+	if _, err = manager.Rollback(legacyRevision); err == nil {
+		t.Fatal("rollback to a package without project-memory-copy support was allowed")
+	}
+
+	copyRevision := strings.Repeat("f", 40)
+	copyCapable, err := ParseArchive(fixtureArchiveCapabilities(t, copyRevision, supportedRuntimeCapabilities, nil), "zip", copyRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(context.Background(), copyCapable); err != nil {
+		t.Fatalf("project-memory-copy-capable package rejected: %v", err)
+	}
+	status, err := manager.Status()
+	if err != nil || status.Active.Revision != copyRevision {
+		t.Fatalf("compatible package not selected: %+v %v", status, err)
+	}
+}
+
+func TestPreparedProjectMemoryCopyBlocksLegacyInstallAndRollback(t *testing.T) {
+	ctx := context.Background()
+	platform := nativePlatform(t)
+	parent := t.TempDir()
+	manager, err := Open(filepath.Join(parent, "program"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	legacyRevision := strings.Repeat("a", 40)
+	legacy, err := ParseArchive(fixtureArchive(t, legacyRevision, nil), "zip", legacyRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	storeDir := filepath.Join(parent, "task-store")
+	sourceRoot := filepath.Join(parent, "source")
+	if err = os.Mkdir(sourceRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(sourceRoot, "a.txt"), []byte("source\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := json.Marshal(agent.Fixture{SchemaVersion: 1, Turns: []agent.Turn{{Text: "ready", UsageKnown: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := agent.Open(ctx, storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := agent.StartOptions{Root: sourceRoot, Prompt: []byte("Inspect the fixture source."), TaskID: "task-one",
+		Budget: agent.DefaultBudget(), Autonomy: "guided", AllowUnverified: true, Fixture: fixture}
+	if _, err = session.Create(ctx, options); err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+	options.TaskID = "task-two"
+	if _, err = session.Create(ctx, options); err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+	assertion, err := session.RecordProjectMemory(ctx, "task-one", "copy-source-assertion", "FACT", "test.command", "Run focused tests.")
+	if err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+	if err = manager.RegisterStore(storeDir); err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+
+	// Fail the target journal transaction after the real copy operation has
+	// durably appended MEMORY_COPY_PREPARED and written its candidate bytes.
+	// Closing and reopening the owner below models recovery at that boundary.
+	databasePath := filepath.Join(storeDir, "state.sqlite")
+	uriPath := filepath.ToSlash(databasePath)
+	if filepath.VolumeName(databasePath) != "" {
+		uriPath = "/" + uriPath
+	}
+	databaseURL := url.URL{Scheme: "file", Path: uriPath}
+	faultDB, err := sql.Open("sqlite", databaseURL.String())
+	if err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+	_, err = faultDB.ExecContext(ctx, "CREATE TRIGGER fail_prepared_project_memory_copy BEFORE INSERT ON events WHEN NEW.event_id='copy-prepared-write-fail' BEGIN SELECT RAISE(ABORT,'injected interruption'); END")
+	if err != nil {
+		faultDB.Close()
+		session.Close()
+		t.Fatal(err)
+	}
+	if err = faultDB.Close(); err != nil {
+		session.Close()
+		t.Fatal(err)
+	}
+	if _, err = session.CopyProjectMemory(ctx, "task-one", "task-two", "copy-prepared-write-fail", assertion.ItemID, assertion.EventDigest); err == nil {
+		session.Close()
+		t.Fatal("injected journal interruption did not leave the copy prepared")
+	}
+	used, err := agent.ProjectMemoryCopyCapabilityUsed(ctx, session.Journal)
+	if err != nil || !used {
+		session.Close()
+		t.Fatalf("validated external registry did not retain PREPARED copy usage: used=%v err=%v", used, err)
+	}
+	targetState, targetDocument, err := session.Load(ctx, "task-two")
+	if err != nil || targetState.ProjectMemoryCopyCount != 0 || len(targetDocument.ProjectMemoryRefs) != 0 {
+		session.Close()
+		t.Fatalf("fault crossed the target journal boundary: count=%d refs=%d err=%v", targetState.ProjectMemoryCopyCount, len(targetDocument.ProjectMemoryRefs), err)
+	}
+	if err = session.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	projectMemoryRevision := strings.Repeat("b", 40)
+	projectMemoryOnly, err := ParseArchive(fixtureArchiveCapabilities(t, projectMemoryRevision, []string{RuntimeCapabilityProjectMemoryV1}, nil), "zip", projectMemoryRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(ctx, projectMemoryOnly); err == nil {
+		t.Fatal("legacy copy-incompatible package activated after a crash left PREPARED lineage")
+	}
+	if _, err = manager.Rollback(legacyRevision); err == nil {
+		t.Fatal("rollback ignored a prepared copy in the external privacy registry")
+	}
+	copyRevision := strings.Repeat("c", 40)
+	copyCapable, err := ParseArchive(fixtureArchiveCapabilities(t, copyRevision, supportedRuntimeCapabilities, nil), "zip", copyRevision, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Install(ctx, copyCapable); err != nil {
+		t.Fatalf("copy-capable package rejected after prepared lineage: %v", err)
+	}
+}
+
 func TestInstallRequiresReadWorkerRuntimeForAdmittedEvents(t *testing.T) {
 	platform := nativePlatform(t)
 	parent := t.TempDir()
@@ -251,7 +500,7 @@ func TestInstallRequiresReadWorkerRuntimeForAdmittedEvents(t *testing.T) {
 	}
 	defer manager.Close()
 	workerStore := filepath.Join(parent, "worker-store")
-	createRuntimeCapabilityStore(t, workerStore, false, true)
+	createRuntimeCapabilityStore(t, workerStore, false, false, true)
 	if err = manager.RegisterStore(workerStore); err != nil {
 		t.Fatal(err)
 	}

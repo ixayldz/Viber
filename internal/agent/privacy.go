@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -235,6 +237,9 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	if err != nil {
 		return plan, err
 	}
+	if err = s.checkProjectMemoryCopyPinsForSourceDeletion(ctx, task, view, scopes); err != nil {
+		return plan, err
+	}
 	plan.OwnerScopesDigest = scopesDigest
 	for _, scope := range scopes {
 		if scope.PhysicalRoot == s.instance.PhysicalRoot {
@@ -280,6 +285,126 @@ func (s *Session) deletionPlanLocked(ctx context.Context, task string) (Deletion
 	plan.Digest = deletionDigest(plan)
 	return plan, validateDeletionCommand(DeletionCommand{CommandID: "preview", Plan: plan})
 }
+
+// checkProjectMemoryCopyPinsForSourceDeletion keeps a source task's content
+// while any registered target copy remains recoverable. The registry lock is
+// held by deletionPlanLocked, so no new copy can race this check and intent
+// publication. A missing or unregistered target is not evidence of purge.
+func (s *Session) checkProjectMemoryCopyPinsForSourceDeletion(ctx context.Context, sourceTask string, view privacyView, scopes []privacyScope) error {
+	currentScope, err := s.currentPrivacyMemoryScope()
+	if err != nil {
+		return err
+	}
+	registered := make(map[privacyMemoryScope]privacyScope, len(scopes))
+	for _, scope := range scopes {
+		registered[privacyMemoryScopeFromOwner(scope)] = scope
+	}
+	for _, copy := range view.MemoryCopies {
+		if copy.Origin.TaskID != sourceTask {
+			continue
+		}
+		memoryScope := copy.Scope
+		ownerScope, exists := registered[memoryScope]
+		if !exists {
+			return c.Fail(c.StaleAuthority, "project memory copy target owner is no longer registered; source deletion remains blocked")
+		}
+		if _, hasDeletion := view.Deletions[copy.Target.TaskID]; !hasDeletion {
+			return c.Fail(c.PolicyDenied, "delete or purge every explicit project memory copy before deleting its source")
+		}
+		purged, present, checkErr := s.projectMemoryCopyPurgedInScope(ctx, ownerScope, memoryScope == currentScope, copy)
+		if checkErr != nil {
+			return checkErr
+		}
+		if !present || !purged {
+			return c.Fail(c.PolicyDenied, "delete or purge every explicit project memory copy before deleting its source")
+		}
+		// A restore registered under this authority is another durable target
+		// copy. The original target tombstone does not purge its restored archive.
+		for _, restore := range view.Copies {
+			if restore.Kind != "RESTORE_STAGE" || !restoreCopyIsCurrentOwner(restore, scopes) || !privacyManagedCopyHasTask(restore, copy.Target.TaskID) {
+				continue
+			}
+			for _, restoredScope := range scopes {
+				if restoredScope.Directory != restore.Directory || restoredScope.InstanceID != restore.RestoreInstanceID ||
+					restoredScope.PhysicalRoot != restore.PhysicalRoot || restoredScope.CheckpointAnchor != restore.RestoreAnchor ||
+					restoredScope.RestoreBinding != restore.RestoreBinding {
+					continue
+				}
+				restoredMemoryScope := privacyMemoryScopeFromOwner(restoredScope)
+				if restoredMemoryScope == memoryScope {
+					continue
+				}
+				restoredPurged, restoredPresent, restoredErr := s.projectMemoryCopyPurgedInScope(ctx, restoredScope, false, copy)
+				if restoredErr != nil {
+					return restoredErr
+				}
+				// A registered restore can predate this explicit copy. In that
+				// case the target reference was never present in that restored
+				// snapshot and there is nothing to purge there. Once present,
+				// however, that restored copy must reach its own PURGED receipt.
+				if restoredPresent && !restoredPurged {
+					return c.Fail(c.PolicyDenied, "delete or purge every restored project memory copy before deleting its source")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Session) projectMemoryCopyPurgedInScope(ctx context.Context, scope privacyScope, current bool, copy privacyMemoryCopy) (purged, present bool, err error) {
+	var journal *store.Store
+	var archive *artifact.Archive
+	var ledger *resource.Ledger
+	if current {
+		journal, archive = s.Journal, s.Archive
+	} else {
+		journal, archive, ledger, err = openDeletionStore(ctx, scope, *s.privacy)
+		if err != nil {
+			return false, false, c.Fail(c.StaleAuthority, "registered project memory copy owner cannot be verified")
+		}
+		defer func() { err = errors.Join(err, archive.Close(), journal.Close(), ledger.Close()) }()
+	}
+	states, err := journal.Replay(ctx, copy.Target.TaskID)
+	if err != nil {
+		return false, false, err
+	}
+	state, found := states[copy.Target.TaskID]
+	if !found {
+		return false, false, c.Fail(c.StoreIntegrityError, "registered owner lacks a task claimed by its project memory lineage")
+	}
+	if state.Deletion != nil {
+		return state.Deletion.Status == "PURGED", true, nil
+	}
+	raw, err := archive.GetBytes(copy.Target.TaskID, state.DocumentDigest)
+	if err != nil {
+		return false, false, err
+	}
+	var doc Document
+	if c.DecodeStrict(raw, &doc) != nil || doc.SchemaVersion != 1 || doc.TaskID != copy.Target.TaskID ||
+		doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest {
+		return false, false, c.Fail(c.StoreIntegrityError, "project memory copy target document binding is invalid")
+	}
+	canonical, canonicalErr := c.CanonicalV1(doc)
+	if canonicalErr != nil || !bytes.Equal(raw, canonical) {
+		return false, false, c.Fail(c.StoreIntegrityError, "project memory copy target document is not canonical")
+	}
+	for _, ref := range doc.ProjectMemoryRefs {
+		if ref.ID == copy.CopyID && ref.Type == "PROJECT_MEMORY_COPY" {
+			if ref.Digest != copy.CopyDigest {
+				return false, false, c.Fail(c.StoreIntegrityError, "restored project memory copy reference digest changed")
+			}
+			return false, true, nil
+		}
+	}
+	// The original owner must contain the exact reference regardless of which
+	// Session is performing this check. A restore snapshot may legitimately
+	// predate the copy and therefore contain no such reference.
+	if privacyMemoryScopeFromOwner(scope) == copy.Scope {
+		return false, false, c.Fail(c.StoreIntegrityError, "original project memory copy reference is missing")
+	}
+	return false, false, nil
+}
+
 func (s *Session) DeletionPreview(ctx context.Context, task string) (DeletionPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

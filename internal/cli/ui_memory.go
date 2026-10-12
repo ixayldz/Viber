@@ -56,11 +56,28 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 		if result.HasMore {
 			text.WriteString("More entries: narrow /memory search QUERY, or use CLI page flags.\n")
 		}
+		text.WriteString("To pin one exact entry into the open task, use /memory copy SOURCE_TASK ITEM_ID DIGEST. Copy never searches or imports other entries.\n")
 		return text.String(), false, nil
 	}
 	id, err := resolveCommandID("")
 	if err != nil {
 		return "", false, err
+	}
+	if action == "copy" {
+		parts, body := memoryWords(rest, 3)
+		if len(parts) != 3 || body != "" || parts[0] == u.task || !c.ValidDigest(parts[2]) {
+			return "", false, c.Fail(c.InvalidArgument, "/memory copy SOURCE_TASK ITEM_ID DIGEST; choose an exact source entry and a different source task")
+		}
+		request := projectMemoryCopyRequest{CommandID: id, SourceTask: parts[0], ItemID: parts[1], ItemDigest: parts[2]}
+		raw, callErr := u.call(ctx, "project-memory-copy", request)
+		if callErr != nil {
+			return "", false, callErr
+		}
+		var receipt agent.ProjectMemoryCopyReceipt
+		if callErr = c.DecodeStrict(raw, &receipt); callErr != nil {
+			return "", false, callErr
+		}
+		return formatProjectMemoryCopyReceipt(receipt), false, nil
 	}
 	request := projectMemoryMutationRequest{CommandID: id}
 	switch action {
@@ -83,7 +100,7 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 		}
 		request.TargetID, request.TargetDigest = parts[0], parts[1]
 	default:
-		return "", false, c.Fail(c.InvalidArgument, "/memory [search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST]")
+		return "", false, c.Fail(c.InvalidArgument, "/memory [search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST|copy SOURCE_TASK ITEM_ID DIGEST]")
 	}
 	raw, err := u.call(ctx, "project-memory-"+action, request)
 	if err != nil {

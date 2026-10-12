@@ -5,6 +5,7 @@ coverage.out
 *.test
 *.exe
 .viber-local/
+evidence/
 *.sqlite*
 *.prof
 .DS_Store

@@ -57,7 +57,7 @@ func (s *Session) deriveVerification(doc Document, state c.TaskState) (FrozenVer
 	if _, err := s.Archive.Get(doc.Candidate); err != nil {
 		return report, err
 	}
-	if err := s.validateProtection(doc); err != nil {
+	if err := s.validateProtectionBytes(doc); err != nil {
 		return report, err
 	}
 	for _, r := range []bool{unresolvedResource(state) == nil, tokensQuiescent(state)} {

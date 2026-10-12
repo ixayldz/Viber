@@ -129,7 +129,9 @@ func (m *Manager) RunActive(ctx context.Context, args []string, stdin io.Reader,
 		}
 		// This is a point-in-time preflight. The legacy child acquires its own
 		// store lock and must reject unsupported data through its strict decoder;
-		// no atomic handoff to an unrelated older process is claimed here.
+		// an unregistered owner sharing the same privacy authority could also
+		// publish copy intent after the registry read. No atomic handoff to an
+		// unrelated older process or unregistered owner is claimed here.
 	}
 	command := exec.CommandContext(ctx, state.Binary, args...)
 	command.Stdin = stdin

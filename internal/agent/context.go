@@ -133,8 +133,18 @@ func (s *Session) projectMemoryAdvisoryContextLocked(ctx context.Context, state 
 				envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_SOURCE_OR_POLICY_UNAVAILABLE")
 			}
 		} else {
+			currentMemoryPolicy, policyErr := projectMemoryEffectivePolicyDigest(doc)
+			if policyErr != nil {
+				return "", policyErr
+			}
 			for _, item := range items {
-				if item.Status != "ACTIVE" || !item.AdvisoryOnly || item.EvidenceClass != "USER_ASSERTED" ||
+				evidenceOK := item.EvidenceClass == "USER_ASSERTED"
+				if item.EvidenceClass == "USER_COPIED" {
+					evidenceOK = item.Origin != nil && item.Source.TaskID == state.TaskID &&
+						projectMemoryIDPattern.MatchString(item.SourceItemID) && c.ValidDigest(item.SourceItemDigest) &&
+						item.TransferPolicyDigest == currentMemoryPolicy
+				}
+				if item.Status != "ACTIVE" || !item.AdvisoryOnly || !evidenceOK || item.Source.TaskID != state.TaskID ||
 					item.Source.ProjectDigest != querySource.ProjectDigest || item.Source.BaselineDigest != querySource.BaselineDigest ||
 					item.Source.CandidateDigest != querySource.CandidateDigest || item.Source.PolicyEpoch != querySource.PolicyEpoch ||
 					item.Source.PolicyDigest != querySource.PolicyDigest {

@@ -51,6 +51,8 @@ jobs:
           python scripts/test-evidence-validator.py
           python scripts/test-portable-package.py
           python scripts/test-engineering-release.py
+          python scripts/test-native-onboarding-metadata.py
+          python scripts/retrieval-evaluation.py --self-test
       - name: Full tests
         run: |
           mkdir -p evidence
@@ -93,6 +95,12 @@ jobs:
           task_viber_binary='./viber'
           if [[ "$RUNNER_OS" == Windows ]]; then task_viber_binary='./viber.exe'; fi
           python scripts/native-tui-smoke.py --binary "$task_viber_binary" --revision '${{ github.sha }}' | tee evidence/tui-journey.json
+      - name: Native offline onboarding wizard journey
+        run: |
+          set -o pipefail
+          task_viber_binary='./viber'
+          if [[ "$RUNNER_OS" == Windows ]]; then task_viber_binary='./viber.exe'; fi
+          python scripts/native-onboarding-smoke.py --binary "$task_viber_binary" --revision '${{ github.sha }}' | tee evidence/onboarding-journey.json
       - run: go run ./cmd/viber doctor --json
       - name: Race detector
         if: runner.os == 'Linux'

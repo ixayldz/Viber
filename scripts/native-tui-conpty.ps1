@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Binary,
-    [Parameter(Mandatory = $true)][string]$Task,
-    [Parameter(Mandatory = $true)][string]$Store,
+    [string]$Task,
+    [string]$Store,
+    [switch]$Onboarding,
     [Parameter(Mandatory = $true)][string]$WorkingDirectory
 )
 
@@ -302,7 +303,13 @@ public static class NativeTuiConPty {
 
 try {
     Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
-    $childArguments = [string[]]@('ui', $Task, '--store', $Store)
+    if ($Onboarding) {
+        if ($Task -or $Store) { throw 'invalid_arguments' }
+        $childArguments = [string[]]@()
+    } else {
+        if ([string]::IsNullOrWhiteSpace($Task) -or [string]::IsNullOrWhiteSpace($Store)) { throw 'invalid_arguments' }
+        $childArguments = [string[]]@('ui', $Task, '--store', $Store)
+    }
     $result = [NativeTuiConPty]::Run($Binary, $childArguments, $WorkingDirectory)
     exit $result
 } catch {

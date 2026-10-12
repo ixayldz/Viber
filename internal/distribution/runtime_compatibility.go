@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ixayldz/Viber/internal/agent"
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
@@ -17,14 +18,16 @@ import (
 )
 
 const (
-	RuntimeCapabilityProjectMemoryV1 = "project_memory_v1"
-	RuntimeCapabilityReadWorkersV1   = "read_workers_v1"
-	maxRuntimeCapabilityStates       = 1 << 16
-	maxRuntimeCapabilityDocuments    = 1 << 16
-	maxRuntimeCapabilityBytes        = 512 << 20
+	RuntimeCapabilityProjectMemoryCopyV1 = "project_memory_copy_v1"
+	RuntimeCapabilityProjectMemoryV1     = "project_memory_v1"
+	RuntimeCapabilityReadWorkersV1       = "read_workers_v1"
+	maxRuntimeCapabilityStates           = 1 << 16
+	maxRuntimeCapabilityDocuments        = 1 << 16
+	maxRuntimeCapabilityBytes            = 512 << 20
 )
 
 var supportedRuntimeCapabilities = []string{
+	RuntimeCapabilityProjectMemoryCopyV1,
 	RuntimeCapabilityProjectMemoryV1,
 	RuntimeCapabilityReadWorkersV1,
 }
@@ -40,6 +43,13 @@ func validateRuntimeCapabilities(capabilities []string) error {
 			return c.Fail(c.InvalidArgument, "runtime capabilities must be known, unique and sorted")
 		}
 		previous = capability
+	}
+	declared := make(map[string]bool, len(capabilities))
+	for _, capability := range capabilities {
+		declared[capability] = true
+	}
+	if declared[RuntimeCapabilityProjectMemoryCopyV1] && !declared[RuntimeCapabilityProjectMemoryV1] {
+		return c.Fail(c.InvalidArgument, "project-memory copy support requires project-memory support")
 	}
 	return nil
 }
@@ -80,8 +90,11 @@ func verifiedBundleManifest(bundle Bundle) (Manifest, error) {
 
 // lockRegisteredStoreCapabilities opens every registered store under its
 // exclusive owner lock and keeps those locks until the caller finishes changing
-// the selected program. A racing writer either completes before this scan or
-// prevents the lock from being acquired.
+// the selected program. A racing writer in one of those stores either completes
+// before this scan or prevents the lock from being acquired. Privacy-family
+// copy intent is read from its authoritative journal under that journal's short
+// registry lock; this does not claim an atomic handoff against an unregistered
+// owner sharing the same authority.
 func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store.Store, []string, error) {
 	registered, err := m.RegisteredStores()
 	if err != nil {
@@ -112,6 +125,14 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if err = known.ValidateCurrent(); err != nil {
 			return closeOnError(err)
 		}
+		copyUsed, copyErr := agent.ProjectMemoryCopyCapabilityUsed(ctx, owner)
+		if copyErr != nil {
+			return closeOnError(copyErr)
+		}
+		if copyUsed {
+			used[RuntimeCapabilityProjectMemoryCopyV1] = true
+			used[RuntimeCapabilityProjectMemoryV1] = true
+		}
 		snapshot, err := owner.SnapshotInfo(ctx)
 		if err != nil {
 			return closeOnError(err)
@@ -130,14 +151,8 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 			if err = ctx.Err(); err != nil {
 				return closeOnError(err)
 			}
-			if state.ProjectMemoryRevision < 0 {
-				return closeOnError(c.Fail(c.StoreIntegrityError, "registered task has an invalid project-memory revision"))
-			}
-			if state.ProjectMemoryRevision > 0 {
-				used[RuntimeCapabilityProjectMemoryV1] = true
-			}
-			if len(state.ReadWorkerAdmissions) > 0 {
-				used[RuntimeCapabilityReadWorkersV1] = true
+			if err = applyTaskRuntimeCapabilities(state, used); err != nil {
+				return closeOnError(err)
 			}
 		}
 		refs, refsErr := owner.DocumentReferences(ctx)
@@ -147,11 +162,15 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if len(refs) > maxRuntimeCapabilityDocuments {
 			return closeOnError(c.Fail(c.BudgetLimitReached, "registered store exceeds the bounded historical-document scan"))
 		}
-		found, scannedBytes, scanErr := scanStoreProjectMemory(ctx, known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes)
+		found, copyFound, scannedBytes, scanErr := scanStoreProjectMemory(ctx, known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes)
 		if scanErr != nil {
 			return closeOnError(scanErr)
 		}
 		if found {
+			used[RuntimeCapabilityProjectMemoryV1] = true
+		}
+		if copyFound {
+			used[RuntimeCapabilityProjectMemoryCopyV1] = true
 			used[RuntimeCapabilityProjectMemoryV1] = true
 		}
 		documentBytes += scannedBytes
@@ -164,6 +183,24 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 	return locked, required, nil
 }
 
+func applyTaskRuntimeCapabilities(state c.TaskState, used map[string]bool) error {
+	if state.ProjectMemoryRevision < 0 || state.ProjectMemoryCopyCount < 0 || state.ProjectMemoryCopyCount > state.ProjectMemoryRevision {
+		return c.Fail(c.StoreIntegrityError, "registered task has invalid project-memory capability counters")
+	}
+	if state.ProjectMemoryRevision > 0 || state.ProjectMemoryCopyCount > 0 {
+		used[RuntimeCapabilityProjectMemoryV1] = true
+	}
+	if state.ProjectMemoryCopyCount > 0 {
+		// This task-state marker is durable across document purge. Historical
+		// archive scans alone cannot retain copy capability after deletion.
+		used[RuntimeCapabilityProjectMemoryCopyV1] = true
+	}
+	if len(state.ReadWorkerAdmissions) > 0 {
+		used[RuntimeCapabilityReadWorkersV1] = true
+	}
+	return nil
+}
+
 func closeStoreLocks(locked []*store.Store) error {
 	var result error
 	for i := len(locked) - 1; i >= 0; i-- {
@@ -172,25 +209,25 @@ func closeStoreLocks(locked []*store.Store) error {
 	return result
 }
 
-func scanStoreProjectMemory(ctx context.Context, directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64) (bool, int64, error) {
+func scanStoreProjectMemory(ctx context.Context, directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64) (bool, bool, int64, error) {
 	if err := ctx.Err(); err != nil {
-		return false, 0, err
+		return false, false, 0, err
 	}
 	if byteLimit < 0 {
-		return false, 0, c.Fail(c.BudgetLimitReached, "registered stores exceed the bounded historical-document scan")
+		return false, false, 0, c.Fail(c.BudgetLimitReached, "registered stores exceed the bounded historical-document scan")
 	}
 	if len(refs) == 0 {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
 	inspect := make([]store.DocumentRef, 0, len(refs))
 	allPending := true
 	for _, ref := range refs {
 		if err := ctx.Err(); err != nil {
-			return false, 0, err
+			return false, false, 0, err
 		}
 		state, ok := states[ref.TaskID]
 		if !ok {
-			return false, 0, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")
+			return false, false, 0, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")
 		}
 		if state.Deletion != nil {
 			switch state.Deletion.Status {
@@ -198,7 +235,7 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 				continue
 			case "PENDING":
 			default:
-				return false, 0, c.Fail(c.StoreIntegrityError, "registered task has an invalid content deletion status")
+				return false, false, 0, c.Fail(c.StoreIntegrityError, "registered task has an invalid content deletion status")
 			}
 		} else {
 			allPending = false
@@ -206,42 +243,44 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 		inspect = append(inspect, ref)
 	}
 	if len(inspect) == 0 {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
 	storeRoot, err := os.OpenRoot(directory)
 	if err != nil {
 		if allPending {
-			return true, 0, nil
+			return true, false, 0, nil
 		}
-		return false, 0, err
+		return false, false, 0, err
 	}
 	defer storeRoot.Close()
 	info, err := storeRoot.Lstat("artifacts")
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		if allPending {
-			return true, 0, nil
+			return true, false, 0, nil
 		}
-		return false, 0, c.Fail(c.StoreIntegrityError, "registered store document archive is unavailable or replaced")
+		return false, false, 0, c.Fail(c.StoreIntegrityError, "registered store document archive is unavailable or replaced")
 	}
 	archiveRoot, err := storeRoot.OpenRoot("artifacts")
 	if err != nil {
 		if allPending {
-			return true, 0, nil
+			return true, false, 0, nil
 		}
-		return false, 0, err
+		return false, false, 0, err
 	}
 	defer archiveRoot.Close()
 	if err = fileguard.Private(archiveRoot); err != nil {
-		return false, 0, err
+		return false, false, 0, err
 	}
 	var scanned int64
+	projectMemory := false
+	projectMemoryCopy := false
 	for _, ref := range inspect {
 		if err := ctx.Err(); err != nil {
-			return false, scanned, err
+			return false, projectMemoryCopy, scanned, err
 		}
 		state, ok := states[ref.TaskID]
 		if !ok {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")
 		}
 		pendingDeletion := false
 		if state.Deletion != nil {
@@ -251,30 +290,30 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 			if state.Deletion.Status == "PENDING" {
 				pendingDeletion = true
 			} else {
-				return false, scanned, c.Fail(c.StoreIntegrityError, "registered task has an invalid content deletion status")
+				return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "registered task has an invalid content deletion status")
 			}
 		}
 		name, pathErr := artifact.ScopedBlobPath(ref.TaskID, ref.Digest)
 		if pathErr != nil {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "historical document reference is invalid")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "historical document reference is invalid")
 		}
 		raw, readErr := fileguard.ReadRegular(archiveRoot, filepath.FromSlash(name), 8<<20)
 		if readErr != nil && pendingDeletion && errors.Is(readErr, os.ErrNotExist) {
 			// A pending deletion may already have removed some historical
 			// documents. Their former feature use cannot be recovered from the
 			// remaining bytes, so conservatively require project-memory support.
-			return true, scanned, nil
+			return true, projectMemoryCopy, scanned, nil
 		}
 		if readErr != nil || c.HashBytes(raw) != ref.Digest {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "registered store historical document is missing or changed")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "registered store historical document is missing or changed")
 		}
 		scanned += int64(len(raw))
 		if scanned > byteLimit {
-			return false, scanned, c.Fail(c.BudgetLimitReached, "registered stores exceed the bounded historical-document scan")
+			return false, projectMemoryCopy, scanned, c.Fail(c.BudgetLimitReached, "registered stores exceed the bounded historical-document scan")
 		}
 		var document map[string]json.RawMessage
 		if err = c.DecodeStrict(raw, &document); err != nil || document == nil {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "registered store document cannot be inspected for runtime references")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "registered store document cannot be inspected for runtime references")
 		}
 		refsRaw, exists := document["project_memory_refs"]
 		if !exists {
@@ -282,15 +321,33 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 		}
 		trimmed := bytes.TrimSpace(refsRaw)
 		if bytes.Equal(trimmed, []byte("null")) {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference list is malformed")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference list is malformed")
 		}
 		var memoryRefs []json.RawMessage
 		if err = json.Unmarshal(refsRaw, &memoryRefs); err != nil {
-			return false, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference list is malformed")
+			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference list is malformed")
 		}
 		if len(memoryRefs) > 0 {
-			return true, scanned, nil
+			projectMemory = true
+			for _, memoryRefRaw := range memoryRefs {
+				var memoryRef map[string]json.RawMessage
+				if err = json.Unmarshal(memoryRefRaw, &memoryRef); err != nil || memoryRef == nil {
+					return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference is malformed")
+				}
+				typeRaw, hasType := memoryRef["type"]
+				if !hasType {
+					continue
+				}
+				var referenceType string
+				if err = json.Unmarshal(typeRaw, &referenceType); err != nil || referenceType == "" {
+					return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "project-memory document reference type is malformed")
+				}
+				if referenceType != "PROJECT_MEMORY_COPY" {
+					return false, projectMemoryCopy, scanned, c.Fail(c.UnsupportedCapability, "registered store uses an unknown project-memory reference type")
+				}
+				projectMemoryCopy = true
+			}
 		}
 	}
-	return false, scanned, nil
+	return projectMemory, projectMemoryCopy, scanned, nil
 }

@@ -201,6 +201,7 @@ type TaskState struct {
 	Deletion                *TaskDeletion         `json:"content_deletion,omitempty"`
 	WorkBudget              *TaskWorkBudget       `json:"work_budget,omitempty"`
 	ProjectMemoryRevision   int64                 `json:"project_memory_revision,omitempty"`
+	ProjectMemoryCopyCount  int64                 `json:"project_memory_copy_count,omitempty"`
 	ReadWorkerAdmissions    []ReadWorkerAdmission `json:"read_worker_admissions,omitempty"`
 	DeliveryEffects         []DeliveryEffect      `json:"delivery_effects,omitempty"`
 	GoalQueue               []GoalSchedule        `json:"goal_queue,omitempty"`
