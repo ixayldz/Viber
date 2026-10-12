@@ -2,6 +2,8 @@
 
 ## 12 Ekim yeni özellik CI regresyonu ve takip güvenlik düzeltmesi
 
+`1c13c112c088e4a514e5ec81b1b0a4236632349a` [CI38275319107](https://github.com/ixayldz/Viber/actions/runs/38275319107) Ubuntu full/migration'dan sonra mandatory native terminal step'te FAILED (`ui_exit_status`, job114899230632). POSIX harness `pty.fork()` dönüşündeki `(pid, fd)` alanlarını ters atıyordu; child branch çalışmıyor, fd PID gibi `waitpid`'e gidiyordu. Assignment düzeltildi ([Python stdlib sözleşmesi](https://docs.python.org/3/library/pty.html#pty.fork)); unknown child exit'i 0/PASS'e dönüştürme yapılmadı, platform step atlanmadı. Bu kaynak yayımlanmadı. Yeni exact-source hosted PTY kabulü gerekir; Windows ConPTY PASS farklı backend kanıtıdır.
+
 Takip onboarding üç focused parent Windows PASS: bare noninteractive help, ChatGPT consent refusal/no task creation, private seeded offline sample/source preservation. Gerçek tool ConPTY smoke ayrıca bare binary → `3`/`YES` → otomatik TUI → `/mem`/Tab/Enter → memory0 → `/exit` akışını gözledi. Owner sonradan graceful kapatıldı; task24/candidate ve private hello source readback korundu, quality UNVERIFIED/release_ready=false. PowerShell native-exit wrapper tek başına uygulamanın exit-code kanıtı olarak kullanılmadı; demo return2 sözleşmesi focused CLI testinde doğrulandı. Bu smoke account/model veya bütün platform kabulü değildir.
 
 80-column gerçek görüntüleme kontrolünde uzun `/memory` usage'ı completion yönergesini kesiyordu; yönerge notice'ın başına alındı. Checks/Goal alanları da uzun candidate hash'inden önce gösterilir. Son CLI build ve agent/cli/tui vet PASS. Automated native terminal runner'ın local/hosted kabulü aşağıdaki source CI'dan ayrı kaydedilir.

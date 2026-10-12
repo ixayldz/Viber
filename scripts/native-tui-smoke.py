@@ -141,7 +141,7 @@ class PosixPTY:
 
         self.fcntl = fcntl
         self.termios = termios
-        self.master, self.pid = pty.fork()
+        self.pid, self.master = pty.fork()
         self.capture = bytearray()
         self.closed = False
         self.exit_code = None
