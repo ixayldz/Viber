@@ -2,6 +2,7 @@
 set -euo pipefail
 evidence=${1:?evidence directory required}
 mkdir -p "$evidence"
+python3 scripts/ci-environment-evidence.py vault --phase before_setup --output "$evidence/vault-environment.json"
 if [[ "$(uname -s)" == Linux ]]; then
   # dbus-run-session supplies a fresh local session bus. The default login
   # collection belongs only to the disposable CI runner user.

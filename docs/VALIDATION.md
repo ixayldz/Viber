@@ -1,5 +1,15 @@
 # Doğrulama kaydı
 
+## 12 Ekim takip raporu ve Windows owner kabulü
+
+Exact `4cb840c96f2c93e019d0907d1efd656642954464` [core38277989540](https://github.com/ixayldz/Viber/actions/runs/38277989540) tamamlandı: FAILURE. Ubuntu/macOS testleri (native terminal dahil), Docker/rootless, iki vault ve üç package build SUCCESS. Windows full suite'deki `TestActiveSteeringPublishesRawBarrierAndNeverRerunsOnDuplicate` 10 saniyelik RPC client deadline'ında `owner response unavailable; operation outcome requires reconciliation` verdi (job114908055918). Foundation FAILED; dependent installation/attestation SKIPPED. Bu source public release değildir.
+
+Native shard sürücüsünün ilk paket grubu varsayılan Go package paralelliğinde fiziksel store fixture'larını yarıştırıyordu; her invocation artık `-p 1` kullanır. Hiçbir test/filter/deadline/assert kaldırılmadı veya genişletilmedi. Aynı mevcut steering parent native Windows focused `-count=3` turunda PASS (11.926s toplam). Bu sonuç yük altında kök neden veya yeni full CI PASS'i değildir; yeni exact source ayrıca kabul ister.
+
+Coverage, pinned security tooling ve vault/rootless descriptive environment inventory takip CI'a eklendi. Coverage mevcut Linux full testinden alınır; ek full suite başlatılmaz. Başarılı exact-source baseline alınmadan repository coverage yüzdesi veya floor ilan edilmez. Terminal marker wait mevcut capture'ı önce kontrol eder; gerçek marker/output bound/exit gereklilikleri korunur.
+
+Go1.27.2 altında official pinned `govulncheck@v1.9.0 ./...` yerel taraması exit0 / `No vulnerabilities found` verdi. Bu scan runtime proof veya bütün güvenlik matrisi değildir; yeni exact-SHA CI üç platformda ayrıca çalıştırır. Beş değişen Python sürücüsü AST parse ve iki terminal backend'inde coalesced-frame/current-capture kontrolü PASS. Bu küçük harness kontrolü native terminal journey yerine geçmez.
+
 ## 12 Ekim yeni özellik CI regresyonu ve takip güvenlik düzeltmesi
 
 `b3339872ab255109162a6c18abd510a3e5ffb058` [CI38276559798](https://github.com/ixayldz/Viber/actions/runs/38276559798) Ubuntu full/migration ve gerçek PTY step'ten geçip race'e ilerledi. macOS full yalnız `TestOnboardingOfflineGreetingUsesPrivateSample` içinde test fixture'nın config root varsayımında FAILED (job114903346859): Darwin APPDATA/XDG yerine HOME/Library/Application Support kullanıyordu, helper yanlış yerde sample arıyor ve test home'unu izole etmiyordu. Test artık private HOME'u da ayarlar ve gerçek `os.UserConfigDir()` sonucunu kullanır; production path/consent/verification guard değişmedi. Yeni source'un macOS/full/native kabulü ayrıca gerekir.

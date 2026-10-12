@@ -9,6 +9,7 @@ fi
 if [[ ! ${GITHUB_RUN_ID:-} =~ ^[0-9]+$ || ! ${GITHUB_RUN_ATTEMPT:-} =~ ^[0-9]+$ ]]; then exit 4; fi
 task_evidence=$(realpath -m "${2:-evidence}")
 mkdir -p "$task_evidence"
+python3 scripts/ci-environment-evidence.py rootless --phase before_setup --output "$task_evidence/rootless-environment-before.json"
 task_user="vbr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 [[ ${#task_user} -le 32 && ! $(getent passwd "$task_user" || true) ]]
 task_home="/home/$task_user"
@@ -83,6 +84,7 @@ sudo apt-get update
 sudo apt-get install --yes --no-install-recommends "docker-ce-rootless-extras=$task_engine_version" uidmap dbus-user-session slirp4netns
 [[ $(dpkg-query -W -f='${Version}' docker-ce) == "$task_engine_version" ]]
 dpkg-query -W docker-ce docker-ce-rootless-extras uidmap dbus-user-session slirp4netns > "$task_evidence/rootless-packages.txt"
+python3 scripts/ci-environment-evidence.py rootless --phase after_packages --output "$task_evidence/rootless-environment-after-packages.json"
 sudo useradd --create-home --user-group --shell /bin/bash "$task_user"
 task_created=true
 task_uid=$(id -u "$task_user")

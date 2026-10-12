@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "go_version": "1.27.2",
+  "govulncheck": {
+    "module": "golang.org/x/vuln/cmd/govulncheck",
+    "version": "v1.9.0"
+  }
+}

@@ -40,7 +40,12 @@ jobs:
           test -z "$(gofmt -l cmd internal)"
           go vet ./...
       - name: Reachable vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        run: |
+          mkdir -p evidence
+          set -o pipefail
+          python scripts/pinned-tools.py > evidence/pinned-tools.json
+          task_vuln_tool="$(python scripts/pinned-tools.py --govulncheck)"
+          go run "$task_vuln_tool" ./... | tee evidence/govulncheck.txt
       - name: Evidence validator identity and gap contract
         run: |
           python scripts/test-evidence-validator.py
@@ -52,6 +57,8 @@ jobs:
           set -o pipefail
           if [[ "$RUNNER_OS" == Windows ]]; then
             python scripts/native-test-shards.py | tee evidence/tests.jsonl
+          elif [[ "$RUNNER_OS" == Linux ]]; then
+            go test -coverprofile evidence/coverage.out -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
           else
             go test -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
           fi
@@ -59,6 +66,21 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then vault_args+=(--native-ntfs); fi
           if [[ "$RUNNER_OS" != Windows ]]; then vault_args+=(--vault-failure); fi
           python scripts/verify-test-results.py evidence/tests.jsonl --privacy --retrieval --delivery "${vault_args[@]}"
+      - name: Linux statement coverage visibility
+        if: runner.os == 'Linux' && always()
+        run: |
+          python scripts/test-coverage-summary.py
+          go_version="$(go env GOVERSION)"
+          if [[ -s evidence/coverage.out ]]; then
+            mkdir -p .cache
+            if go list -json ./... > .cache/coverage-packages.json; then
+              python scripts/summarize-coverage.py --profile evidence/coverage.out --packages .cache/coverage-packages.json --tests evidence/tests.jsonl --revision "$GITHUB_SHA" --go-version "$go_version" --output evidence/coverage.json
+            else
+              python scripts/summarize-coverage.py --tests evidence/tests.jsonl --revision "$GITHUB_SHA" --unavailable-reason 'package inventory could not be collected' --go-version "$go_version" --output evidence/coverage.json
+            fi
+          else
+            python scripts/summarize-coverage.py --tests evidence/tests.jsonl --revision "$GITHUB_SHA" --unavailable-reason 'coverage profile was not produced' --go-version "$go_version" --output evidence/coverage.json
+          fi
       - name: Migration regression
         run: |
           set -o pipefail

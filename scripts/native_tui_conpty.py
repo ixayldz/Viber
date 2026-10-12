@@ -177,6 +177,8 @@ class WindowsConPTY:
             raise ConPTYFailure("terminal_resize")
 
     def wait_for(self, marker: bytes, timeout: float, stage: str) -> None:
+        if marker in self.capture:
+            return
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._poll(min(2.0, max(0.1, deadline - time.monotonic())))

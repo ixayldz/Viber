@@ -27,9 +27,9 @@ def main():
     shards = [names[index::4] for index in range(4)]
     if sorted(name for shard in shards for name in shard) != names:
         raise RuntimeError("native shard coverage mismatch")
-    commands = [["go", "test", "-json", "-count=1", "-timeout", "15m"]
+    commands = [["go", "test", "-p", "1", "-json", "-count=1", "-timeout", "15m"]
                 + [name for name in packages if name != package]]
-    commands += [["go", "test", "-json", "-count=1", "-timeout", "15m",
+    commands += [["go", "test", "-p", "1", "-json", "-count=1", "-timeout", "15m",
                   "-run", "^(?:" + "|".join(shard) + ")$", package]
                  for shard in shards if shard]
     failures = []

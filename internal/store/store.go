@@ -1,6 +1,7 @@
-// Package store is the initial single-owner SQLite journal foundation.
-// Full power-loss conformance and privacy deletion are not
-// shipped yet; this package is not a supported production metadata service.
+// Package store provides the single-writer SQLite journal used by the bounded
+// checkpoint, migration, and deletion-watermark workflows. Those integrations
+// do not establish full power-loss or privacy metadata-retention conformance.
+// This package is not a general-purpose production metadata service.
 package store
 
 import (

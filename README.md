@@ -272,5 +272,6 @@ Bu kurulumda önceki örneklerde `.\viber.exe` yerine `.\bin\viber.exe`, `./vibe
 - [Main branch anahtarsız komutları](docs/KEYLESS_OPERATIONS.md): yönetilen kurulum, checkpoint ve yeni geliştirmeler.
 - [Destek matrisi](docs/CAPABILITIES.md) ve [release kapıları](docs/RELEASE_GATES.md): çalışan kapsam ve kalan kabul.
 - [Doğrulama kaydı](docs/VALIDATION.md) ve [uygulama planı](docs/ORCHESTRATED_KEYLESS_PLAN_2026_10_11.md).
+- [Katkı yönergeleri](CONTRIBUTING.md) ve [güvenlik sorunlarını bildirme](SECURITY.md).
 
 Viber MIT lisanslıdır. Katkı geliştirirken değişikliğe uygun mevcut kontrolleri çalıştırın; gereksinimler ve mimari için [prd.md](prd.md) dosyasını esas alın.

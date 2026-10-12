@@ -1,6 +1,6 @@
 # Geliştirme ve offline kullanım
 
-Go 1.27.2; tek Go module. Ürün sürümü 0.9.0-dev. Kararlı A–D release kapıları kapalıdır. Bu sürüm fixture veya operator-declared local Ollama ile aynı durable candidate loop'unu çalıştırır. Typed single-worker plan ve transaction-atomic store-wide token reservation vardır; bütün PRD backlog'u tamamlanmış değildir.
+Go 1.27.2; tek Go module. Ürün sürümü 0.9.0-dev. Kararlı A–D release kapıları kapalıdır. Fixture ve operator-declared local Ollama aynı durable candidate loop'unu kullanır. Plan yürütme tek etkin node ile sınırlıdır; ayrıca typed admission ile 2–4 sabit salt-okuma kaynak analizcisi çalışır. Store-wide token reservation transaction içinde tutulur. Bu sınırlı yetenekler bütün PRD backlog'unun tamamlandığı anlamına gelmez; kaynak kodu ile açık kabul sınırları için [güncel yetenekler](CAPABILITIES.md) belgesine bakın.
 
 ## Derleme
 
@@ -72,7 +72,7 @@ Cursor **task_seq**'dir; global journal_seq ile karıştırılmaz. Sıfır inspe
 
 Admission öncesi intent ve üst sınır token rezervasyonu, işlem sonrası receipt/candidate pointer birlikte kaydedilir. Belirsiz model response/usage veya kesilmiş admitted işlem BLOCKED kalır; rezervasyon silinmez, kör retry yapılmaz. Resume canlı source baseline'ının değiştiğini görürse WAITING_USER olur; otomatik rebase/overwrite yoktur.
 
-Bu sürüm peer-authenticated yerel owner kullanır. Çalışan `run`/ `resume` sırasında ikinci CLI `status`, `diff`, `pause`, `cancel`, `inspect`, `replay`, `events`, `requests` ve `respond` komutlarını aynı owner'a gönderir. Yeni writer açılmaz. Host effects/export/backup için IPC registry yoktur; aktif owner varken bu komutlar STORE_OWNED alır.
+Bu sürüm peer-authenticated yerel owner kullanır. Çalışan `run`/`resume` sırasında ikinci CLI `status`, `diff`, `pause`, `cancel`, `inspect`, `replay`, `events`, `requests` ve `respond` komutlarını aynı owner'a gönderir; desteklenen attach/stream ve diğer owner komutları da açık RPC yollarını kullanır. Yeni writer açılmaz. Owner RPC kapsamı komut bazında sınırlıdır; owner'da yolu olmayan store işlemleri ikinci writer açmak yerine `STORE_OWNED` ile durur.
 
 ```sh
 viber serve --store ../viber-demo-store --json
@@ -122,7 +122,7 @@ fs_list FILE/DIRECTORY/EXCLUDED kayıtlarını birlikte sayfalar. Bir sayfada ol
 
 Offline context profili bütün raw intent/spec/restrictions/tools/paired history'yi mandatory tutar. 512 KiB conservative byte upper bound, 512 output reserve, 4096 margin vardır; gerçek provider tokenizer değildir. Sığmayan required context WAITING_RESOURCE + CONTEXT_TOO_SMALL olur; fixture dispatch, steps ve reservation ilerlemez. Context kırpılmaz.
 
-Successful preflight request'i ve manifest'i durable saklanır. run/status JSON'daki context alanı profile, estimate, included/omitted IDs ve request/manifest digest'lerini gösterir; raw request metni yayınlanmaz. Eksik request blob'u veya değişmiş manifest load/backup'ı reddeder. Scope revision yeni context gerektirir. Compaction/production provider count ve semantic goal coverage halen tamamlanmadı.
+Successful preflight request'i ve manifest'i durable saklanır. run/status JSON'daki context alanı profile, estimate, included/omitted IDs ve request/manifest digest'lerini gösterir; raw request metni yayınlanmaz. Eksik request blob'u veya değişmiş manifest load/backup'ı reddeder. Scope revision yeni context gerektirir. Settled protocol sınırlarında bounded compaction vardır ve task obligations korunur. Production provider token sayımı/kalibrasyonu ve semantic goal coverage hâlâ açık işlerdir.
 
 
 ## Yedek ve temiz geri yükleme
@@ -134,7 +134,7 @@ viber store-restore --backup ../viber-demo-backup --store ../viber-demo-restored
 
 Yeni çıktı path'i ve mevcut üst dizin gerekir. SQLite WAL dosyası kopyalanmaz; owner kilidi altında [SQLite VACUUM INTO](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause) ile tutarlı DB snapshot'ı alınır. Historical task documents, ham niyet, fixture/response blob'ları ve snapshot closure doğrulanır. Blob/DB dosyaları sync edildikten sonra `backup.json` yayınlanır. Restore bütün digest/size/path/schema sınırlarını doğrular, fresh stage'de replay+closure denetler ve mevcut dizini değiştirmeden yayınlar.
 
-Profil limiti: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Locks, geçici dosyalar ve yeniden üretilebilir candidate materialization kopyalanmaz. Retention/delete henüz olmadığı için `UNSUPPORTED_NO_DELETIONS`, watermark 0 zorunludur; bu, tombstone veya privacy deletion conformance iddiası değildir. Restore pending effect'i veya approval'ı otomatik çalıştırmaz. Yedek aynı makinede, aynı source kimliğiyle kurtarma içindir; başka makinedeki source yolunu otomatik rebinding yapmaz. Backup hash'leri bütünlük kontrolüdür, dışarıdan gelen bir yedeğin kimliğini doğrulayan imza değildir.
+Profil limiti: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Locks, geçici dosyalar ve yeniden üretilebilir candidate materialization kopyalanmaz. Güncel schema 2 yedeği dış privacy authority ve deletion watermark'ını taşır; restore bunları mevcut authority ile karşılaştırır. Eski schema 1 `UNSUPPORTED_NO_DELETIONS` yedeği yalnız izole migration doğrulamasında kullanılabilir, etkin restore owner'ı olamaz. Bu bounded task-content purge/retention akışı tam metadata-retention veya tüm privacy deletion kabulü değildir. Restore pending effect'i veya approval'ı otomatik çalıştırmaz. Yedek aynı makinede, aynı source kimliğiyle kurtarma içindir; başka makinedeki source yolunu otomatik rebinding yapmaz. Backup hash'leri bütünlük kontrolüdür, dışarıdan gelen bir yedeğin kimliğini doğrulayan imza değildir.
 
 ## Snapshot ve sandbox sınırları
 
@@ -142,11 +142,17 @@ Profil limiti: 512 MiB toplam, 256 MiB DB, 32.768 dosya. Locks, geçici dosyalar
 
 Store root Unix 0700 veya Windows user+SYSTEM private DACL kullanır. Snapshot/archive/model authority kernel tarafındadır. Host readonly chmod gerçek sandbox assurance sayılmaz. `sandbox-run` explicit operator profile/policy/authority ile pinned, önceden kurulu Linux Docker image'ında non-root, network none, read-only root/source, private tmpfs ve kaynak limitleri uygular. Docker socket/credential mount edilmez. Output bounded; timeout/cancel sonrası container ağacı temizlenir. Exit 0 ve stdout PASS güçlü verification receipt değildir. Tam escape/egress/fencing/OS power-loss conformance kapıları açıktır.
 
-OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol fixture testleriyle geliştirilmiştir. Kullanıcı tercihiyle gerçek inference yapılmadı; 0.8 CLI fixture, declared local Ollama, ChatGPT SIWC ve OpenAI/Anthropic API runtime açar. Gerçek endpoint kabulü, complete provider streaming/profile matrix ve enterprise credential lifecycle açık kalır.
+OpenAI Responses, Anthropic Messages ve Ollama adapter'ları canonical protocol fixture testleriyle geliştirilmiştir. Kullanıcı tercihiyle gerçek inference yapılmadı; CLI fixture, declared local Ollama, ChatGPT SIWC ve OpenAI/Anthropic API runtime açar. Gerçek endpoint kabulü, complete provider streaming/profile matrix ve enterprise credential lifecycle açık kalır. Owner'ın provider delta akışı bounded ve ephemeral'dır; durable task history'nin yerini tutmaz.
 
-## Henüz desteklenmeyenler
+## 0.9 bounded yetenekler ve açık kabul
 
-Live apply/workspace restore, semantic spec/check-origin review, protected check observer, tam budget/control reserve, tam IPC platform conformance/supervisor/attach/TUI, provider semantic steering, compaction, retention/delete ve tam disk/control reserve, imzalı paketleme ve bağımsız pilot kabulü tamamlanmadı. Bunlar için host shell veya daha zayıf güvenlik fallback'i yoktur. [Plan](IMPLEMENTATION_PLAN.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) ayrı tutulur.
+Bu başlık altındaki özellikler sınırlı profillerde kullanılabilir; genel ya da tüm-platform kabulü anlamına gelmez. `apply` varsayılan olarak fresh review/patch paketi üretir. Yalnız Windows fixed NTFS, açık `--exclusive-ntfs` seçimi ve desteklenen mevcut regular dosyalar için exact live apply sunar; owned restore ve reconcile uygulanan dosya receipt'ine bağlıdır. Genel dosya oluşturma/silme kapsam dışıdır, Linux/macOS live apply/restore fail-closed kalır.
+
+Protected check origin ve configured exact STDIO observer için bounded doğrulama yolu vardır. `strong_verification_available` ancak observer suite ve current coverage tam eşleştiğinde true olabilir; declared plan tek başına verified sonuç üretmez. Genel runtime coverage, semantic goal quality ve V0–V5 tam saldırı matrisi açık kalır.
+
+Settled-boundary compaction, explicit task-content purge ve açık onaylı EXPIRE retention mevcuttur. Tam metadata/catalogue retention, bütün eski owner ve UNKNOWN metadata lifecycle'ı ile tüm tarihsel pin kabulü hâlâ açıktır. Owner-backed attach, durable goal queue, provider delta gap/resync ve `/compact` TUI komutu vardır; provider delta geçmişi ephemeral'dır. Tam native PTY/restore yolculuğu ve typed multi-worker DAG/AgentLease kabulü açık kalır.
+
+Fiziksel control reserve ve resource accounting'in bounded parçaları uygulanmıştır; bütün OS writer/fence profilleri, güç-kesintisi conformance, imzalı paketleme ve bağımsız pilot henüz kabul edilmemiştir. Gerçek provider/account kabulü ve kararlı A–D release kapıları da açıktır. Daha ayrıntılı kapsam [yetenekler](CAPABILITIES.md), [release gates](RELEASE_GATES.md) ve [ölçülen doğrulama](VALIDATION.md) belgelerinde tutulur.
 
 ## Korunan kontrol planı (0.5 engineering)
 
@@ -182,7 +188,7 @@ Path bir file ise recursive false, bir directory/tree ise true olmalıdır. Abse
 
 Origin durable task document'te tutulur. Sonradan aynı plan dosyasını değiştirmek mevcut görevi değiştirmez. Guided/auto ve review approval aynı protected guard'a tabidir. Mevcut revision original origin'i korur; yeni kriter eski coverage'ı kullanamaz. Korunan test beklentilerini değiştirme protokolü henüz sunulmuyor; böyle bir öneri POLICY_DENIED olur. Yeni agent testini kapsam dışında eklemek eski protected check yerine geçtiğini göstermez.
 
-`check_protection` JSON/IPC/export özeti origin digest, provenance, closure coverage, check/scope count ve `strong_verification_available: false` içerir. Raw operator argv/discovery listesi status'a açılmaz. Provenance `OPERATOR_DECLARED_REPOSITORY_BASELINE` bağımsız test oracle'ı değildir; `EXPLICIT_UNREVIEWED` tam dependency closure kabulü değildir. Candidate ve protected scope digests compiler'a zorunlu girdi olarak girer. Offline fixture teslimleri UNVERIFIED/exit 2 olmaya devam eder.
+`check_protection` JSON/IPC/export özeti origin digest, provenance, closure coverage ve check/scope count taşır. `strong_verification_available`, yalnız configured observer suite ve current coverage bağları doğrulandığında true olur; planın bulunması tek başına yeterli değildir. Raw operator argv/discovery listesi status'a açılmaz. Provenance `OPERATOR_DECLARED_REPOSITORY_BASELINE` bağımsız test oracle'ı değildir; `EXPLICIT_UNREVIEWED` tam dependency closure kabulü değildir. Candidate ve protected scope digests compiler'a zorunlu girdi olarak girer. Offline fixture teslimleri UNVERIFIED/exit 2 olmaya devam eder.
 
 [ADR 0005](adr/0005-protected-check-origin.md), [üretim tamamlama planı](IMPLEMENTATION_PLAN.md) ve [release kapıları](RELEASE_GATES.md) kabul sınırını tanımlar.
 ## Store sürüm geçişi (0.6 engineering)
@@ -200,7 +206,7 @@ Store'u tutan serve veya başka owner önce kapatılmalıdır; migration owner R
 
 Kesinti halinde aynı --command-id ve original backup path ile aynı komut tekrar çalıştırılır. store-migration-status pending intent, schema ve read-only reason'ı verir. Pending açılış generation yükseltmez; run/create/steer/respond/revise/checkpoint durur; inspect/replay açık kalır. Commit gerçekleşmişse DDL tekrarlanmaz. Complete retry original receipt'i döndürür; farklı backup/request command ID conflict olur. Bozuk marker veya kayıp original backup'ta dosyaları silmeyin; doğrulanmış yedekten fresh store-restore kullanın.
 
-Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup completion metadata'sını da korur; v1 backup v1 olarak restore edilir. Store/backup aynı host source identity içindir; cross-host path rebinding desteklenmez. Disk preflight DB'nin 3 katı +32 MiB ister; fiziksel control reserve ve elektrik kesintisi conformance iddiası değildir. Retention/delete/tombstone kabulü açık kalır.
+Schema 2 snapshot format manifest digest'ini taşır. Migration'lı v2 backup completion metadata'sını da korur; v1 backup v1 olarak restore edilir. Store/backup aynı host source identity içindir; cross-host path rebinding desteklenmez. Disk preflight DB'nin 3 katı +32 MiB ister; bu tek başına fiziksel control reserve veya elektrik kesintisi conformance iddiası değildir. Bounded task-content retention/deletion mevcuttur; metadata/audit retention ve tüm tombstone/restore lifecycle kabulü açık kalır.
 
 [ADR 0006](adr/0006-store-migration.md) transaction, crash ve kabul sınırlarını tanımlar.
 Önceki schema 1 tam yedeğinizle ayrı native CLI süreçleri üzerinden upgrade/restore smoke çalıştırmak için:
@@ -220,9 +226,9 @@ Fixture/local/API/SIWC task aynı durable core’u kullanır. Runtime metadata s
 
 NoDispatchReceipt usage source KERNEL_NO_DISPATCH sadece inference HTTP transport öncesi refusals içindir. Provider raw response bu authority üretmez. UNKNOWN dispatch reservation release edilmez. Typed attempts terminal history/token ledger’ı reset etmez; interruption tests Created/Scoping commit noktalarını yeni owner ile uzlaştırır.
 
-Yeni opsiyonel document fields ve usage source nedeniyle 0.8 task’ı older binary ile downlevel resume desteklenmez; SQLite schema 2 korunur. Trusted discovery/observer ve güçlü verification kapalıdır. Aynı gerçeklik doctor/release docs’ta gösterilmelidir.
+Yeni opsiyonel document fields ve usage source nedeniyle 0.8 task’ı older binary ile downlevel resume desteklenmez; SQLite schema 2 korunur. Bu paragraf 0.8 baseline durumunu kaydeder: sonraki 0.9 kaynakta bounded framework/import discovery ve protected observer mevcut olsa da genel discovery, coverage ve saldırı matrisi kapanmış değildir. Sürüm ve paket iddiaları doctor/release belgeleriyle birlikte okunmalıdır.
 
-API/local `--stream` canonical request/runtime flag’ıdır; chatgpt implicit SSE’dir. Bounded raw SSE/NDJSON receipt terminal boundary’den önce tools vermez. Anthropic content/argument/thinking signature/cumulative usage, OpenAI terminal output ve Ollama chunks shared validator’a girer. Partial/duplicate/model mismatch/hosted tool/fallback fail-closed; native loop, token reserve, cancellation, backup/fresh restore tests bu sınırı kapsar. Unknown/new stream block/delta types destek profili genişletilmeden reddedilir. UI live delta/reconnect acceptance ayrı ve açıktır. Git CI’nin opt-in Docker turu artık agent check integration testini de çalıştırır.
+API/local `--stream` canonical request/runtime flag’ıdır; chatgpt implicit SSE’dir. Bounded raw SSE/NDJSON receipt terminal boundary’den önce tools vermez. Anthropic content/argument/thinking signature/cumulative usage, OpenAI terminal output ve Ollama chunks shared validator’a girer. Partial/duplicate/model mismatch/hosted tool/fallback fail-closed; native loop, token reserve, cancellation, backup/fresh restore tests bu sınırı kapsar. Unknown/new stream block/delta types destek profili genişletilmeden reddedilir. 0.9 owner/TUI bounded ephemeral provider delta, explicit retention gap ve current-state resync sunar; bu deltalara durable replay garantisi verilmez. Tam native PTY, process restart sonrası delta devamı ve tüm provider profile kabulü açık kalır. Git CI’nin opt-in Docker turu agent check integration testini de çalıştırır.
 
 ## Exact revision engineering bundle
 

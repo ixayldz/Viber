@@ -182,6 +182,10 @@ class PosixPTY:
             raise
 
     def wait_for(self, marker: bytes, timeout: float, stage: str) -> None:
+        # A previous read can contain several frames. Cached rendering may
+        # produce no new bytes, so consume an already observed marker first.
+        if marker in self.capture:
+            return
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             chunk = self._read_once(0.05)

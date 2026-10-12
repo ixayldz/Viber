@@ -1,5 +1,22 @@
 # 12 Ekim bağımsız raporun kodla karşılaştırması
 
+## 4cb840c kaynağını inceleyen takip raporu
+
+Girdi: `68f21f13` ekindeki “Derinlemesine Teknik, Mimari ve Ürün İncelemesi”. Aynı özelliğin kod, native kabul ve kararlı release durumları ayrı değerlendirilmiştir. Önceki rapor için aşağıdaki tarihsel karşılaştırma korunur.
+
+| Yeni bulgu | Uygulanan takip / açık kabul |
+|---|---|
+| HEAD CI sonucu belirsiz | [4cb CI38277989540](https://github.com/ixayldz/Viber/actions/runs/38277989540) tamamlandı ve FAILURE. Linux/macOS test, Docker/rootless, vault ve paket build işleri SUCCESS; Windows aktif steering owner yanıtını 10 saniyelik test deadline'ında alamadı. Foundation FAILED, dependent attestation/install işler SKIPPED. Bu source yayımlanmaz. |
+| Windows suite disk rekabeti | Native shard sürücüsü agent shard'larını seri çalıştırırken ilk diğer paket grubunu Go'nun varsayılan paralelliğinde çalıştırıyordu. Her invocation'a `-p 1` eklendi; test inventory, deadline, repeat ve assert'ler korunur. Mevcut steering/dedup parent üç focused native Windows tekrarında PASS (11.926s toplam). Yük altında exact CI sonucu ayrıca gerekir; bu gözlem tek başına kök nedeni kesinleştirmez. |
+| Development/store açıklamaları eski | 0.9 bounded compaction, purge/retention, observer, owner/TUI ve Windows NTFS apply kapsamları güncellendi. Genel privacy lifecycle, all-platform live write ve hostile verifier kabulü kapatılmadı. |
+| Coverage görünürlüğü yok | Linux'un mevcut full test invocation'ı statement coverprofile üretir; package summary ve profile aynı source evidence artifact'inde tutulur. Branch coverage veya PRD kabulü değildir; ölçülmüş başarılı baseline olmadan floor icat edilmez. |
+| Security tooling pin'i eski | Sabit Go/govulncheck sürümleri `scripts/pinned-tools.json` altında doğrulanır; scanner v1.9.0 resmi Go paket kaynağında kontrol edilmiştir. Tool uyumluluğu ve yeni CI ayrıca ölçülür; vulnerability database canlıdır. |
+| Host paket sürümleri görünmüyor | Vault/rootless evidence'e observed OS/runner/runtime ve exact installed-package sürümleri eklendi. Descriptive inventory, package pin veya attestation değildir. |
+| Katkı/güvenlik yönergeleri yok | Root CONTRIBUTING/SECURITY eklendi; kaynak/CI/release kapsamı ve hassas raporlama açıklanır. Uydurma iletişim adresi veya yanıt taahhüdü yoktur. |
+| Terminal acceptance sürücüsü çıktı işaretini kaçırabilir | POSIX/ConPTY marker wait önce mevcut bounded capture'ı kontrol eder. Önceki read'in getirdiği ikinci frame için yeni idle output beklenmez; gerçek marker gerekliliği ve exit kontrolü korunur. |
+
+Cross-task memory için ayrı privacy descendant kaydı ve explicit kullanıcı copy işlemi hazırlanır; automatic cross-task keşif güvenli lineage kabulü olmadan açılmaz. Model AgentLease, resolved TS/JS/Python, geniş lifecycle/quota/verifier, bağımsız benchmark/pilot ve platform signing aşağıdaki planda açık kalır. Bunların hepsi model API anahtarı bekleyen işler değildir.
+
 Girdi: kullanıcının “Viber — Derinlemesine Teknik ve Mimari İnceleme” raporu; incelenen exact source `c8d2c8489b6c849ad11815a69d0b6a4c2dbfee53`. Raporun mimari puanları öznel değerlendirmedir. Dosya/test/bağımlılık sayıları üretim güvenliği, görev başarısı veya PRD yüzdesi göstermez. Bu kayıt önceki [uygulama planını](COMPETITOR_ADOPTION_IMPLEMENTATION_PLAN.md) sürdürür.
 
 | Raporun tespiti | Kod / kabul karşılığı | Karar |
