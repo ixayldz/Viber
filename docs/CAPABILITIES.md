@@ -1,5 +1,7 @@
 # Güncel kullanıcı yetenekleri ve kabul sınırları
 
+`de66bbfd5319bad1e3bc095ad16ee332dc3edbbc` [CI38198680928](https://github.com/ixayldz/Viber/actions/runs/38198680928) Windows migration ortak package deadline'ı nedeniyle FAILED; signer ve cross-revision installer çalışmadı. Aşağıdaki public90bc97 kabulü ayrı kaynak içindir. Takip runner'ı bütün migration parent'larını üç tekrar/beş dakika ile ayrı süreçlere böler; yeni exact-source CI sonucu ayrıca gerekir. [12 Ekim karşılaştırma ve anahtarsız PRD analizi](COMPARATIVE_AUDIT_2026_10_12.md) mevcut altyapı, kalan yazılım ve dış kabulü ayırır.
+
 12 Ekim 2026. Tablo kaynak kodundaki kapsamı gösterir; aşağıda ayrıca yayımlanmış paketin exact kabulü belirtilir. Yeni main geliştirmelerinin public pakette bulunduğu varsayılmaz. Tarihsel kanıtlar [VALIDATION](VALIDATION.md), PRD saldırı family'lerinin tam kapanışı [RELEASE_GATES](RELEASE_GATES.md), kalan implementasyon ve kabul [KEYLESS_DELIVERY_PLAN](KEYLESS_DELIVERY_PLAN.md) içindedir. Test sayısı veya implementasyon varlığı production kabulü değildir.
 
 | Kullanıcı yeteneği | Kullanılabilir kapsam | Açık kabul/eksik |

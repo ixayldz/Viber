@@ -1,5 +1,15 @@
 # Doğrulama kaydı
 
+## 12 Ekim main migration CI failure ve takip runner'ı
+
+`de66bbfd5319bad1e3bc095ad16ee332dc3edbbc` [CI38198680928](https://github.com/ixayldz/Viber/actions/runs/38198680928) FAILURE. Windows `Migration regression` FAILED; foundation FAILED; signer/managed installer atlandı. Diğer dokuz foundation öncesi iş SUCCESS. Windows full validator 992 PASS / 24 SKIP / 0 FAIL raporladı; bu migration veya aggregate SUCCESS değildir. Public90bc97 bu farklı başarısız source'u içermez.
+
+Agent migration ilk iki turun parent'larını başarıyla bitirdi; üçüncü `corrupt-backup` 03:45:19.971 UTC'de başladı ve ortak package deadline 03:45:24.248'de 300.094s toplam süreyle doldu. Stack fixture'nın control blob publication'ında `FlushFileBuffers/File.Sync` gösterir. Alt test yaklaşık dört saniyedir çalışıyordu; bu stack tek başına deadlock veya corrupt evidence admission kanıtı değildir. Gerçek cross-revision installer bu pipeline'da **NOT_RUN**.
+
+Yeni migration runner aynı üç package'daki bütün regex-matched Test/Fuzz/Example parent'larını keşfeder; her parent ayrı süreçte `-count=3 -timeout 5m -p 1` kullanır. Seri süreçler disk flush contention'ını azaltır; JSONL, failure propagation ve mandatory migration validator korunur. Yeni test veya yerel full suite eklenmedi; envanter/komut ve syntax kontrolü actual yeni CI acceptance yerine sunulmaz. Sonraki exact source gerçek CI ister. Karşılaştırma, seçilen geliştirmeler ve anahtarsız kalan kapsam [12 Ekim denetiminde](COMPARATIVE_AUDIT_2026_10_12.md) ayrılmıştır.
+
+Takip runner'ının native Windows odaklı migration turu PASS: 15 parent × 3 tekrar = 45 root execution; 42 PASS, `TestMigrationCanonicalBackupAliasRetryCannotChangeBackup` için yerel symlink oluşturma yetkisi bulunmadığından 3 SKIP, 0 FAIL. SKIP alias profili kabulü değildir. Mandatory migration validator 38 unique PASS / 1 unique SKIP / 0 FAIL ve beş required parent PASS raporladı; unique sayı execution sayısı değildir. Envanter/komut kontrolü, Python/Bash syntax ve diff-check PASS. JSONL `.cache/migration-ci-followup.jsonl` içindedir. Yeni GitHub exact-source CI ve cross-revision installer kabulü hâlâ ayrıca gerekir.
+
 ## 12 Ekim yönetilen engineering yayını
 
 Exact source `90bc97ebc9318e3542ffbc2507b8cb346dae69e5` [core CI38195774589](https://github.com/ixayldz/Viber/actions/runs/38195774589) **16/16 SUCCESS**, skip/failure olan iş yoktur. Üç OS native/full/vet/vulnerability/migration, Linux full race/tüm fuzz, rootful/rootless, iki native vault, üç portable build/fresh archive smoke, foundation, package attestation, üç yönetilen installer ve installation attestation geçti. Paketler yalnız foundation başarılı olduktan sonra imzalandı.

@@ -14,7 +14,7 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 | 16 | Context overflow | Mandatory full protocol/spec/policy preflight, durable manifest/request closure, exact-byte source/list/search paging; provider tokenizer/compaction eksik | PARTIAL |
 | 17 | Compaction policy | Source-bound deterministic archive/history/pins; semantic continuation quality acceptance eksik | PARTIAL |
 | 18 | Privacy fallback | Restriction intersection, no remote fixture loop, redirect/proxy deny; full lineage eksik | PARTIAL |
-| 19 | Plugin isolation | Plugin runtime yok | NOT_IMPLEMENTED |
+| 19 | Plugin isolation | Pinned, çağrı başına onaylı read-only/network-none MCP Session/CLI runtime ve 90bc97 gerçek Docker/protocol kabulü var; genel plugin/effect/egress ve tam hostile profile matrisi açık | PARTIAL |
 | 20–21 | Corruption/two owners | Journal/projection/historical checkpoint/dedup receipt hash/replay + explicit restore-tested v1→v2 migration + OS lock + SID/UID/PID peer-auth RPC; hostile-principal platform acceptance eksik | PARTIAL |
 | 22–24 | Restore/reconnect/telemetry | Store fresh restore ve opt-in changeset export; stale owner descriptor reconciliation; task-content delete var; workspace restore/stream reconnect açık | PARTIAL |
 | 25–28 | Guards/origin/integrity/delivery | Pure predicate + frozen artifact + scoped limited delivery; durable typed origin, tree/absence check weakening guard, revision/recovery/backup closure; full interval protected verifier eksik | PARTIAL |

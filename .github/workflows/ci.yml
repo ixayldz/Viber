@@ -62,7 +62,7 @@ jobs:
       - name: Migration regression
         run: |
           set -o pipefail
-          go test -json -count=3 -timeout 5m ./internal/store ./internal/agent ./internal/cli -run 'Migration|LegacyOpen|FormatAndMigration' | tee evidence/migration.jsonl
+          python scripts/migration-regression.py | tee evidence/migration.jsonl
           python scripts/verify-test-results.py evidence/migration.jsonl --migration
       - run: go build -trimpath ./cmd/viber
       - run: go run ./cmd/viber doctor --json
