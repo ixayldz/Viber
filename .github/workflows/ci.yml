@@ -100,7 +100,8 @@ jobs:
           path: evidence/
           if-no-files-found: error
   docker:
-    needs: test
+    # Independent native runtime acceptance runs in parallel. Foundation and
+    # every signer/publication still require both this job and all test jobs.
     timeout-minutes: 35
     runs-on: ubuntu-latest
     env:
@@ -153,7 +154,7 @@ jobs:
           path: evidence/
           if-no-files-found: error
   vault:
-    needs: test
+    # These disposable vault fixtures do not consume test-job artifacts.
     timeout-minutes: 10
     strategy:
       fail-fast: false

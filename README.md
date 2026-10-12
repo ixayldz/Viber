@@ -186,6 +186,7 @@ viber store-restore --backup BACKUP --store NEW_STORE --json
 | Sorun | Yapılacak işlem |
 | --- | --- |
 | `viber` bulunamıyor | Binary klasöründe `./viber` / `.\viber.exe` kullanın veya klasörü PATH'e ekleyin |
+| Paket doğrulaması GitHub oturumu istiyor | [GitHub CLI girişini](https://cli.github.com/manual/gh_auth_login) `gh auth login --hostname github.com --web` ile tamamlayıp doğrulamayı tekrar çalıştırın; bu ChatGPT girişinden ayrıdır |
 | Login tarayıcısı açılmıyor | Yerel masaüstü oturumu ve varsayılan tarayıcıyla tekrar deneyin; `Ctrl+C` giriş denemesini iptal eder |
 | `chatgpt_plan_usage: false` | Hesap/workspace izinlerini kontrol edin; kayıtlı profile `auth login --profile ID` ile yeniden izin verin |
 | Model hesabınızda yok | `auth models --json` ve ChatGPT kullanım ayarlarını kontrol edin |

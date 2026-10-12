@@ -502,21 +502,64 @@ func ValidateGoSemanticGraphEnvelope(report GoSemanticGraph, source workspace.Ca
 		return c.Fail(c.StoreIntegrityError, "Go graph worker fingerprint mismatch")
 	}
 	entries := make(map[string]c.Entry, len(source.Snapshot.Entries))
+	capturedDirectories := make(map[string]bool, len(source.Snapshot.Directories))
+	capturedGoDirectories := make(map[string]bool)
 	for _, entry := range source.Snapshot.Entries {
 		entries[entry.Path] = entry
+		if strings.HasSuffix(entry.Path, ".go") {
+			capturedGoDirectories[path.Dir(entry.Path)] = true
+		}
+	}
+	for _, directory := range source.Snapshot.Directories {
+		capturedDirectories[directory] = true
 	}
 	nodes := make(map[string]GoSemanticNode, len(report.Nodes))
 	for _, node := range report.Nodes {
 		if !c.ValidDigest(node.ID) || nodes[node.ID].ID != "" || len(node.Name) > 4096 || len(node.Kind) > 64 || len(node.Path) > 1024 {
 			return c.Fail(c.StoreIntegrityError, "Go graph worker node envelope invalid")
 		}
-		if node.Path != "" {
+		if node.Kind == "PACKAGE" {
+			// Package nodes identify a captured source directory; their Path is not
+			// a file path and they have no byte span or file digest. The root
+			// directory is represented by "." in Go's path package but omitted
+			// from snapshot.Directories, so accept it only when a root-level Go
+			// file is actually captured.
+			directoryCaptured := capturedDirectories[node.Path] && capturedGoDirectories[node.Path]
+			if node.Path == "." {
+				directoryCaptured = capturedGoDirectories["."]
+			}
+			if !directoryCaptured || node.Name == "" || node.PackageID != "" || node.FileDigest != "" || node.Start != 0 || node.End != 0 {
+				return c.Fail(c.StoreIntegrityError, "Go graph worker package is outside captured source")
+			}
+			wantID, digestErr := goSemanticNodeID(snapshotDigest, "PACKAGE", node.Path, node.Name, "", 0, 0)
+			if digestErr != nil || node.ID != wantID {
+				return c.Fail(c.StoreIntegrityError, "Go graph worker package identity mismatch")
+			}
+		} else if node.Path != "" {
 			entry, ok := entries[node.Path]
 			if !ok || node.FileDigest != "" && node.FileDigest != entry.Hash || node.Start < 0 || node.End < node.Start || node.End > int(entry.Size) {
 				return c.Fail(c.StoreIntegrityError, "Go graph worker node is outside captured source")
 			}
 		}
 		nodes[node.ID] = node
+	}
+	packagesWithFiles := make(map[string]bool)
+	for _, node := range report.Nodes {
+		if node.Kind == "PACKAGE" || node.PackageID == "" {
+			continue
+		}
+		pkg, ok := nodes[node.PackageID]
+		if !ok || pkg.Kind != "PACKAGE" || node.Path == "" || path.Dir(node.Path) != pkg.Path {
+			return c.Fail(c.StoreIntegrityError, "Go graph worker node package binding mismatch")
+		}
+		if node.Kind == "FILE" {
+			packagesWithFiles[pkg.ID] = true
+		}
+	}
+	for _, node := range report.Nodes {
+		if node.Kind == "PACKAGE" && !packagesWithFiles[node.ID] {
+			return c.Fail(c.StoreIntegrityError, "Go graph worker package has no captured file node")
+		}
 	}
 	for _, edge := range report.Edges {
 		if !c.ValidDigest(edge.ID) || nodes[edge.From].ID == "" || nodes[edge.To].ID == "" || edge.EvidencePath == "" {

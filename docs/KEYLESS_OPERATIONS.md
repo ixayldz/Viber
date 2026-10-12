@@ -32,6 +32,32 @@ gh_binary="$(command -v gh)"
 
 Store'ları prefix dışında tutun. Yönetilen launcher, child komutunun açık `--store` yolunu kaydeder; yeni store'u child'dan önce hazırlar. Sonraki install/rollback/uninstall, kayıtlı store'ların tamamının fiziksel kimliğini doğrular ve OS owner kilitlerini alır. Aktif owner kilidi alınamıyorsa sürüm geçişi reddedilir. Doğrudan binary ile kullanılan başka store'ları `--store` ile ayrıca kaydedin; launcher bilmediği store'ların quiescence'ını iddia etmez.
 
+Yönetilen sürümü ChatGPT ile kullanmak için aynı launcher üzerinden giriş yapın ve görevi başlatın. Giriş model API anahtarı istemez; hesap/workspace plan kullanım izni gerekir. Gerçek hesap kabulünün durumu [README](../README.md) içinde belirtilir.
+
+Windows PowerShell:
+
+```powershell
+$project = 'C:\Projects\my-app'
+$store = Join-Path $env:LOCALAPPDATA 'ViberData\my-app'
+.\viber.exe package run --prefix $program -- auth login
+.\viber.exe package run --prefix $program -- auth status
+.\viber.exe package run --prefix $program -- run 'README kurulum adımlarını incele ve düzelt' --provider chatgpt --allow-remote --root $project --store $store --task first-task --autonomy review --allow-unverified
+.\viber.exe package run --prefix $program -- ui first-task --store $store
+```
+
+Linux/macOS Terminal:
+
+```sh
+project="$HOME/projects/my-app"
+store="$HOME/.local/share/viber/tasks/my-app"
+./viber package run --prefix "$program" -- auth login
+./viber package run --prefix "$program" -- auth status
+./viber package run --prefix "$program" -- run 'README kurulum adımlarını incele ve düzelt' --provider chatgpt --allow-remote --root "$project" --store "$store" --task first-task --autonomy review --allow-unverified
+./viber package run --prefix "$program" -- ui first-task --store "$store"
+```
+
+`project` yolunu kendi kodunuza göre değiştirin. `ui` içinde `/requests`, `/respond REQUEST_ID approve`, `/resume` ve `/diff` komutlarıyla inceleyin. Sonraki görevler için farklı task kimliği kullanın. Güncellemeden önce çalışan owner'ı durdurun; launcher store yolunu sonraki kurulum/rollback/kaldırma kontrolleri için kaydeder.
+
 ```powershell
 .\viber.exe package install --prefix $program --archive $archive --source-sha $revision --gh $ghBinary --store C:\ViberData\project --json
 .\viber.exe package rollback --prefix $program --revision ONCEDEN_KURULMUS_TAM_SHA --json

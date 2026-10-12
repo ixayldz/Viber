@@ -26,6 +26,8 @@ gh attestation verify ARCHIVE -R ixayldz/Viber --signer-workflow ixayldz/Viber/.
 
 SHA'yı indirdiğiniz JSON içinden körlemesine güvenerek seçmeyin; GitHub'da incelemeyi seçtiğiniz commit ile karşılaştırın. Checksum taşıma hasarını gösterir; tek başına yayımlayanın kimliğini doğrulamaz. GitHub CLI authentication/model API credential farklıdır; paket kullanmak OpenAI/Anthropic anahtarı istemez. [Resmi verification sözleşmesi](https://cli.github.com/manual/gh_attestation_verify).
 
+GitHub CLI doğrulamada oturum istiyorsa `gh auth login --hostname github.com --web` ile GitHub hesabınıza bağlanın, ardından attestation komutunu yeniden çalıştırın. Bu, Viber'ın `auth login` ile yaptığı ChatGPT girişinden ayrı bir işlemdir; model API anahtarı oluşturmanızı gerektirmez. [Resmî GitHub CLI giriş kılavuzu](https://cli.github.com/manual/gh_auth_login).
+
 Platformunuzun `*-distribution.json` dosyasını da aynı komutta ARCHIVE yerine vererek doğrulayın. İmzalı raporun source revision/platform/archive SHA-256/byte sayısı indirdiğiniz arşivle aynı olmalıdır. `archive_install_smoke.scope=FRESH_ARCHIVE_FIRST_TASK_MANUAL_UNINSTALL_ONLY` kabulü PATH boşken ve Git bulunmazken ilk görevi çalıştırır; kaynak ve dış store korunur. Otomatik güncelleme veya farklı store formatına rollback bu raporun kapsamına girmez.
 
 GitHub OIDC build provenance, archive byte'larının bu workflow/commit'ten çıktığını bağlar. Windows Authenticode veya macOS Developer ID/notarization değildir; OS bunları unsigned uygulama olarak gösterebilir. Provenance ürün kalitesi veya PRD evaluator verdict'i değildir.

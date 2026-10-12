@@ -1,5 +1,13 @@
 # Doğrulama kaydı
 
+## 12 Ekim gerçek Docker takip düzeltmesi
+
+`16a188184dd328977596d527d33f5801f3abb6e5` [CI38192831918](https://github.com/ixayldz/Viber/actions/runs/38192831918) üç native test işi, Linux full race/bütün fuzz, rootless, iki native vault ve üç portable paket işinde SUCCESS. Eski owner steering parent'ı Linux normal turda 0.87s, race turunda 1.87s PASS; SQLite admission DATA RACE bu exact-source turunda görülmedi. Bu sonuçlar sonraki revision'a otomatik kabul olarak aktarılmaz.
+
+Docker job114634419862 iki bağımsız hata nedeniyle FAILED. MCP actual fixture sunucusu, pinlenen `maxLength:100` alanını ilan etmiyordu; production canonical şema kontrolü doğru reddetti. Fixture artık şemayı ortak `inputSchemaFixture` değerinden üretir; production guard değişmedi. Go helper image başarıyla derlendi/çalıştı, ancak envelope PACKAGE düğümünün `.` dizinini dosya sanıp reddetti. Paket düğümleri artık yalnız yakalanmış Go dosyalarıyla bağlı dizin, exact snapshot/directory/name kimliği ve ilgili FILE düğümü üzerinden kabul edilir; dosya hash/span ve edge evidence kontrolü korunur.
+
+Mevcut focused MCP/schema ve Go graph kontrolleri native Windows'ta PASS; actual Docker parent'ları yerel pinned image/daemon olmadığından SKIP/NOT_RUN. Yeni test eklenmedi/full yerel suite tekrar edilmedi. Foundation FAILED, signing/managed installer atlandı, public yayın yapılmadı. Docker/vault işleri artık test işleriyle paralel başlayabilir; foundation bütün işleri, signer başarılı foundation'ı ve publisher bütün 16 exact-source işi zorunlu tutar.
+
 ## 12 Ekim CI takip düzeltmesi
 
 `4fa2332f9e2b71f8616622fd542b83374578a22a` [CI38167787683](https://github.com/ixayldz/Viber/actions/runs/38167787683) Windows native/full/migration, macOS native/full/migration ve rootless SUCCESS. Ubuntu normal full PASS, race turunda `TestRealRepositoryOwnerRetrievalRecallSpansAndWarmInvalidation` cold index 10s sınırında literal fallback nedeniyle FAILED. Pipeline FAILURE; Docker/vault/package/installer/provenance atlandı, yayın yapılmadı. Race detect edilen veri yarışı raporu yok; bounded fallback davranışı doğru, ranked-cache kabulü gerçekleşmedi.

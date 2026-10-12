@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess(t *testing.T
 	if err = os.Chmod(source, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(source, "server.go"), []byte(actualMCPServerSource), 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(source, "server.go"), []byte(actualMCPServerSource()), 0644); err != nil {
 		t.Fatal(err)
 	}
 	instance := strings.Repeat("1", 32)
@@ -68,7 +69,8 @@ func TestActualDockerMCPExecuteUsesPinnedReadOnlyNetworkNoneProcess(t *testing.T
 	}
 }
 
-const actualMCPServerSource = `package main
+func actualMCPServerSource() string {
+	return `package main
 
 import (
 	"bufio"
@@ -77,7 +79,7 @@ import (
 	"os"
 )
 
-const schema = ` + "`" + `{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}` + "`" + `
+const schema = ` + strconv.Quote(inputSchemaFixture) + `
 
 type request struct {
 	JSONRPC string ` + "`" + `json:"jsonrpc"` + "`" + `
@@ -113,3 +115,4 @@ func main() {
 		}
 	}
 }`
+}
