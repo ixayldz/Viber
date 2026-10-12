@@ -16,7 +16,7 @@ func applyReadWorkerAdmission(state *c.TaskState, next *c.TaskState, event c.Eve
 	if state.Deletion != nil || state.InputBarrier || len(state.PendingInputIDs) != 0 ||
 		state.DocumentDigest != a.SourceDocumentDigest || state.CandidateDigest != a.CandidateDigest ||
 		state.TaskSeq != a.SourceTaskSeq || state.SpecVersion != a.SpecVersion ||
-		state.PolicyEpoch != a.PolicyEpoch || state.KernelGeneration != a.KernelGeneration ||
+		state.PolicyEpoch != a.PolicyEpoch || a.KernelGeneration < state.KernelGeneration ||
 		event.KernelGeneration != a.KernelGeneration {
 		return c.Fail(c.StaleAuthority, "read-worker admission source, policy, or generation is stale")
 	}
@@ -71,4 +71,20 @@ func applyReadWorkerAdmission(state *c.TaskState, next *c.TaskState, event c.Eve
 	}
 	next.ReadWorkerAdmissions = append(next.ReadWorkerAdmissions, a)
 	return nil
+}
+
+// readWorkerGenerationRebindAllowed permits only the typed, no-effect
+// read-worker admission event to refresh an old task cursor to the current
+// owner generation. The source cursor and immutable task bindings remain the
+// old replay values; applyReadWorkerAdmission still enforces the exact budget
+// charge, duplicate bound, and unsettled resource/token rejection.
+func readWorkerGenerationRebindAllowed(state *c.TaskState, payload c.EventPayload, event c.Event) bool {
+	if state == nil || event.Type != "ReadWorkersAdmitted" || event.Actor != "kernel" || event.KernelGeneration <= state.KernelGeneration ||
+		state.Deletion != nil || !continuityAllowed(*state) || len(state.PendingInputIDs) != 0 {
+		return false
+	}
+	a := payload.ReadWorkerAdmission
+	return a != nil && a.SourceDocumentDigest == state.DocumentDigest && a.CandidateDigest == state.CandidateDigest &&
+		a.SourceTaskSeq == state.TaskSeq && a.SpecVersion == state.SpecVersion && a.PolicyEpoch == state.PolicyEpoch &&
+		a.KernelGeneration == event.KernelGeneration && a.Validate() == nil
 }

@@ -696,6 +696,8 @@ Yakalanan projenin `AGENTS.override.md` / `AGENTS.md` dosyaları model isteğine
 
 Bellek kullanıcı tarafından kaydedilen FACT, DECISION veya CONVENTION beyanıdır. Görev artifact'larına ve append-only journal'a bağlanır:
 
+Quiescent tamamlanmış veya yeniden açılmış görevde de bellek yönetilebilir; bu işlem görevi yeniden çalıştırmaz, verification sonucunu ve bütçesini değiştirmez. Mutation `context.edit`, arama `context.read` operator yetkisi ister. Pending input/effect veya deletion bulunan görev önce mevcut recovery akışıyla çözülmelidir.
+
 ```sh
 ./viber project-memory record --store STORE --task TASK --command-id memory-001 --kind DECISION --key storage --text 'Use SQLite for the local journal' --json
 ./viber project-memory search --store STORE --task TASK --query SQLite --limit 20 --json
@@ -721,6 +723,8 @@ Yerel analiz çağrısı exact candidate digest ister:
 `CANDIDATE_DIGEST` status'tan alınır. Görev nonterminal, quiescent ve pending input/effect içermeyen durumda olmalıdır; bitmiş görev yeniden çalıştırılmaz. TUI'da `/workers` varsayılan `inventory,requirements`; `/workers inventory,search TODO` literal arama yapar. İki ila dört farklı sabit analyzer seçilir: inventory, go-graph, requirements, search. Bunlar local Go fonksiyonlarıdır; LLM, subprocess veya full multi-agent orchestration değildir. Read policy ve active plan scope dışında byte hydrate edilmez. Maksimum 10.000 dosya / 32 MiB input, 64 KiB output, 128 search hit; timeout 250–30.000 ms ve cooperative cancellation'dır. Dispatch'ten **önce** worker sayısı kadar step/tool-call ve tam timeout parent bütçesine kalıcı yazılır; cancel/crash ücretsiz retry oluşturmaz. Child allocation için tutulmuş headroom korunur. Stale source sonucu discarded olur; analyzer sonucu advisory'dir, PASS verdict veya required-check azaltma yetkisi değildir.
 
 Yeni paket manifesti `project_memory_v1` ve `read_workers_v1` runtime capability'lerini taşır. Yönetilen install/rollback kayıtlı store'ları OS owner lock altında tarar; kullanılan capability'yi desteklemeyen paketi seçmez. Legacy-only store uyumlu eski sürümle çalışabilir. Schema/reducer migration yapılmaz. Eski bootstrap yeni manifesti tanımıyorsa yeni doğrulanmış portable binary'yi prefix dışında bootstrap olarak kullanın.
+
+Legacy/partial pakette launcher'ın çalıştırma ön kontrolü anlık durumdur; child kendi store owner lock'unu alır. Aynı store'u araya giren doğrudan başka bir binary'nin değiştirmesine karşı atomik eski-süreç handoff desteği yoktur; eski decoder yeni kayıtları reddeder. Yeni tam capability paketi aktif owner'a `/status`/UI ile bağlanabilir. Install/rollback lock'ları seçimin yayınlanmasına kadar tutulur ve Ctrl+C ile scan iptal edilebilir.
 
 ## Bağımsız V4 davranış doğrulaması
 

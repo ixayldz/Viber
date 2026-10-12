@@ -373,12 +373,17 @@ func projectInstructionPathAllowed(name string, layers []policy.Policy, active *
 	if active != nil && !policy.PathAllowed(name, active.ReadScope) {
 		return false
 	}
-	for _, layer := range layers {
-		if policy.DeniedPath(name, layer.DeniedPaths) || !policy.PathAllowed(name, layer.Paths) {
-			return false
-		}
+	if len(layers) == 0 {
+		return false
 	}
-	return true
+	// Instruction bytes become model context, so path scope alone is not enough:
+	// every current policy layer must also admit the source-read effect. The
+	// layer epochs/generations are checked by Admit, including against all later
+	// layers, so stale or malformed policy silently fails closed here.
+	return policy.Admit(layers, policy.Action{
+		Epoch: layers[0].Epoch, Generation: layers[0].Generation,
+		Effect: "snapshot.read", Path: name,
+	}) == nil
 }
 
 func projectInstructionTargets(entries map[string]c.Entry, active *plan.Node, layers []policy.Policy, result *projectInstructionContext) ([]string, []string, bool) {

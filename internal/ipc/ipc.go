@@ -232,11 +232,26 @@ func (s *Server) serveConnection(conn net.Conn) {
 		return
 	}
 	response := Response{SchemaVersion: 1, ID: request.ID, OwnerID: s.Info.ID, Generation: s.Info.Generation, Result: json.RawMessage("null")}
+	var watchDone chan struct{}
 	if request.SchemaVersion != 1 || request.OwnerID != s.Info.ID || request.Generation != s.Info.Generation || request.ID == "" || len(request.ID) > 128 || request.Command == "" {
 		response.Error = &c.Error{Code: c.StaleAuthority, Message: "owner/request binding mismatch"}
 	} else {
 		conn.SetReadDeadline(time.Time{})
 		ctx, cancel := context.WithTimeout(s.ctx, 15*time.Minute)
+		if request.Command == "read-workers" {
+			watchDone = make(chan struct{})
+			go func() {
+				defer close(watchDone)
+				var trailing [1]byte
+				for {
+					n, readErr := conn.Read(trailing[:])
+					if n != 0 || readErr != nil {
+						cancel()
+						return
+					}
+				}
+			}()
+		}
 		result, handlerErr := s.handler(ctx, request)
 		cancel()
 		if handlerErr != nil {
@@ -268,6 +283,13 @@ func (s *Server) serveConnection(conn net.Conn) {
 	}
 	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	_ = writeFrame(conn, raw)
+	if watchDone != nil {
+		// A read-workers handler may be cancelled when its caller disappears.
+		// Close only after responding so a normal client is not mistaken for a
+		// disconnect; closing here releases the watcher after response completion.
+		_ = conn.Close()
+		<-watchDone
+	}
 }
 func (s *Server) Close() error {
 	s.mu.Lock()

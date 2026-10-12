@@ -429,20 +429,35 @@ func (m *Manager) install(ctx context.Context, bundle Bundle, state Status) (Sta
 	return m.publish(state, Selection{Action: "INSTALL", Revision: bundle.Manifest.Revision, ManifestDigest: bundle.ManifestDigest, ArchiveDigest: bundle.ArchiveDigest})
 }
 func (m *Manager) Rollback(revision string) (state Status, resultErr error) {
+	return m.RollbackContext(context.Background(), revision)
+}
+
+// RollbackContext checks cancellation throughout the registered-store scan and
+// retained selection walk before publishing a new selection.
+func (m *Manager) RollbackContext(ctx context.Context, revision string) (state Status, resultErr error) {
+	if ctx == nil {
+		return state, c.Fail(c.InvalidArgument, "rollback context required")
+	}
+	if resultErr = ctx.Err(); resultErr != nil {
+		return state, resultErr
+	}
 	state, resultErr = m.Status()
 	if resultErr != nil {
 		return state, resultErr
 	}
-	locked, required, err := m.lockRegisteredStoreCapabilities(context.Background())
+	locked, required, err := m.lockRegisteredStoreCapabilities(ctx)
 	if err != nil {
 		return state, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeStoreLocks(locked)) }()
-	return m.rollback(revision, state, required)
+	return m.rollback(ctx, revision, state, required)
 }
 
-func (m *Manager) rollback(revision string, state Status, required []string) (Status, error) {
+func (m *Manager) rollback(ctx context.Context, revision string, state Status, required []string) (Status, error) {
 	var err error
+	if err = ctx.Err(); err != nil {
+		return state, err
+	}
 	if !Revision(revision) {
 		return state, c.Fail(c.InvalidArgument, "exact installed rollback revision required")
 	}
@@ -463,6 +478,9 @@ func (m *Manager) rollback(revision string, state Status, required []string) (St
 	}
 	archive := ""
 	for i := 1; i <= state.Active.Sequence; i++ {
+		if err = ctx.Err(); err != nil {
+			return state, err
+		}
 		raw, err = fileguard.ReadRegular(m.root, filepath.Join("selections", fmt.Sprintf("%020d.json", i)), 16<<10)
 		if err != nil {
 			return state, err
@@ -477,6 +495,9 @@ func (m *Manager) rollback(revision string, state Status, required []string) (St
 	}
 	if archive == "" {
 		return state, c.Fail(c.PolicyDenied, "rollback target has no verified install receipt")
+	}
+	if err = ctx.Err(); err != nil {
+		return state, err
 	}
 	return m.publish(state, Selection{Action: "ROLLBACK", Revision: revision, ManifestDigest: digest, ArchiveDigest: archive})
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path"
 	"sort"
 	"strings"
@@ -193,20 +194,128 @@ func (s *Session) readWorkerPolicies(state c.TaskState, doc Document) []policy.P
 	return layers
 }
 
+// loadReadWorkerAdmissionDocument binds the request to the durable task
+// document without opening candidate manifests. Full loadDocument validation
+// runs after budget admission, before any analyzer receives source bytes.
+func (s *Session) loadReadWorkerAdmissionDocument(ctx context.Context, task string) (c.TaskState, Document, error) {
+	state, err := s.State(ctx, task)
+	if err != nil {
+		return state, Document{}, err
+	}
+	if state.TaskID != task || state.TaskSeq < 1 || !c.ValidDigest(state.DocumentDigest) {
+		return state, Document{}, c.Fail(c.StoreIntegrityError, "read-worker task journal has no current document binding")
+	}
+	if err = ctx.Err(); err != nil {
+		return state, Document{}, err
+	}
+	raw, err := s.Archive.GetBytes(task, state.DocumentDigest)
+	if err != nil {
+		return state, Document{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return state, Document{}, err
+	}
+	var doc Document
+	if err = c.DecodeStrict(raw, &doc); err != nil {
+		return state, doc, err
+	}
+	if doc.SchemaVersion != c.SchemaVersion || doc.TaskID != task || doc.Spec.TaskID != task || doc.Spec.Version != state.SpecVersion ||
+		doc.Baseline.SchemaVersion != c.SchemaVersion || doc.Candidate.SchemaVersion != c.SchemaVersion ||
+		doc.Baseline.TaskID != task || doc.Candidate.TaskID != task ||
+		doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest {
+		return state, doc, c.Fail(c.StoreIntegrityError, "read-worker document does not match the current durable task binding")
+	}
+	if err = doc.Spec.Validate(); err != nil {
+		return state, doc, err
+	}
+	if err = doc.Budget.Validate(); err != nil {
+		return state, doc, err
+	}
+	if state.WorkBudget != nil && !workBudgetMatchesDocument(*state.WorkBudget, doc) {
+		return state, doc, c.Fail(c.StoreIntegrityError, "task work budget journal projection differs from its retained document")
+	}
+	if err = validateTaskConfig(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateRuntime(doc); err != nil {
+		return state, doc, err
+	}
+	if err = validateNativeLease(doc); err != nil {
+		return state, doc, err
+	}
+	if err = s.validateNativeCleanup(doc); err != nil {
+		return state, doc, err
+	}
+	if doc.Plan != nil {
+		if doc.Plan.Definition.PolicyEpoch != state.PolicyEpoch {
+			return state, doc, c.Fail(c.StoreIntegrityError, "plan policy binding mismatch")
+		}
+		if err = doc.Plan.Validate(doc.Spec, planChecks(doc), doc.Candidate.SnapshotDigest, doc.Plan.Definition.PolicyEpoch); err != nil {
+			return state, doc, err
+		}
+	}
+	if doc.SkillRegistry != nil {
+		if err = doc.SkillRegistry.Validate(); err != nil {
+			return state, doc, err
+		}
+	}
+	if doc.Extension == nil {
+		if doc.ExtensionManifest != nil {
+			return state, doc, c.Fail(c.StoreIntegrityError, "extension manifest lacks an explicit operator binding")
+		}
+	} else if doc.Extension.Validate() != nil || doc.ExtensionManifest == nil || doc.ExtensionManifest.Validate() != nil || doc.Extension.ManifestDigest != doc.ExtensionManifest.Digest {
+		return state, doc, c.Fail(c.StoreIntegrityError, "retained extension binding failed validation")
+	}
+	if doc.GoGraphRuntime != nil {
+		if err = doc.GoGraphRuntime.Validate(); err != nil {
+			return state, doc, c.Fail(c.StoreIntegrityError, "retained Go graph runtime binding failed validation")
+		}
+	}
+	if doc.Ranking != nil {
+		if err = doc.Ranking.Validate(); err != nil {
+			return state, doc, err
+		}
+		if doc.Ranking.Definition.SourceDigest != doc.Baseline.SnapshotDigest {
+			return state, doc, c.Fail(c.StoreIntegrityError, "ranking source binding changed")
+		}
+	}
+	if doc.GoalOrigin != nil {
+		if err = s.validateGoalOrigin(ctx, doc); err != nil {
+			return state, doc, err
+		}
+	}
+	if err = s.validateAttempt(doc); err != nil {
+		return state, doc, err
+	}
+	if _, err = s.queueFromState(state); err != nil {
+		return state, doc, err
+	}
+	return state, doc, nil
+}
+
 type readWorkerScope struct {
 	Snapshot c.Snapshot
 	Total    int64
 }
 
-func planReadWorkerScope(archive *artifact.Archive, ref artifact.Ref, layers []policy.Policy, state c.TaskState) (readWorkerScope, error) {
+func planReadWorkerScope(ctx context.Context, archive *artifact.Archive, ref artifact.Ref, layers []policy.Policy, state c.TaskState) (readWorkerScope, error) {
+	if err := ctx.Err(); err != nil {
+		return readWorkerScope{}, err
+	}
 	manifest, err := archive.ReadManifest(ref)
 	if err != nil {
+		return readWorkerScope{}, err
+	}
+	if err = ctx.Err(); err != nil {
 		return readWorkerScope{}, err
 	}
 	original := manifest.Snapshot
 	originalDigest := original.Digest
 	original.Digest = ""
 	verifiedDigest, err := c.Digest(original)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return readWorkerScope{}, ctxErr
+	}
 	if err != nil || verifiedDigest != originalDigest || originalDigest != ref.SnapshotDigest {
 		return readWorkerScope{}, c.Fail(c.StoreIntegrityError, "candidate snapshot manifest digest changed before read-worker admission")
 	}
@@ -216,7 +325,12 @@ func planReadWorkerScope(archive *artifact.Archive, ref artifact.Ref, layers []p
 	filtered := c.Snapshot{SchemaVersion: manifest.Snapshot.SchemaVersion, Root: manifest.Snapshot.Root, Consistency: manifest.Snapshot.Consistency, Entries: []c.Entry{}, Directories: []string{}, Exclusions: []string{}}
 	directories := map[string]bool{}
 	var total int64
-	for _, entry := range manifest.Snapshot.Entries {
+	for i, entry := range manifest.Snapshot.Entries {
+		if i&127 == 0 {
+			if err := ctx.Err(); err != nil {
+				return readWorkerScope{}, err
+			}
+		}
 		if err := policy.Admit(layers, policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effect: "snapshot.read", Path: entry.Path}); err != nil {
 			continue
 		}
@@ -238,6 +352,9 @@ func planReadWorkerScope(archive *artifact.Archive, ref artifact.Ref, layers []p
 	sort.Strings(filtered.Directories)
 	filtered.Digest = ""
 	digest, err := c.Digest(filtered)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return readWorkerScope{}, ctxErr
+	}
 	if err != nil {
 		return readWorkerScope{}, err
 	}
@@ -248,13 +365,24 @@ func planReadWorkerScope(archive *artifact.Archive, ref artifact.Ref, layers []p
 func hydrateReadWorkerScope(ctx context.Context, archive *artifact.Archive, ref artifact.Ref, scope readWorkerScope) (workspace.Capture, error) {
 	capture := workspace.Capture{Snapshot: scope.Snapshot, Contents: map[string][]byte{}}
 	var total int64
-	for _, entry := range scope.Snapshot.Entries {
+	for i, entry := range scope.Snapshot.Entries {
+		if i&31 == 0 {
+			if err := ctx.Err(); err != nil {
+				return workspace.Capture{}, err
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return workspace.Capture{}, err
 		}
 		data, err := archive.GetBytes(ref.TaskID, entry.Hash)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return workspace.Capture{}, ctxErr
+		}
 		if err != nil || int64(len(data)) != entry.Size || c.HashBytes(data) != entry.Hash {
 			return workspace.Capture{}, c.Fail(c.StoreIntegrityError, "candidate bytes failed integrity checks during charged read-worker admission")
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return workspace.Capture{}, ctxErr
 		}
 		total += int64(len(data))
 		if total > readWorkersMaxBytes || total > scope.Total {
@@ -265,7 +393,13 @@ func hydrateReadWorkerScope(ctx context.Context, archive *artifact.Archive, ref 
 	if total != scope.Total {
 		return workspace.Capture{}, c.Fail(c.StoreIntegrityError, "candidate byte total changed during read-worker hydration")
 	}
+	if err := ctx.Err(); err != nil {
+		return workspace.Capture{}, err
+	}
 	if err := workspace.VerifyCapture(capture); err != nil {
+		return workspace.Capture{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return workspace.Capture{}, err
 	}
 	return capture, nil
@@ -290,7 +424,7 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 	if err = ctx.Err(); err != nil {
 		return ReadWorkersResult{}, err
 	}
-	state, doc, err := s.Load(ctx, task)
+	state, doc, err := s.loadReadWorkerAdmissionDocument(ctx, task)
 	if err != nil {
 		return ReadWorkersResult{}, err
 	}
@@ -314,33 +448,6 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 	if len(state.ReadWorkerAdmissions) >= c.MaxReadWorkerAdmissions {
 		return ReadWorkersResult{}, c.Fail(c.BudgetLimitReached, "task reached the bounded read-worker admission history limit")
 	}
-	layers := s.readWorkerPolicies(state, doc)
-	policyDigest, err := c.Digest(layers)
-	if err != nil {
-		return ReadWorkersResult{}, err
-	}
-	if request.ExpectedPolicyDigest != "" && request.ExpectedPolicyDigest != policyDigest {
-		return ReadWorkersResult{}, c.Fail(c.StaleBase, "read-worker policy digest is no longer current")
-	}
-	if err = ctx.Err(); err != nil {
-		return ReadWorkersResult{}, err
-	}
-	scope, err := planReadWorkerScope(s.Archive, doc.Candidate, layers, state)
-	if err != nil {
-		return ReadWorkersResult{}, err
-	}
-	for _, changed := range request.ChangedPaths {
-		found := false
-		for _, entry := range scope.Snapshot.Entries {
-			if entry.Path == changed {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return ReadWorkersResult{}, c.Fail(c.PolicyDenied, "changed path is not in the current policy-readable candidate")
-		}
-	}
 	headroom, err := budgetHeadroom(doc.Budget, state.GoalQueue, false)
 	if err != nil {
 		return ReadWorkersResult{}, err
@@ -352,8 +459,25 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 	if err = ctx.Err(); err != nil {
 		return ReadWorkersResult{}, err
 	}
+	currentGeneration := s.Journal.Generation()
+	if state.KernelGeneration > currentGeneration {
+		return ReadWorkersResult{}, c.Fail(c.StaleAuthority, "task generation is newer than the current read-worker owner")
+	}
+	policyState := state
+	policyState.KernelGeneration = currentGeneration
+	layers := s.readWorkerPolicies(policyState, doc)
+	policyDigest, err := c.Digest(layers)
+	if err != nil {
+		return ReadWorkersResult{}, err
+	}
+	if request.ExpectedPolicyDigest != "" && request.ExpectedPolicyDigest != policyDigest {
+		return ReadWorkersResult{}, c.Fail(c.StaleBase, "read-worker policy digest is no longer current")
+	}
+	if err = ctx.Err(); err != nil {
+		return ReadWorkersResult{}, err
+	}
 	started := time.Now()
-	binding := ReadWorkerBinding{TaskID: task, DocumentDigest: state.DocumentDigest, CandidateDigest: doc.Candidate.SnapshotDigest, BaselineDigest: doc.Baseline.SnapshotDigest, PolicyDigest: policyDigest, TaskSeq: state.TaskSeq, SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch, KernelGeneration: state.KernelGeneration, ReadableFiles: len(scope.Snapshot.Entries), ReadableBytes: scope.Total}
+	binding := ReadWorkerBinding{TaskID: task, DocumentDigest: state.DocumentDigest, CandidateDigest: doc.Candidate.SnapshotDigest, BaselineDigest: doc.Baseline.SnapshotDigest, PolicyDigest: policyDigest, TaskSeq: state.TaskSeq, SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch, KernelGeneration: currentGeneration}
 	requestDigest, err := c.Digest(request)
 	if err != nil {
 		return ReadWorkersResult{}, err
@@ -361,7 +485,7 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 	admission := c.ReadWorkerAdmission{
 		OperationID: request.OperationID, RequestDigest: requestDigest, SourceDocumentDigest: state.DocumentDigest,
 		CandidateDigest: doc.Candidate.SnapshotDigest, PolicyDigest: policyDigest, SourceTaskSeq: state.TaskSeq,
-		SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch, KernelGeneration: state.KernelGeneration,
+		SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch, KernelGeneration: currentGeneration,
 		WorkerCount: len(request.Workers), ChargedSteps: workerCount, ChargedToolCalls: workerCount,
 		ChargedActiveMillis: request.TimeoutMillis, Status: c.ReadWorkerAdmissionCharged,
 	}
@@ -370,6 +494,9 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 		return ReadWorkersResult{}, err
 	}
 	if err = admission.Validate(); err != nil {
+		return ReadWorkersResult{}, err
+	}
+	if err = ctx.Err(); err != nil {
 		return ReadWorkersResult{}, err
 	}
 	doc.Budget.Steps += workerCount
@@ -382,6 +509,91 @@ func (s *Session) RunReadWorkers(ctx context.Context, task string, request ReadW
 	charge := ReadWorkerCharge{Admission: admission, AdmittedTaskSeq: reservedState.TaskSeq, AdmittedDocument: reservedState.DocumentDigest}
 	result := ReadWorkersResult{Binding: binding, Charge: charge, Workers: []ReadWorkerOutput{}, SchemaVersion: 1, Status: "ADMITTED", Trust: "SOURCE_BOUND_LOCAL_READ_ONLY_ADVISORY; COOPERATIVE_CANCELLATION_ONLY; HOST_EXECUTION_NOT_HARD_ISOLATED; NO_AGENT_LEASE; NO_VERIFICATION"}
 	workerCtx, cancel := context.WithTimeout(ctx, time.Duration(request.TimeoutMillis)*time.Millisecond)
+	defer cancel()
+	// Hydrate and run every structural, privacy, policy, and retained-reference
+	// validator only after the durable ceiling is charged. A failed full load is
+	// a charged failure; no analyzer sees a partially validated document.
+	validatedState, validatedDoc, validationErr := s.Load(workerCtx, task)
+	if validationErr != nil || workerCtx.Err() != nil {
+		result.DurationMS = time.Since(started).Milliseconds()
+		if ctx.Err() != nil || workerCtx.Err() != nil {
+			result.Status = "CHARGED_SOURCE_VALIDATION_CANCELLED"
+			result.Failure = &c.Error{Code: c.Conflict, Message: "full retained-document validation was cancelled after the parent-budget ceiling was charged"}
+		} else {
+			result.Status = "CHARGED_SOURCE_VALIDATION_FAILED"
+			var typed *c.Error
+			if errors.As(validationErr, &typed) {
+				result.Failure = &c.Error{Code: typed.Code, Message: "retained source or task document failed full validation after the parent-budget ceiling was charged"}
+			} else {
+				result.Failure = &c.Error{Code: c.StoreIntegrityError, Message: "retained source or task document failed full validation after the parent-budget ceiling was charged"}
+			}
+		}
+		result.ResultDigest, _ = readWorkersDigest(result)
+		return result, nil
+	}
+	validatedLayers := s.readWorkerPolicies(validatedState, validatedDoc)
+	validatedPolicyDigest, digestErr := c.Digest(validatedLayers)
+	if validatedState.TaskSeq != reservedState.TaskSeq || validatedState.DocumentDigest != reservedState.DocumentDigest ||
+		validatedState.CandidateDigest != binding.CandidateDigest || validatedState.BaselineDigest != binding.BaselineDigest ||
+		validatedState.SpecVersion != binding.SpecVersion || validatedState.PolicyEpoch != binding.PolicyEpoch ||
+		validatedState.KernelGeneration != binding.KernelGeneration || validatedDoc.Candidate.SnapshotDigest != binding.CandidateDigest ||
+		validatedDoc.Baseline.SnapshotDigest != binding.BaselineDigest || digestErr != nil || validatedPolicyDigest != binding.PolicyDigest {
+		result.DurationMS = time.Since(started).Milliseconds()
+		result.Status = "CHARGED_SOURCE_VALIDATION_FAILED"
+		result.Failure = &c.Error{Code: c.StaleBase, Message: "task or policy binding changed during charged full validation; no worker output was produced"}
+		result.ResultDigest, _ = readWorkersDigest(result)
+		return result, nil
+	}
+	state, doc, layers = validatedState, validatedDoc, validatedLayers
+	scope, scopeErr := planReadWorkerScope(workerCtx, s.Archive, doc.Candidate, layers, state)
+	if scopeErr != nil {
+		result.DurationMS = time.Since(started).Milliseconds()
+		if ctx.Err() != nil || workerCtx.Err() != nil {
+			result.Status = "CHARGED_SOURCE_SCOPE_CANCELLED"
+			result.Failure = &c.Error{Code: c.Conflict, Message: "candidate scope inspection was cancelled after the full parent-budget ceiling was charged"}
+		} else {
+			result.Status = "CHARGED_SOURCE_SCOPE_FAILED"
+			var typed *c.Error
+			if errors.As(scopeErr, &typed) {
+				result.Failure = &c.Error{Code: typed.Code, Message: "candidate manifest could not be read, verified or bounded after the full parent-budget ceiling was charged"}
+			} else {
+				result.Failure = &c.Error{Code: c.StoreIntegrityError, Message: "candidate manifest could not be read, verified or bounded after the full parent-budget ceiling was charged"}
+			}
+		}
+		result.ResultDigest, _ = readWorkersDigest(result)
+		return result, nil
+	}
+	result.Binding.ReadableFiles = len(scope.Snapshot.Entries)
+	result.Binding.ReadableBytes = scope.Total
+	readable := make(map[string]struct{}, len(scope.Snapshot.Entries))
+	for i, entry := range scope.Snapshot.Entries {
+		if i&127 == 0 {
+			if workerCtx.Err() != nil {
+				result.DurationMS = time.Since(started).Milliseconds()
+				result.Status = "CHARGED_SOURCE_SCOPE_CANCELLED"
+				result.Failure = &c.Error{Code: c.Conflict, Message: "candidate scope inspection was cancelled after the full parent-budget ceiling was charged"}
+				result.ResultDigest, _ = readWorkersDigest(result)
+				return result, nil
+			}
+		}
+		readable[entry.Path] = struct{}{}
+	}
+	for _, changed := range request.ChangedPaths {
+		if _, found := readable[changed]; !found {
+			result.DurationMS = time.Since(started).Milliseconds()
+			result.Status = "CHARGED_SOURCE_SCOPE_FAILED"
+			result.Failure = &c.Error{Code: c.PolicyDenied, Message: "changed path is not in the current policy-readable candidate; full parent-budget ceiling remains charged"}
+			result.ResultDigest, _ = readWorkersDigest(result)
+			return result, nil
+		}
+	}
+	if workerCtx.Err() != nil {
+		result.DurationMS = time.Since(started).Milliseconds()
+		result.Status = "CHARGED_SOURCE_SCOPE_CANCELLED"
+		result.Failure = &c.Error{Code: c.Conflict, Message: "candidate scope inspection was cancelled after the full parent-budget ceiling was charged"}
+		result.ResultDigest, _ = readWorkersDigest(result)
+		return result, nil
+	}
 	capture, captureErr := hydrateReadWorkerScope(workerCtx, s.Archive, doc.Candidate, scope)
 	if captureErr != nil {
 		timedOut := workerCtx.Err() != nil

@@ -196,6 +196,10 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		}
 		var summary strings.Builder
 		fmt.Fprintf(&summary, "Local read-only analysis: %s\nParent charge: %d steps, %d calls, %d ms ceiling\n", result.Status, result.Charge.Admission.ChargedSteps, result.Charge.Admission.ChargedToolCalls, result.Charge.Admission.ChargedActiveMillis)
+		if result.Failure != nil {
+			fmt.Fprintf(&summary, "Analysis stopped: %s\nThe charge remains in the task journal; inspect /budget and /status before retrying.", result.Failure.Message)
+			return summary.String(), false, result.Failure
+		}
 		for _, worker := range result.Workers {
 			switch {
 			case worker.Inventory != nil:

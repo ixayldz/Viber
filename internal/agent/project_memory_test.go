@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ixayldz/Viber/internal/artifact"
+	"github.com/ixayldz/Viber/internal/config"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/model"
 )
@@ -119,6 +122,209 @@ func TestProjectMemoryFreshnessUsesQueryCandidateAndPolicy(t *testing.T) {
 	s.mu.Unlock()
 	if err != nil || len(contextItems) != 0 {
 		t.Fatal("candidate-stale memory entered model context", contextItems, err)
+	}
+}
+
+func TestAutomaticProjectMemoryConflictScopeIsSameTask(t *testing.T) {
+	ctx := context.Background()
+	s, original, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	other := projectMemorySibling(t, s, original, "task-two", []Turn{{Text: "done", UsageKnown: true}})
+
+	local, err := s.RecordProjectMemory(ctx, original.TaskID, "memory-local-assertion", "CONVENTION", "build.command", "Use the focused agent test command.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := s.RecordProjectMemory(ctx, other.TaskID, "memory-other-assertion", "CONVENTION", "build.command", "Use a different project test command.")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, doc, err := s.Load(ctx, original.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contextItems []ProjectMemoryItem
+	var truncated bool
+	s.mu.Lock()
+	contextItems, truncated, err = s.projectMemoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if err != nil || truncated || len(contextItems) != 1 || contextItems[0].ID != local.ItemID || contextItems[0].Status != "ACTIVE" {
+		t.Fatalf("foreign task conflict affected same-task automatic context: items=%#v truncated=%v err=%v", contextItems, truncated, err)
+	}
+
+	// Explicit manual same-project search retains its cross-task conflict view.
+	search, err := s.SearchProjectMemory(ctx, original.TaskID, "build.command", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := projectMemoryItemByID(t, search, local.ItemID); item.Status != "CONFLICT" {
+		t.Fatalf("manual same-project search lost its cross-task conflict semantics: %#v", item)
+	}
+	if item := projectMemoryItemByID(t, search, foreign.ItemID); item.Status != "CONFLICT" {
+		t.Fatalf("manual same-project search lost the foreign conflicting assertion: %#v", item)
+	}
+}
+
+func TestProjectMemorySourceRejectsFalseJournalCursor(t *testing.T) {
+	ctx := context.Background()
+	s, options, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	recorded, err := s.RecordProjectMemory(ctx, options.TaskID, "memory-cursor-source", "FACT", "test.command", "Run focused source-bound tests.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeMemoryTaskAutonomy(t, s, options.TaskID, "auto")
+
+	forged := recorded.Source
+	forged.TaskSeq++ // Sequence 2 has a valid archived document with the same snapshots/policy, but a different digest.
+	stateAtForgedCursor, err := s.Journal.ReplayAt(ctx, forged.TaskID, forged.TaskSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateAtForgedCursor.TaskID != forged.TaskID || stateAtForgedCursor.DocumentDigest == forged.DocumentDigest ||
+		stateAtForgedCursor.BaselineDigest != forged.BaselineDigest || stateAtForgedCursor.CandidateDigest != forged.CandidateDigest ||
+		stateAtForgedCursor.PolicyEpoch != forged.PolicyEpoch {
+		t.Fatalf("fixture did not create a valid different document at the forged cursor: %#v source=%#v", stateAtForgedCursor, forged)
+	}
+	if raw, readErr := s.Archive.GetBytes(forged.TaskID, forged.DocumentDigest); readErr != nil || c.HashBytes(raw) != forged.DocumentDigest {
+		t.Fatalf("original source document is not valid retained content: readErr=%v", readErr)
+	}
+	if err = s.validateProjectMemorySource(ctx, forged, nil); err == nil {
+		t.Fatal("source document was accepted at a different journal sequence")
+	}
+}
+
+func TestTerminalProjectMemoryMutationsSurviveOwnerReopen(t *testing.T) {
+	ctx := context.Background()
+	s, options, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	state, err := s.Run(ctx, options.TaskID)
+	if err != nil || state.Execution != c.Terminated {
+		t.Fatalf("fixture did not reach a terminal task: state=%#v err=%v", state, err)
+	}
+	directory := s.directory
+	baseline := state
+
+	reopen := func() {
+		t.Helper()
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var openErr error
+		s, openErr = Open(ctx, directory)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+	}
+	assertMetadataOnly := func(wantRevision int64) c.TaskState {
+		t.Helper()
+		got, err := s.State(ctx, options.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Execution != baseline.Execution || got.Outcome != baseline.Outcome || got.Quality != baseline.Quality ||
+			got.Fulfillment != baseline.Fulfillment || got.SpecVersion != baseline.SpecVersion || got.PolicyEpoch != baseline.PolicyEpoch ||
+			got.ProjectMemoryRevision != wantRevision || !sameProjectMemoryWorkBudget(baseline.WorkBudget, got.WorkBudget) {
+			t.Fatalf("memory mutation changed task authority/work state: before=%#v after=%#v", baseline, got)
+		}
+		return got
+	}
+	defer func() {
+		if s != nil {
+			_ = s.Close()
+		}
+	}()
+
+	reopen()
+	first, err := s.RecordProjectMemory(ctx, options.TaskID, "terminal-memory-record", "DECISION", "tests.command", "Run the focused memory lifecycle tests.")
+	if err != nil {
+		t.Fatalf("record after reopening a terminal task: %v", err)
+	}
+	assertMetadataOnly(1)
+
+	reopen()
+	corrected, err := s.CorrectProjectMemory(ctx, options.TaskID, "terminal-memory-correct", first.ItemID, first.EventDigest,
+		"DECISION", "tests.command", "Run the focused lifecycle test after each reducer change.")
+	if err != nil {
+		t.Fatalf("correct after reopening a terminal task: %v", err)
+	}
+	assertMetadataOnly(2)
+
+	reopen()
+	if _, err = s.RetireProjectMemory(ctx, options.TaskID, "terminal-memory-retire", corrected.ItemID, corrected.EventDigest); err != nil {
+		t.Fatalf("retire after reopening a terminal task: %v", err)
+	}
+	assertMetadataOnly(3)
+	result, err := s.SearchProjectMemory(ctx, options.TaskID, "tests.command", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := projectMemoryItemByID(t, result, corrected.ItemID); item.Status != "RETIRED" {
+		t.Fatalf("terminal retirement was not retained: %#v", item)
+	}
+}
+
+func TestProjectMemoryHonorsOperatorContextReadRestriction(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	storeDir := t.TempDir()
+	policyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte("before\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	effects := []string{"snapshot.read", "model.infer"}
+	operator := config.Authority{SchemaVersion: 1, Revision: 1, AllowedEffects: &effects}
+	policyPath := filepath.Join(policyDir, "operator.json")
+	policyBytes, err := c.CanonicalV1(operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(policyPath, policyBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := config.BindAuthority(policyPath, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.Resolve(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.Authority = &ref
+	s, err := Open(ctx, storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	fixture, err := json.Marshal(Fixture{SchemaVersion: 1, Turns: []Turn{{Text: "done", UsageKnown: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := StartOptions{Root: source, Prompt: []byte("Inspect source."), TaskID: "task-context-read", Budget: DefaultBudget(),
+		Autonomy: "guided", AllowUnverified: true, Fixture: fixture, Config: &resolved}
+	if _, err = s.Create(ctx, options); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SearchProjectMemory(ctx, options.TaskID, "", 0, 20); err == nil {
+		t.Fatal("manual memory search ignored denied context.read effect")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.PolicyDenied {
+			t.Fatalf("search returned an untyped denial: %v", err)
+		}
+	}
+	state, doc, err := s.Load(ctx, options.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	contextText, contextErr := s.projectMemoryAdvisoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if contextErr != nil {
+		t.Fatal(contextErr)
+	}
+	if !strings.Contains(contextText, "OPERATOR_CONTEXT_READ_DENIED") || strings.Contains(contextText, "\"items\":[{") {
+		t.Fatalf("automatic context did not expose a bounded denial omission: %s", contextText)
 	}
 }
 

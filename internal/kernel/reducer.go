@@ -123,11 +123,12 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 		}
 		next.PendingInputIDs = append([]string{}, state.PendingInputIDs...)
 		next.PromptQueue = append([]c.PromptRef{}, state.PromptQueue...)
-		next.ReadWorkerAdmissions = append([]c.ReadWorkerAdmission{}, state.ReadWorkerAdmissions...)
+		// Preserve an absent optional field across replay/checkpoint/dedup.
+		next.ReadWorkerAdmissions = append([]c.ReadWorkerAdmission(nil), state.ReadWorkerAdmissions...)
 		if event.TaskID != next.TaskID || event.TaskSeq != next.TaskSeq+1 || event.StoreSeq <= next.StoreSeq || event.KernelGeneration < next.KernelGeneration {
 			return next, c.Fail(c.StoreIntegrityError, "event sequence or generation mismatch")
 		}
-		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && !deletionAllowed(next, event, p) && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) && !((event.Type == "DeliveryAuthorityRebound" || event.Type == "DeliveryEffectReconciled") && event.Actor == "kernel" && deliveryGenerationRebindAllowed(next, p, event)) {
+		if event.KernelGeneration > next.KernelGeneration && !(next.Execution == c.Terminated && event.Type == "ControlAcknowledged") && !deletionAllowed(next, event, p) && (event.Type != "StateTransitioned" || p.State != c.Recovering) && !(event.Type == "ContinuityRevised" && event.Actor == "user" && continuityAllowed(next)) && !(event.Type == "ModelRiskReconciled" && event.Actor == "user" && modelRiskAllowed(next, p)) && !((event.Type == "NativeRiskReconciled" || event.Type == "NativeCleanupObserved") && event.Actor == "user" && nativeCleanupAllowed(next, p, event.Type, event.KernelGeneration)) && !((event.Type == "DeliveryAuthorityRebound" || event.Type == "DeliveryEffectReconciled") && event.Actor == "kernel" && deliveryGenerationRebindAllowed(next, p, event)) && !readWorkerGenerationRebindAllowed(state, p, event) && !ProjectMemoryGenerationRebindAllowed(state, p, event) {
 			return next, c.Fail(c.StaleAuthority, "new generation requires recovery")
 		}
 		if next.Deletion != nil && event.Type != "TaskDeletionPurged" && event.Type != "ControlAcknowledged" {
@@ -175,6 +176,10 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 				return next, c.Fail(c.InvalidArgument, "invalid read-worker budget admission")
 			}
 			next.DocumentDigest = p.DocumentDigest
+		case "ProjectMemoryRecorded":
+			if err := ApplyProjectMemoryRecorded(state, &next, event, p); err != nil {
+				return next, err
+			}
 		case "DeliveryEffectRecorded":
 			effect := p.DeliveryEffect
 			if event.Actor != "kernel" || effect == nil || next.Execution != c.Terminated || next.InputBarrier || len(next.PendingInputIDs) > 0 || next.Deletion != nil || !c.ValidDigest(p.DocumentDigest) || p.SnapshotDigest != effect.CandidateDigest {
@@ -532,6 +537,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 	}
 	if p.ReadWorkerAdmission != nil && event.Type != "ReadWorkersAdmitted" {
 		return next, c.Fail(c.PolicyDenied, "read-worker budget admission only allowed in its explicit event")
+	}
+	if p.ProjectMemoryMutation != nil && event.Type != "ProjectMemoryRecorded" {
+		return next, c.Fail(c.PolicyDenied, "project memory mutation only allowed in its explicit event")
 	}
 	if p.DeliveryEffect != nil && event.Type != "DeliveryEffectRecorded" && event.Type != "DeliveryEffectReconciled" && event.Type != "DeliveryAuthorityRebound" {
 		return next, c.Fail(c.PolicyDenied, "delivery effect only allowed in its explicit durable event")

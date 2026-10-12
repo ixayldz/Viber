@@ -94,6 +94,9 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 	used := map[string]bool{}
 	var documentBytes int64
 	for _, known := range registered {
+		if err = ctx.Err(); err != nil {
+			return closeOnError(err)
+		}
 		if err = known.ValidateCurrent(); err != nil {
 			return closeOnError(err)
 		}
@@ -124,6 +127,15 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 			return closeOnError(c.Fail(c.BudgetLimitReached, "registered store exceeds the bounded runtime-capability state scan"))
 		}
 		for _, state := range states {
+			if err = ctx.Err(); err != nil {
+				return closeOnError(err)
+			}
+			if state.ProjectMemoryRevision < 0 {
+				return closeOnError(c.Fail(c.StoreIntegrityError, "registered task has an invalid project-memory revision"))
+			}
+			if state.ProjectMemoryRevision > 0 {
+				used[RuntimeCapabilityProjectMemoryV1] = true
+			}
 			if len(state.ReadWorkerAdmissions) > 0 {
 				used[RuntimeCapabilityReadWorkersV1] = true
 			}
@@ -135,7 +147,7 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if len(refs) > maxRuntimeCapabilityDocuments {
 			return closeOnError(c.Fail(c.BudgetLimitReached, "registered store exceeds the bounded historical-document scan"))
 		}
-		found, scannedBytes, scanErr := scanStoreProjectMemory(known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes)
+		found, scannedBytes, scanErr := scanStoreProjectMemory(ctx, known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes)
 		if scanErr != nil {
 			return closeOnError(scanErr)
 		}
@@ -160,7 +172,10 @@ func closeStoreLocks(locked []*store.Store) error {
 	return result
 }
 
-func scanStoreProjectMemory(directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64) (bool, int64, error) {
+func scanStoreProjectMemory(ctx context.Context, directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64) (bool, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return false, 0, err
+	}
 	if byteLimit < 0 {
 		return false, 0, c.Fail(c.BudgetLimitReached, "registered stores exceed the bounded historical-document scan")
 	}
@@ -170,6 +185,9 @@ func scanStoreProjectMemory(directory string, states map[string]c.TaskState, ref
 	inspect := make([]store.DocumentRef, 0, len(refs))
 	allPending := true
 	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return false, 0, err
+		}
 		state, ok := states[ref.TaskID]
 		if !ok {
 			return false, 0, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")
@@ -218,6 +236,9 @@ func scanStoreProjectMemory(directory string, states map[string]c.TaskState, ref
 	}
 	var scanned int64
 	for _, ref := range inspect {
+		if err := ctx.Err(); err != nil {
+			return false, scanned, err
+		}
 		state, ok := states[ref.TaskID]
 		if !ok {
 			return false, scanned, c.Fail(c.StoreIntegrityError, "historical document has no replayed task")

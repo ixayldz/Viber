@@ -17,6 +17,11 @@ import (
 	"github.com/ixayldz/Viber/internal/workspace"
 )
 
+func projectInstructionTestPolicy() policy.Policy {
+	return policy.Policy{SchemaVersion: c.SchemaVersion, Epoch: 1, Generation: 1,
+		Effects: []string{"snapshot.read", "model.infer"}, Paths: []string{"**"}}
+}
+
 func TestCapturedProjectInstructionsBindCompileAndReportLimits(t *testing.T) {
 	root := t.TempDir()
 	files := map[string][]byte{
@@ -42,7 +47,7 @@ func TestCapturedProjectInstructionsBindCompileAndReportLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	layers := []policy.Policy{{Paths: []string{"**"}}}
+	layers := []policy.Policy{projectInstructionTestPolicy()}
 	activePlan := &plan.State{
 		Definition: plan.Definition{Nodes: []plan.Node{{ReadScope: []string{"**"}, WriteScope: []string{"src/pkg/**"}}}},
 		Progress:   []plan.Progress{{Status: "RUNNING"}},
@@ -89,7 +94,9 @@ func TestCapturedProjectInstructionsBindCompileAndReportLimits(t *testing.T) {
 		t.Fatal("project instruction bytes were not included in request token accounting")
 	}
 
-	denied := []policy.Policy{{Paths: []string{"**"}, DeniedPaths: []string{"src/AGENTS.override.md"}}}
+	deniedPolicy := projectInstructionTestPolicy()
+	deniedPolicy.DeniedPaths = []string{"src/AGENTS.override.md"}
+	denied := []policy.Policy{deniedPolicy}
 	restricted, err := discoverProjectInstructions(capture, capture.Snapshot.Digest, denied, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +108,57 @@ func TestCapturedProjectInstructionsBindCompileAndReportLimits(t *testing.T) {
 	stale, err := discoverProjectInstructions(capture, c.HashBytes([]byte("different candidate")), layers, nil)
 	if err == nil || stale.Freshness != "STALE" {
 		t.Fatal("stale candidate instruction discovery was accepted")
+	}
+}
+
+func TestProjectInstructionsRequireSnapshotReadEffect(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("restricted source guidance\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := workspace.CaptureDirectory(root, workspace.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := projectInstructionTestPolicy()
+	operator := projectInstructionTestPolicy()
+	operator.Effects = []string{"model.infer"}
+	layers := []policy.Policy{base, operator}
+
+	loads := 0
+	discovery, err := discoverProjectInstructionsFromSnapshot(capture.Snapshot, capture.Snapshot.Digest, layers, nil, func(entry c.Entry) ([]byte, error) {
+		loads++
+		return capture.Contents[entry.Path], nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads != 0 || len(discovery.Documents) != 0 || discovery.Coverage != "PARTIAL" ||
+		!strings.Contains(strings.Join(discovery.Unknowns, " "), "PROJECT_INSTRUCTION_DENIED_BY_READ_POLICY") ||
+		strings.Contains(renderInstructionsForTest(t, discovery), "restricted source guidance") {
+		t.Fatalf("instruction source was read despite the missing snapshot.read effect: loads=%d discovery=%#v", loads, discovery)
+	}
+
+	// Model inference remains available; denied source guidance is represented
+	// as partial coverage instead of failing request compilation or being read.
+	session, options, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, false)
+	defer session.Close()
+	state, doc, err := session.Load(context.Background(), options.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Candidate.SnapshotDigest = capture.Snapshot.Digest
+	doc.Baseline.SnapshotDigest = capture.Snapshot.Digest
+	state.CandidateDigest = capture.Snapshot.Digest
+	request, _, _, err := compileOfflineRequestForCandidate(doc, state, layers, doc.Budget.MaxOutputTokens, capture)
+	if err != nil {
+		t.Fatalf("denied project guidance should not disable model inference compilation: %v", err)
+	}
+	if !strings.Contains(request.Instructions, "PROJECT_INSTRUCTION_DENIED_BY_READ_POLICY") || strings.Contains(request.Instructions, "restricted source guidance") {
+		t.Fatal("compiled request omitted the explicit partial-coverage status or included denied guidance")
 	}
 }
 
@@ -159,7 +217,7 @@ func TestArchiveProjectInstructionsLoadOnlySelectedBlobsAndRejectMissingSelected
 
 	// A missing unrelated blob must not force hydration of the full capture.
 	removeBlob(entryByPath["unrelated.txt"])
-	discovery, err := discoverProjectInstructionsFromArchive(archive, ref, capture.Snapshot.Digest, []policy.Policy{{Paths: []string{"**"}}}, nil)
+	discovery, err := discoverProjectInstructionsFromArchive(archive, ref, capture.Snapshot.Digest, []policy.Policy{projectInstructionTestPolicy()}, nil)
 	if err != nil {
 		t.Fatalf("selective discovery unnecessarily required an unrelated blob: %v", err)
 	}
@@ -174,7 +232,7 @@ func TestArchiveProjectInstructionsLoadOnlySelectedBlobsAndRejectMissingSelected
 
 	// The selected blob is required and a missing/corrupt copy is fail-closed.
 	removeBlob(entryByPath["AGENTS.md"])
-	stale, err := discoverProjectInstructionsFromArchive(archive, ref, capture.Snapshot.Digest, []policy.Policy{{Paths: []string{"**"}}}, nil)
+	stale, err := discoverProjectInstructionsFromArchive(archive, ref, capture.Snapshot.Digest, []policy.Policy{projectInstructionTestPolicy()}, nil)
 	if err == nil || stale.Freshness != "STALE" {
 		t.Fatalf("missing selected instruction blob was not rejected as stale: result=%#v err=%v", stale, err)
 	}

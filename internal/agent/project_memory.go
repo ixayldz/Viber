@@ -12,6 +12,7 @@ import (
 	"github.com/ixayldz/Viber/internal/config"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/skills"
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 const (
@@ -277,6 +278,12 @@ func (s *Session) validateProjectMemoryRefs(ctx context.Context, state c.TaskSta
 	if len(doc.ProjectMemoryRefs) > projectMemoryMaxEventsPerTask {
 		return nil, c.Fail(c.BudgetLimitReached, "project memory task event limit reached")
 	}
+	if state.ProjectMemoryRevision < 0 || state.ProjectMemoryRevision > int64(len(doc.ProjectMemoryRefs)) {
+		return nil, c.Fail(c.StoreIntegrityError, "project memory revision exceeds its retained event history")
+	}
+	if sourceBudget == nil {
+		sourceBudget = &projectMemorySourceBudget{}
+	}
 	events := make([]ProjectMemoryEvent, 0, len(doc.ProjectMemoryRefs))
 	seen := make(map[string]bool, len(doc.ProjectMemoryRefs))
 	previous := ""
@@ -312,6 +319,9 @@ func (s *Session) validateProjectMemoryRefs(ctx context.Context, state c.TaskSta
 }
 
 func (s *Session) validateProjectMemorySource(ctx context.Context, source ProjectMemorySource, sourceBudget *projectMemorySourceBudget) error {
+	if source.TaskID == "" || source.TaskSeq < 1 || !c.ValidDigest(source.DocumentDigest) {
+		return c.Fail(c.StoreIntegrityError, "project memory source cursor is invalid")
+	}
 	documentKey := source.TaskID + "\x00" + source.DocumentDigest
 	cacheKey := documentKey + "\x00" + strconv.FormatInt(source.TaskSeq, 10)
 	if sourceBudget != nil {
@@ -324,6 +334,12 @@ func (s *Session) validateProjectMemorySource(ctx context.Context, source Projec
 			}
 			return ctx.Err()
 		}
+	}
+	sourceState, err := s.Journal.ReplayAt(ctx, source.TaskID, source.TaskSeq)
+	if err != nil || sourceState.TaskID != source.TaskID || sourceState.TaskSeq != source.TaskSeq ||
+		sourceState.DocumentDigest != source.DocumentDigest || sourceState.BaselineDigest != source.BaselineDigest ||
+		sourceState.CandidateDigest != source.CandidateDigest || sourceState.PolicyEpoch != source.PolicyEpoch {
+		return c.Fail(c.StoreIntegrityError, "project memory source does not match its exact journal cursor")
 	}
 	raw, err := s.Archive.GetBytes(source.TaskID, source.DocumentDigest)
 	if err != nil {
@@ -378,7 +394,14 @@ func (s *Session) validateProjectMemorySource(ctx context.Context, source Projec
 }
 
 func (s *Session) projectMemoryInventory(ctx context.Context, projectDigest string) ([]projectMemoryStored, map[string]projectMemoryCurrent, error) {
-	states, err := s.Journal.Replay(ctx, "")
+	return s.projectMemoryInventoryScoped(ctx, projectDigest, "")
+}
+
+// projectMemoryInventoryScoped narrows automatic context to one task before
+// loading any task document or project-memory event. Manual search keeps the
+// whole-project inventory through projectMemoryInventory.
+func (s *Session) projectMemoryInventoryScoped(ctx context.Context, projectDigest, taskFilter string) ([]projectMemoryStored, map[string]projectMemoryCurrent, error) {
+	states, err := s.Journal.Replay(ctx, taskFilter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -387,6 +410,9 @@ func (s *Session) projectMemoryInventory(ctx context.Context, projectDigest stri
 	}
 	tasks := make([]string, 0, len(states))
 	for task := range states {
+		if taskFilter != "" && task != taskFilter {
+			continue
+		}
 		tasks = append(tasks, task)
 	}
 	sort.Strings(tasks)
@@ -613,6 +639,9 @@ func (s *Session) projectMemorySearchLocked(ctx context.Context, task, query str
 	if err != nil {
 		return empty, nil, nil, err
 	}
+	if err = currentOperatorEffect(doc, "context.read"); err != nil {
+		return empty, nil, nil, err
+	}
 	querySource, err := s.projectMemorySource(ctx, state, doc)
 	if err != nil {
 		return empty, nil, nil, err
@@ -636,11 +665,14 @@ func (s *Session) projectMemorySearchLocked(ctx context.Context, task, query str
 // It uses the exact task state/document already admitted for that run and does
 // not acquire s.mu itself.
 func (s *Session) projectMemoryContextLocked(ctx context.Context, state c.TaskState, doc Document) ([]ProjectMemoryItem, bool, error) {
+	if err := currentOperatorEffect(doc, "context.read"); err != nil {
+		return nil, false, err
+	}
 	querySource, err := s.projectMemorySource(ctx, state, doc)
 	if err != nil {
 		return nil, false, err
 	}
-	stored, current, err := s.projectMemoryInventory(ctx, querySource.ProjectDigest)
+	stored, current, err := s.projectMemoryInventoryScoped(ctx, querySource.ProjectDigest, state.TaskID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -726,6 +758,13 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 	if state.Execution == c.Running || state.Execution == c.Verifying || state.Execution == c.Delivering || state.Execution == c.Scoping || state.Execution == c.Pausing || state.Execution == c.Recovering {
 		return receipt, c.Fail(c.Conflict, "project memory mutation requires a quiescent task")
 	}
+	if state.Deletion != nil || state.InputBarrier || len(state.PendingInputIDs) != 0 ||
+		state.WorkBudget != nil && state.WorkBudget.EffectPending || projectMemoryHasUnsettledExposure(state) {
+		return receipt, c.Fail(c.PolicyDenied, "project memory mutation requires settled task effects and no pending input or deletion")
+	}
+	if err = currentOperatorEffect(doc, "context.edit"); err != nil {
+		return receipt, err
+	}
 	source, err := s.projectMemorySource(ctx, state, doc)
 	if err != nil {
 		return receipt, err
@@ -735,7 +774,7 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 	if err != nil {
 		return receipt, err
 	}
-	stored, current, err := s.projectMemoryInventory(ctx, "")
+	stored, current, err := s.projectMemoryInventory(ctx, source.ProjectDigest)
 	if err != nil {
 		return receipt, err
 	}
@@ -743,7 +782,7 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 		if existing.Event.CommandID != commandID {
 			continue
 		}
-		if existing.Event.RequestDigest != requestDigest || existing.Event.Source.ProjectDigest != source.ProjectDigest {
+		if existing.Event.RequestDigest != requestDigest || existing.Event.Source.ProjectDigest != source.ProjectDigest || existing.Event.Source.TaskID != task {
 			return receipt, c.Fail(c.CommandIDConflict, "project memory command ID reused with different content")
 		}
 		itemID := existing.Event.ID
@@ -761,6 +800,9 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 	}
 	if len(doc.ProjectMemoryRefs) >= projectMemoryMaxEventsPerTask {
 		return receipt, c.Fail(c.BudgetLimitReached, "task project memory event limit reached; no records were discarded")
+	}
+	if state.ProjectMemoryRevision == int64(^uint64(0)>>1) {
+		return receipt, c.Fail(c.BudgetLimitReached, "project memory revision counter is exhausted")
 	}
 	if action == "RETIRE" || action == "CORRECT" {
 		items, buildErr := projectMemoryBuildItems(stored, current, source)
@@ -815,8 +857,56 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 		return receipt, err
 	}
 	doc.ProjectMemoryRefs = append(doc.ProjectMemoryRefs, ref)
-	if _, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{}); err != nil {
+	// Persist and validate the exact next document before making the typed
+	// metadata-only journal mutation visible.
+	docBytes, err := c.CanonicalV1(doc)
+	if err != nil {
 		return receipt, err
+	}
+	if int64(len(docBytes)) > projectMemoryMaxDocumentBytes {
+		return receipt, c.Fail(c.BudgetLimitReached, "project memory task document exceeds its byte bound")
+	}
+	documentDigest, err := s.Archive.PutControlBytes(task, docBytes, true)
+	if err != nil {
+		return receipt, err
+	}
+	generation := s.Journal.Generation()
+	mutation := &c.ProjectMemoryMutation{SourceDocumentDigest: source.DocumentDigest, EventDigest: ref.Digest,
+		CommandID: commandID, EventBytes: int64(len(raw)), SourceTaskSeq: source.TaskSeq, SpecVersion: state.SpecVersion,
+		PolicyEpoch: state.PolicyEpoch, KernelGeneration: generation, Action: action}
+	if err = mutation.Validate(); err != nil {
+		return receipt, err
+	}
+	predicted := state
+	predicted.DocumentDigest = documentDigest
+	predicted.TaskSeq++
+	predicted.KernelGeneration = generation
+	predicted.ProjectMemoryRevision++
+	if _, _, err = s.loadDocument(predicted); err != nil {
+		return receipt, err
+	}
+	if err = currentOperatorEffect(doc, "context.edit"); err != nil {
+		return receipt, err
+	}
+	budgetBefore := state.WorkBudget
+	next, executeErr := s.Journal.Execute(ctx, store.Command{ID: commandID, TaskID: task, Actor: "user", ExpectedTaskSeq: state.TaskSeq,
+		Type: "ProjectMemoryRecorded", Payload: c.EventPayload{DocumentDigest: documentDigest, ProjectMemoryMutation: mutation}})
+	if executeErr != nil {
+		return receipt, executeErr
+	}
+	if next.DocumentDigest != documentDigest || next.ProjectMemoryRevision != state.ProjectMemoryRevision+1 ||
+		next.SpecVersion != state.SpecVersion || next.PolicyEpoch != state.PolicyEpoch || next.Execution != state.Execution ||
+		!sameProjectMemoryWorkBudget(budgetBefore, next.WorkBudget) {
+		return receipt, c.Fail(c.StoreIntegrityError, "project memory event changed task authority or work budget")
+	}
+	verifiedState, verifiedDoc, loadErr := s.Load(ctx, task)
+	if loadErr != nil {
+		return receipt, loadErr
+	}
+	if verifiedState.DocumentDigest != documentDigest || len(verifiedDoc.ProjectMemoryRefs) != len(doc.ProjectMemoryRefs) ||
+		verifiedDoc.ProjectMemoryRefs[len(verifiedDoc.ProjectMemoryRefs)-1] != ref ||
+		verifiedState.ProjectMemoryRevision != next.ProjectMemoryRevision {
+		return receipt, c.Fail(c.StoreIntegrityError, "project memory event failed full document validation")
 	}
 	status := "RECORDED"
 	itemID := event.ID
@@ -827,6 +917,36 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 	}
 	return ProjectMemoryMutationReceipt{SchemaVersion: 1, Source: source, EventDigest: ref.Digest, RequestDigest: requestDigest,
 		CommandID: commandID, EventID: event.ID, ItemID: itemID, TargetID: targetID, Operation: action, Status: status, AdvisoryOnly: true}, nil
+}
+
+func projectMemoryHasUnsettledExposure(state c.TaskState) bool {
+	if state.Tokens != nil {
+		for _, reservation := range state.Tokens.Reservations {
+			if reservation.Status != "SETTLED" {
+				return true
+			}
+		}
+	}
+	if state.Resources != nil {
+		for _, reservation := range state.Resources.Reservations {
+			if reservation.Status != "SETTLED" {
+				return true
+			}
+		}
+	}
+	for _, effect := range state.DeliveryEffects {
+		if effect.Status == c.DeliveryUnknown {
+			return true
+		}
+	}
+	return false
+}
+
+func sameProjectMemoryWorkBudget(left, right *c.TaskWorkBudget) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // RecordProjectMemory adds a user-authored fact, decision or convention.

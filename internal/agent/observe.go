@@ -137,7 +137,7 @@ func (s *Session) Observe(ctx context.Context, task string, args Observation) (a
 			return nil, err
 		}
 		instructionRaw, _ := c.CanonicalV1(request.Instructions)
-		result.Components = append(result.Components, ContextComponent{Index: -2, Role: "instructions", Bytes: len(instructionRaw), Digest: c.HashBytes(instructionRaw), Reason: "CURRENT_KERNEL_SPEC_POLICY_BUDGET_PLAN_CHECK_CONTRACT"})
+		result.Components = append(result.Components, ContextComponent{Index: -2, Role: "instructions", Bytes: len(instructionRaw), Digest: c.HashBytes(instructionRaw), Reason: "CURRENT_KERNEL_CONTRACT_WITH_EXPLICITLY_UNTRUSTED_PROJECT_ADVICE"})
 		toolRaw, _ := c.CanonicalV1(request.Tools)
 		result.Components = append(result.Components, ContextComponent{Index: -1, Role: "tool_registry", Bytes: len(toolRaw), Digest: c.HashBytes(toolRaw), Reason: "STRICT_NATIVE_TOOL_PROTOCOL"})
 		for i, message := range request.Messages {

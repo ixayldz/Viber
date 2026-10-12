@@ -27,6 +27,8 @@ Fact/decision/convention kayıtları ordinary task-scoped immutable artifact ve 
 
 CLI/TUI record/search/correct/retire kullanıcı tarafından açıkça yapılır. GC/backup/restore/deletion closure refs'i taşır; origin task deletion belleği de kaldırır, copies lineage ile bound kalır. Retired kaydı raw purge veya retention yerine sunulmaz. Eski decoder yeni memory-bearing Document desteklemiyorsa fail-closed; eski canonical docs değişmez. Automatic prompt injection yalnız current-source/policy/budget ve retirement kontrolleri tamamlandığında açılır.
 
+Uygulanan metadata sözleşmesi `ProjectMemoryRecorded`: kullanıcı actor'ı, command dedup, exact `ReplayAt` cursor'ı ve current owner generation kernel'de doğrulanır. Terminal/reopened görevde quiescent metadata mutation execution/quality/budget state'ini korur. `context.read/edit` operator gate'leri I/O ve mutation öncesinde uygulanır; task silinse bile revision compatibility witness eski decoder'a sessiz dönüşü engeller.
+
 Kapanış: oturumlar arası aynı proje read/search, stale ve conflict, exact kullanıcı correction/retirement, backup/GC/privacy integration, CLI/TUI wiring. Sadece skill registry'ye kayıt koymak veya host dizinine JSON yazmak yeterli değildir.
 
 ## 4. Bounded salt okuma koordinasyonu — FR-33–35

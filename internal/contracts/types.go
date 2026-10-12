@@ -200,6 +200,7 @@ type TaskWorkBudget struct {
 type TaskState struct {
 	Deletion                *TaskDeletion         `json:"content_deletion,omitempty"`
 	WorkBudget              *TaskWorkBudget       `json:"work_budget,omitempty"`
+	ProjectMemoryRevision   int64                 `json:"project_memory_revision,omitempty"`
 	ReadWorkerAdmissions    []ReadWorkerAdmission `json:"read_worker_admissions,omitempty"`
 	DeliveryEffects         []DeliveryEffect      `json:"delivery_effects,omitempty"`
 	GoalQueue               []GoalSchedule        `json:"goal_queue,omitempty"`
@@ -239,29 +240,30 @@ type Event struct {
 	PayloadRef       string `json:"payload_ref"`
 }
 type EventPayload struct {
-	Deletion            *TaskDeletion             `json:"content_deletion,omitempty"`
-	WorkBudget          *TaskWorkBudget           `json:"work_budget,omitempty"`
-	ReadWorkerAdmission *ReadWorkerAdmission      `json:"read_worker_admission,omitempty"`
-	DeliveryEffect      *DeliveryEffect           `json:"delivery_effect,omitempty"`
-	Goal                *GoalMutation             `json:"goal,omitempty"`
-	Verification        *VerificationFinalization `json:"verification,omitempty"`
-	QueueID             string                    `json:"queue_id,omitempty"`
-	Resources           *ResourceMutation         `json:"resource_mutation,omitempty"`
-	Tokens              *TokenMutation            `json:"token_mutation,omitempty"`
-	CommandError        *Error                    `json:"command_error,omitempty"`
-	DocumentDigest      string                    `json:"document_digest,omitempty"`
-	SnapshotDigest      string                    `json:"snapshot_digest,omitempty"`
-	InputDigest         string                    `json:"input_digest,omitempty"`
-	InputBytes          int64                     `json:"input_bytes,omitempty"`
-	InputID             string                    `json:"input_id,omitempty"`
-	SpecVersion         int64                     `json:"spec_version,omitempty"`
-	State               ExecutionState            `json:"state,omitempty"`
-	Outcome             Outcome                   `json:"outcome,omitempty"`
-	Quality             Quality                   `json:"quality,omitempty"`
-	Fulfillment         Fulfillment               `json:"fulfillment,omitempty"`
-	PolicyEpoch         int64                     `json:"policy_epoch,omitempty"`
-	RequiredObligations int                       `json:"required_obligations,omitempty"`
-	Reason              string                    `json:"reason,omitempty"`
+	Deletion              *TaskDeletion             `json:"content_deletion,omitempty"`
+	WorkBudget            *TaskWorkBudget           `json:"work_budget,omitempty"`
+	ProjectMemoryMutation *ProjectMemoryMutation    `json:"project_memory_mutation,omitempty"`
+	ReadWorkerAdmission   *ReadWorkerAdmission      `json:"read_worker_admission,omitempty"`
+	DeliveryEffect        *DeliveryEffect           `json:"delivery_effect,omitempty"`
+	Goal                  *GoalMutation             `json:"goal,omitempty"`
+	Verification          *VerificationFinalization `json:"verification,omitempty"`
+	QueueID               string                    `json:"queue_id,omitempty"`
+	Resources             *ResourceMutation         `json:"resource_mutation,omitempty"`
+	Tokens                *TokenMutation            `json:"token_mutation,omitempty"`
+	CommandError          *Error                    `json:"command_error,omitempty"`
+	DocumentDigest        string                    `json:"document_digest,omitempty"`
+	SnapshotDigest        string                    `json:"snapshot_digest,omitempty"`
+	InputDigest           string                    `json:"input_digest,omitempty"`
+	InputBytes            int64                     `json:"input_bytes,omitempty"`
+	InputID               string                    `json:"input_id,omitempty"`
+	SpecVersion           int64                     `json:"spec_version,omitempty"`
+	State                 ExecutionState            `json:"state,omitempty"`
+	Outcome               Outcome                   `json:"outcome,omitempty"`
+	Quality               Quality                   `json:"quality,omitempty"`
+	Fulfillment           Fulfillment               `json:"fulfillment,omitempty"`
+	PolicyEpoch           int64                     `json:"policy_epoch,omitempty"`
+	RequiredObligations   int                       `json:"required_obligations,omitempty"`
+	Reason                string                    `json:"reason,omitempty"`
 }
 type GoalMutation struct {
 	ID                     string           `json:"id"`

@@ -122,6 +122,47 @@ func TestFramingBoundsMalformedRequestAndUnknownResponse(t *testing.T) {
 		t.Fatal("malformed input dispatched")
 	}
 }
+
+func TestReadWorkersClientDisconnectCancelsServerHandler(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	server, _ := serverFixture(t, func(ctx context.Context, request Request) (any, error) {
+		if request.Command != "read-workers" {
+			t.Errorf("unexpected command %q", request.Command)
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := Call(ctx, server.Info, Request{ID: "worker-call", Command: "read-workers", Payload: json.RawMessage("null")})
+		callDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("read-workers handler did not start")
+	}
+	cancel()
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client disconnect did not cancel read-workers handler")
+	}
+	select {
+	case err := <-callDone:
+		var callError *CallError
+		if !errors.As(err, &callError) || !callError.Dispatched {
+			t.Fatalf("dispatched request loss must remain an unknown outcome: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled IPC client did not return")
+	}
+}
+
 func TestDescriptorRotationAndCloseDoNotRemoveNewOwner(t *testing.T) {
 	first, root := serverFixture(t, func(context.Context, Request) (any, error) { return nil, nil })
 	other, err := OpenServer(context.Background(), root, 8, func(context.Context, Request) (any, error) { return nil, nil })

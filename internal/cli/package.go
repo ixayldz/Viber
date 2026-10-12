@@ -210,7 +210,7 @@ func runPackage(args []string, out, errout io.Writer) int {
 	case "install":
 		state, err = m.Install(ctx, bundle)
 	case "rollback":
-		state, err = m.Rollback(*target)
+		state, err = m.RollbackContext(ctx, *target)
 	case "deactivate":
 		state, err = m.Deactivate()
 	case "uninstall":

@@ -31,13 +31,27 @@ func readWorkerTestAdmission(state c.TaskState, operation string) c.ReadWorkerAd
 	return a
 }
 
+func readWorkerReadyState(t *testing.T) c.TaskState {
+	t.Helper()
+	state := readWorkerTestTask(t)
+	for i, execution := range []c.ExecutionState{c.Scoping, c.Ready} {
+		event := c.Event{SchemaVersion: c.SchemaVersion, ID: fmt.Sprintf("read-worker-ready-%d", i+1), TaskID: state.TaskID, TaskSeq: state.TaskSeq + 1, StoreSeq: state.StoreSeq + 1, KernelGeneration: state.KernelGeneration, Actor: "kernel", Type: "StateTransitioned"}
+		next, err := Reduce(&state, event, c.EventPayload{State: execution})
+		if err != nil {
+			t.Fatalf("cannot prepare quiescent worker task: %v", err)
+		}
+		state = next
+	}
+	return state
+}
+
 func reduceReadWorkerCharge(state c.TaskState, admission c.ReadWorkerAdmission, stepDelta int64) (c.TaskState, error) {
 	updated := *state.WorkBudget
 	updated.Steps += stepDelta
 	updated.ToolCalls += admission.ChargedToolCalls
 	updated.ActiveMillis += admission.ChargedActiveMillis
 	newDocument := c.HashBytes([]byte(fmt.Sprintf("read-worker-after:%d", state.TaskSeq)))
-	event := c.Event{SchemaVersion: c.SchemaVersion, ID: fmt.Sprintf("read-worker-%d", state.TaskSeq+1), TaskID: state.TaskID, TaskSeq: state.TaskSeq + 1, StoreSeq: state.StoreSeq + 1, KernelGeneration: state.KernelGeneration, Actor: "kernel", Type: "ReadWorkersAdmitted"}
+	event := c.Event{SchemaVersion: c.SchemaVersion, ID: fmt.Sprintf("read-worker-%d", state.TaskSeq+1), TaskID: state.TaskID, TaskSeq: state.TaskSeq + 1, StoreSeq: state.StoreSeq + 1, KernelGeneration: admission.KernelGeneration, Actor: "kernel", Type: "ReadWorkersAdmitted"}
 	return Reduce(&state, event, c.EventPayload{DocumentDigest: newDocument, WorkBudget: &updated, ReadWorkerAdmission: &admission})
 }
 
@@ -84,6 +98,36 @@ func TestReadWorkersAdmissionRejectsForgedDeltaAndChildHoldOverrun(t *testing.T)
 		var typed *c.Error
 		if !errors.As(err, &typed) || typed.Code != c.BudgetLimitReached {
 			t.Fatalf("child-held budget returned the wrong error: %v", err)
+		}
+	}
+}
+
+func TestReadWorkersAdmissionRebindsOnlyQuiescentOwnerGeneration(t *testing.T) {
+	state := readWorkerReadyState(t)
+	oldGeneration, sourceSeq, sourceDoc := state.KernelGeneration, state.TaskSeq, state.DocumentDigest
+	currentGeneration := oldGeneration + 1
+	admission := readWorkerTestAdmission(state, "3123456789abcdef0123456789abcdef")
+	admission.KernelGeneration = currentGeneration
+	admission.AdmissionDigest, _ = admission.Digest()
+	next, err := reduceReadWorkerCharge(state, admission, 2)
+	if err != nil {
+		t.Fatalf("quiescent read-worker admission should bind the current owner without changing the source cursor: %v", err)
+	}
+	if next.KernelGeneration != currentGeneration || next.TaskSeq != sourceSeq+1 || next.DocumentDigest == sourceDoc || len(next.ReadWorkerAdmissions) != 1 || next.ReadWorkerAdmissions[0].SourceTaskSeq != sourceSeq || next.ReadWorkerAdmissions[0].SourceDocumentDigest != sourceDoc {
+		t.Fatalf("generation-bound admission lost its original source cursor: %#v", next)
+	}
+
+	blocked := state
+	blocked.Tokens = &c.TokenAccount{SchemaVersion: 1, Limits: c.DefaultTokenLimits(), Reservations: []c.TokenReservation{{ID: "unknown-model-call", Status: "UNKNOWN"}}}
+	blockedAdmission := readWorkerTestAdmission(blocked, "4123456789abcdef0123456789abcdef")
+	blockedAdmission.KernelGeneration = currentGeneration
+	blockedAdmission.AdmissionDigest, _ = blockedAdmission.Digest()
+	if _, err = reduceReadWorkerCharge(blocked, blockedAdmission, 2); err == nil {
+		t.Fatal("owner generation rebind was allowed while token exposure remained UNKNOWN")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+			t.Fatalf("unsettled exposure rebind returned the wrong error: %v", err)
 		}
 	}
 }

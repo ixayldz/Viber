@@ -127,6 +127,9 @@ func (m *Manager) RunActive(ctx context.Context, args []string, stdin io.Reader,
 		if compatibilityErr != nil {
 			return 4, compatibilityErr
 		}
+		// This is a point-in-time preflight. The legacy child acquires its own
+		// store lock and must reject unsupported data through its strict decoder;
+		// no atomic handoff to an unrelated older process is claimed here.
 	}
 	command := exec.CommandContext(ctx, state.Binary, args...)
 	command.Stdin = stdin

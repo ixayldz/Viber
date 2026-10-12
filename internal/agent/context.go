@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	ctxpack "github.com/ixayldz/Viber/internal/context"
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -125,7 +126,12 @@ func (s *Session) projectMemoryAdvisoryContextLocked(ctx context.Context, state 
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
-			envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_SOURCE_OR_POLICY_UNAVAILABLE")
+			var policyErr *c.Error
+			if errors.As(memoryErr, &policyErr) && policyErr.Code == c.PolicyDenied {
+				envelope.Omissions = append(envelope.Omissions, "OPERATOR_CONTEXT_READ_DENIED")
+			} else {
+				envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_SOURCE_OR_POLICY_UNAVAILABLE")
+			}
 		} else {
 			for _, item := range items {
 				if item.Status != "ACTIVE" || !item.AdvisoryOnly || item.EvidenceClass != "USER_ASSERTED" ||
