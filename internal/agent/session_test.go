@@ -13,6 +13,10 @@ import (
 )
 
 func startFixture(t *testing.T, turns []Turn, allow bool) (*Session, StartOptions, string) {
+	return startFixtureConfigured(t, turns, allow, nil)
+}
+
+func startFixtureConfigured(t *testing.T, turns []Turn, allow bool, configure func(*StartOptions)) (*Session, StartOptions, string) {
 	t.Helper()
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte("before\r\n"), 0600); err != nil {
@@ -27,6 +31,9 @@ func startFixture(t *testing.T, turns []Turn, allow bool) (*Session, StartOption
 		t.Fatal(err)
 	}
 	options := StartOptions{Root: source, Prompt: []byte("Change a.txt without altering the live workspace."), TaskID: "task-one", Budget: DefaultBudget(), Autonomy: "guided", AllowUnverified: allow, Fixture: raw}
+	if configure != nil {
+		configure(&options)
+	}
 	if _, err = session.Create(context.Background(), options); err != nil {
 		session.Close()
 		t.Fatal(err)
@@ -180,16 +187,17 @@ func TestResumeRejectsChangedLiveSourceAndPendingIntent(t *testing.T) {
 	}
 }
 func TestBudgetAndReviewPolicyStopCandidateMutation(t *testing.T) {
-	session, options, _ := startFixture(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "summary", UsageKnown: true}}, true)
+	session, options, _ := startFixtureConfigured(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "summary", UsageKnown: true}}, true, func(options *StartOptions) {
+		options.Autonomy = "review"
+		options.Budget.MaxSteps = 1
+	})
 	defer session.Close()
 	state, doc, err := session.Load(context.Background(), options.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc.Autonomy = "review"
-	doc.Budget.MaxSteps = 1
-	if _, err = session.record(context.Background(), state, doc, "SessionRecorded", c.EventPayload{}); err != nil {
-		t.Fatal(err)
+	if doc.Autonomy != "review" || doc.Budget.MaxSteps != 1 || state.WorkBudget == nil || state.WorkBudget.Limits.MaxSteps != 1 {
+		t.Fatal("review policy and one-step limit were not sealed at task creation", doc.Autonomy, doc.Budget, state.WorkBudget)
 	}
 	state, err = session.Run(context.Background(), options.TaskID)
 	if err != nil {

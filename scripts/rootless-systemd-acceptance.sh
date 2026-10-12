@@ -155,7 +155,31 @@ assert info['CgroupVersion'] == '2' and info['CgroupDriver'] == 'systemd'
 assert all(info.get(key) is True for key in ('MemoryLimit', 'SwapLimit', 'CpuCfsQuota', 'CpuCfsPeriod', 'PidsLimit'))
 assert info['ID']
 PY
-"${task_as_user[@]}" docker --host "$task_endpoint" pull "$task_image"
+task_image_ready=false
+for task_pull_attempt in 1 2 3; do
+  if "${task_as_user[@]}" docker --host "$task_endpoint" pull "$task_image"; then
+    task_image_ready=true
+    break
+  fi
+  if [[ "$task_pull_attempt" != 3 ]]; then sleep "$((task_pull_attempt * 5))"; fi
+done
+if [[ "$task_image_ready" != true ]]; then
+  # Registry transport may be rate-limited. The official mirror must supply
+  # the exact same immutable manifest; never accept a mutable tag fallback.
+  task_image="docker.io/library/golang:1.27.2-bookworm@${task_image##*@}"
+  for task_pull_attempt in 1 2 3; do
+    if "${task_as_user[@]}" docker --host "$task_endpoint" pull "$task_image"; then
+      task_image_ready=true
+      break
+    fi
+    if [[ "$task_pull_attempt" != 3 ]]; then sleep "$((task_pull_attempt * 5))"; fi
+  done
+fi
+if [[ "$task_image_ready" != true ]]; then
+  echo 'Immutable acceptance image unavailable; no test was dispatched' >&2
+  exit 1
+fi
+printf '%s\n' "$task_image" > "$task_evidence/selected-image.txt"
 run_test() {
   task_phase=$1
   task_pattern=$2

@@ -103,11 +103,21 @@ jobs:
           docker info > evidence/docker-info.txt
           # Pulling an immutable test image is idempotent. Bound registry
           # retries, preserve the digest, and fail before tests if unavailable.
+          task_image_ready=false
           for attempt in 1 2 3; do
-            if docker pull "$VIBER_DOCKER_TEST_IMAGE"; then break; fi
-            if [[ "$attempt" == 3 ]]; then exit 1; fi
-            sleep "$((attempt * 10))"
+            if docker pull "$VIBER_DOCKER_TEST_IMAGE"; then task_image_ready=true; break; fi
+            if [[ "$attempt" != 3 ]]; then sleep "$((attempt * 5))"; fi
           done
+          if [[ "$task_image_ready" != true ]]; then
+            VIBER_DOCKER_TEST_IMAGE="docker.io/library/golang:1.27.2-bookworm@${VIBER_DOCKER_TEST_IMAGE##*@}"
+            export VIBER_DOCKER_TEST_IMAGE
+            for attempt in 1 2 3; do
+              if docker pull "$VIBER_DOCKER_TEST_IMAGE"; then task_image_ready=true; break; fi
+              if [[ "$attempt" != 3 ]]; then sleep "$((attempt * 5))"; fi
+            done
+          fi
+          [[ "$task_image_ready" == true ]]
+          printf '%s\n' "$VIBER_DOCKER_TEST_IMAGE" > evidence/selected-image.txt
           docker build --build-arg "VIBER_GRAPH_BUILDER_IMAGE=$VIBER_DOCKER_TEST_IMAGE" --tag viber-go-graph-helper:ci --file tools/go-graph-helper/Dockerfile .
           VIBER_GO_GRAPH_TEST_IMAGE="$(docker image inspect --format '{{.Id}}' viber-go-graph-helper:ci)"
           [[ "$VIBER_GO_GRAPH_TEST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
