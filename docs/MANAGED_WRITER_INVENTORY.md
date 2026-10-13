@@ -2,6 +2,8 @@
 
 10 Ekim 2026; runtime `0af0d3f1cf7b237dadc63f6eabbb8870c2441916`. Bu dosya kaynak kodundan çıkarılan uygulama planıdır; ortak fiziksel kota implementasyonu veya kabul kanıtı değildir. [PRD teslim planı](KEYLESS_DELIVERY_PLAN.md) paket 2'nin ilk adımıdır. API anahtarı gerektirmez.
 
+Durum — 13 Ekim 2026: çekirdek `resource.Ledger` (Reserve/Begin/Commit, EnclosingReservation, ImportRetained, Capacity, ReconcileFreePending, control reserve, mutable SQLite) uygulanmış durumda. Bağlı yazarlar: task CAS/materialization, kernel DB/WAL (mutable SQLite standby + admission hook), SQLite backup snapshot, backup, export, delivery operation/training/evaluator report kayıtları, support, delivery preview ve GC control kayıtları (13 Ekim dilimi). Bağlı olmayan yazarlar: **restore stage, evaluator owner (`OpenIndependentEvaluator`), external privacy authority record/checkpoint/migration kayıtları ve native process/fence identity charge'ları** — bunlar paket 2'nin kalan işidir.
+
 ## Mevcut yazma yolları
 
 | Writer / giriş noktası | Mevcut admission ve sahiplik | Ortak kota için bağlanacak noktalar |

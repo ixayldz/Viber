@@ -34,6 +34,10 @@ EXPECTED_TEST_PACKAGES = {
     "TestCapturedRetrievalReportRejectsStaleCurrentPolicyBinding": "github.com/ixayldz/Viber/internal/agent",
     "TestCapturedRetrievalReportDoesNotHydrateDeniedCandidateBlob": "github.com/ixayldz/Viber/internal/agent",
     "TestProjectMemoryCopyRestoreAndDeletionClosure": "github.com/ixayldz/Viber/internal/agent",
+    "TestSupportAndDeliveryPreviewReserveSharedPhysicalQuota": "github.com/ixayldz/Viber/internal/agent",
+    "TestSupportAndDeliveryPreviewFailClosedOnExhaustedPhysicalQuota": "github.com/ixayldz/Viber/internal/agent",
+    "TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts": "github.com/ixayldz/Viber/internal/agent",
+    "TestCollectGarbageFailsClosedOnExhaustedControlQuota": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority": "github.com/ixayldz/Viber/internal/agent",
@@ -188,6 +192,10 @@ if args.delivery:
         "TestDeliveryReverificationCLIUsesOwnerAndDeduplicatesImmutableCreation",
         "TestDeliveryReverificationMissingStoreAndTaskMismatchHaveNoEffects",
         "TestOperatorDeliveryPreviewPreservesUserBytesAndHistoricalTask",
+        "TestSupportAndDeliveryPreviewReserveSharedPhysicalQuota",
+        "TestSupportAndDeliveryPreviewFailClosedOnExhaustedPhysicalQuota",
+        "TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts",
+        "TestCollectGarbageFailsClosedOnExhaustedControlQuota",
     }
 if args.native_ntfs:
     required |= {

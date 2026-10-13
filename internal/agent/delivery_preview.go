@@ -5,6 +5,7 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/delivery"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/workspace"
 	"path/filepath"
 	"sort"
@@ -84,6 +85,82 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 	if err != nil {
 		return result, err
 	}
+	// Precompute the exact publication set and manifest before creating the
+	// output root so the shared physical reservation precedes the first
+	// temporary write; partial output never becomes a delivery receipt.
+	pending := []exportPayload{}
+	appendPending := func(name string, raw []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(result.Files) >= backupMaxFiles {
+			return c.Fail(c.UnsupportedCapability, "delivery preview file quota exceeded")
+		}
+		result.Files = append(result.Files, BackupFile{Path: name, Digest: c.HashBytes(raw), Size: int64(len(raw))})
+		pending = append(pending, exportPayload{path: name, raw: raw})
+		return nil
+	}
+	if preview.Status == "READY" {
+		for _, entry := range merged.Snapshot.Entries {
+			if err = appendPending("merged/"+entry.Path, merged.Contents[entry.Path]); err != nil {
+				return result, err
+			}
+		}
+		snapshot, err := c.CanonicalV1(merged.Snapshot)
+		if err != nil {
+			return result, err
+		}
+		if err = appendPending("merged-snapshot.json", snapshot); err != nil {
+			return result, err
+		}
+		if err = appendPending("changes.patch", patch); err != nil {
+			return result, err
+		}
+		for _, change := range result.Changeset.Changes {
+			if change.BeforeDigest != "" {
+				if err = appendPending("current/"+change.Path, current.Contents[change.Path]); err != nil {
+					return result, err
+				}
+			}
+		}
+	}
+	previewRaw, err := c.CanonicalV1(preview)
+	if err != nil {
+		return result, err
+	}
+	if err = appendPending("preview.json", previewRaw); err != nil {
+		return result, err
+	}
+	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
+	result.Digest, err = c.Digest(result)
+	if err != nil {
+		return result, err
+	}
+	manifestRaw, err := c.CanonicalV1(result)
+	if err != nil {
+		return result, err
+	}
+	var allocation resource.Allocation
+	covered := false
+	if s.PhysicalQuota != nil {
+		_, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, target)
+		if err != nil {
+			return result, err
+		}
+		if !covered {
+			upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(pending, manifestRaw)
+			if estimateErr != nil {
+				return result, estimateErr
+			}
+			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "DELIVERY_PREVIEW", RequestDigest: c.HashBytes(manifestRaw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+			if err != nil {
+				return result, err
+			}
+			if err = allocation.Begin(ctx); err != nil {
+				return result, err
+			}
+		}
+	}
 	root, err := freshPrivate(target)
 	if err != nil {
 		return result, err
@@ -92,68 +169,35 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 	if err = s.allocateManagedCopy(ctx, root, "DELIVERY_PREVIEW", []string{task}); err != nil {
 		return result, err
 	}
-	publish := func(name string, raw []byte) error {
+	for _, file := range pending {
 		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(result.Files) >= backupMaxFiles {
-			return c.Fail(c.UnsupportedCapability, "delivery preview file quota exceeded")
-		}
-		if err := fileguard.Publish(root, filepath.FromSlash(name), raw); err != nil {
-			return err
-		}
-		result.Files = append(result.Files, BackupFile{Path: name, Digest: c.HashBytes(raw), Size: int64(len(raw))})
-		return nil
-	}
-	if preview.Status == "READY" {
-		for _, entry := range merged.Snapshot.Entries {
-			if err = publish("merged/"+entry.Path, merged.Contents[entry.Path]); err != nil {
-				return result, err
-			}
-		}
-		snapshot, err := c.CanonicalV1(merged.Snapshot)
-		if err != nil {
 			return result, err
 		}
-		if err = publish("merged-snapshot.json", snapshot); err != nil {
+		if err := fileguard.Publish(root, filepath.FromSlash(file.path), file.raw); err != nil {
 			return result, err
 		}
-		if err = publish("changes.patch", patch); err != nil {
-			return result, err
-		}
-		for _, change := range result.Changeset.Changes {
-			if change.BeforeDigest != "" {
-				if err = publish("current/"+change.Path, current.Contents[change.Path]); err != nil {
-					return result, err
-				}
-			}
-		}
-	}
-	raw, err := c.CanonicalV1(preview)
-	if err != nil {
-		return result, err
-	}
-	if err = publish("preview.json", raw); err != nil {
-		return result, err
-	}
-	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
-	result.Digest, err = c.Digest(result)
-	if err != nil {
-		return result, err
-	}
-	raw, err = c.CanonicalV1(result)
-	if err != nil {
-		return result, err
 	}
 	physical, err := fileguard.DirectoryIdentity(root)
 	if err != nil {
 		return result, err
 	}
 	files := append([]BackupFile{}, result.Files...)
-	files = append(files, BackupFile{Path: "manifest.json", Digest: c.HashBytes(raw), Size: int64(len(raw))})
+	files = append(files, BackupFile{Path: "manifest.json", Digest: c.HashBytes(manifestRaw), Size: int64(len(manifestRaw))})
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	if err = s.registerManagedCopy(ctx, ManagedCopy{Kind: "DELIVERY_PREVIEW", Directory: root.Name(), PhysicalRoot: physical, Files: files, Tasks: []string{task}}); err != nil {
 		return result, err
 	}
-	return result, fileguard.Publish(root, "manifest.json", raw)
+	if err = fileguard.Publish(root, "manifest.json", manifestRaw); err != nil {
+		return result, err
+	}
+	if s.PhysicalQuota != nil && !covered {
+		inventory, measureErr := resource.Measure(root, true)
+		if measureErr != nil {
+			return result, measureErr
+		}
+		if err = allocation.Commit(ctx, inventory); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }

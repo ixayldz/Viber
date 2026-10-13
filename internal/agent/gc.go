@@ -7,6 +7,7 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 	"os"
 	"path/filepath"
@@ -426,6 +427,46 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if intentErr != nil && !errors.Is(intentErr, os.ErrNotExist) {
 		return result, intentErr
 	}
+	// A completed command owns a retained physical allocation already; an
+	// exact retry writes nothing and must not double-charge the same records.
+	completePath := filepath.Join(base, "complete.json")
+	previousComplete, completeErr := fileguard.ReadRegular(root, completePath, 2<<20)
+	if completeErr != nil && !errors.Is(completeErr, os.ErrNotExist) {
+		return result, completeErr
+	}
+	alreadyComplete := false
+	if completeErr == nil {
+		var prior GCResult
+		if c.DecodeStrict(previousComplete, &prior) != nil || prior.CommandID != command.CommandID || prior.PlanDigest != command.Plan.Digest {
+			return result, c.Fail(c.CommandIDConflict, "immutable GC record differs")
+		}
+		alreadyComplete = true
+	}
+	var allocation resource.Allocation
+	covered := false
+	if s.PhysicalQuota != nil && !alreadyComplete {
+		gcTarget := filepath.Join(s.directory, base)
+		allocation, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, gcTarget)
+		if err != nil {
+			return result, err
+		}
+		if !covered {
+			// The free-space probe above is not a durable reservation; charge
+			// the control budget before the first record is written. A crashed
+			// attempt keeps its charge and is adopted instead of doubled.
+			upperBytes, upperEntries, estimateErr := gcPhysicalEstimate(raw, len(plan.Objects))
+			if estimateErr != nil {
+				return result, estimateErr
+			}
+			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(raw), TargetRoot: gcTarget, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control})
+			if err != nil {
+				return result, err
+			}
+			if err = allocation.Begin(ctx); err != nil {
+				return result, err
+			}
+		}
+	}
 	objects, err := s.Archive.Inventory(ctx)
 	if err != nil {
 		return result, err
@@ -486,7 +527,39 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if err != nil {
 		return result, err
 	}
-	return result, publishGCSame(root, filepath.Join(base, "complete.json"), raw)
+	if err = publishGCSame(root, filepath.Join(base, "complete.json"), raw); err != nil {
+		return result, err
+	}
+	if s.PhysicalQuota != nil && !alreadyComplete {
+		gcRoot, openErr := os.OpenRoot(filepath.Join(s.directory, base))
+		if openErr != nil {
+			return result, openErr
+		}
+		inventory, measureErr := resource.Measure(gcRoot, true)
+		closeErr := gcRoot.Close()
+		if err = errors.Join(measureErr, closeErr); err != nil {
+			return result, err
+		}
+		if err = allocation.Commit(ctx, inventory); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// gcPhysicalEstimate bounds the durable control records of one GC command:
+// the intent, one receipt per object and the final result each repeat the
+// bounded object list, plus per-file allocation slack and directory charges.
+func gcPhysicalEstimate(intent []byte, objects int) (uint64, uint64, error) {
+	if len(intent) > 2<<20 || objects > 2048 {
+		return 0, 0, c.Fail(c.UnsupportedCapability, "GC physical receipt exceeds bounded profile")
+	}
+	upperBytes := uint64(len(intent))*3 + uint64(objects)*(4096+64) + 3*4096 + (64 << 10)
+	if upperBytes > 1<<48 {
+		return 0, 0, c.Fail(c.UnsupportedCapability, "GC byte estimate exceeds bounded profile")
+	}
+	upperEntries := uint64(objects) + 4 // intent, complete, root, one live temp
+	return upperBytes, upperEntries, nil
 }
 
 func publishGCSame(root *os.Root, name string, raw []byte) error {

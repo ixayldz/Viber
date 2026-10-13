@@ -4,6 +4,7 @@ import (
 	"context"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"path/filepath"
 	"sort"
 )
@@ -154,6 +155,29 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 	if err = s.Journal.DiskAdmission(int64(len(raw))+1<<20, false); err != nil {
 		return report, err
 	}
+	var allocation resource.Allocation
+	covered := false
+	if s.PhysicalQuota != nil {
+		_, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, target)
+		if err != nil {
+			return report, err
+		}
+		if !covered {
+			// The free-space probe above is not a durable reservation; charge
+			// the shared physical quota before the output root exists.
+			upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(nil, raw)
+			if estimateErr != nil {
+				return report, estimateErr
+			}
+			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(raw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+			if err != nil {
+				return report, err
+			}
+			if err = allocation.Begin(ctx); err != nil {
+				return report, err
+			}
+		}
+	}
 	root, err := freshPrivate(target)
 	if err != nil {
 		return report, err
@@ -180,5 +204,17 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 		return report, err
 	}
 	defer parent.Close()
-	return report, fileguard.SyncParents(parent, filepath.Dir("support.json"))
+	if err = fileguard.SyncParents(parent, filepath.Dir("support.json")); err != nil {
+		return report, err
+	}
+	if s.PhysicalQuota != nil && !covered {
+		inventory, measureErr := resource.Measure(root, true)
+		if measureErr != nil {
+			return report, measureErr
+		}
+		if err = allocation.Commit(ctx, inventory); err != nil {
+			return report, err
+		}
+	}
+	return report, nil
 }
