@@ -21,6 +21,7 @@ import (
 const (
 	RuntimeCapabilityGCReceiptCompactionV1           = "gc_completed_receipt_compaction_v1"
 	RuntimeCapabilityPhysicalQuotaHandoffV1          = "physical_quota_handoff_v1"
+	RuntimeCapabilityNativeEnginePartitionV1         = "physical_quota_native_engine_partition_v1"
 	RuntimeCapabilityPhysicalQuotaPartitionV1        = "physical_quota_owner_partition_v1"
 	RuntimeCapabilityPhysicalQuotaIntentV1           = "physical_quota_retry_intent_v1"
 	RuntimeCapabilityProjectMemoryConflictMetadataV1 = "project_memory_conflict_metadata_v1"
@@ -35,6 +36,7 @@ const (
 var supportedRuntimeCapabilities = []string{
 	RuntimeCapabilityGCReceiptCompactionV1,
 	RuntimeCapabilityPhysicalQuotaHandoffV1,
+	RuntimeCapabilityNativeEnginePartitionV1,
 	RuntimeCapabilityPhysicalQuotaPartitionV1,
 	RuntimeCapabilityPhysicalQuotaIntentV1,
 	RuntimeCapabilityProjectMemoryConflictMetadataV1,
@@ -61,6 +63,9 @@ func validateRuntimeCapabilities(capabilities []string) error {
 	}
 	if (declared[RuntimeCapabilityProjectMemoryCopyV1] || declared[RuntimeCapabilityProjectMemoryConflictMetadataV1]) && !declared[RuntimeCapabilityProjectMemoryV1] {
 		return c.Fail(c.InvalidArgument, "project-memory copy support requires project-memory support")
+	}
+	if declared[RuntimeCapabilityNativeEnginePartitionV1] && !declared[RuntimeCapabilityPhysicalQuotaPartitionV1] {
+		return c.Fail(c.InvalidArgument, "native engine partition support requires owner partition support")
 	}
 	return nil
 }
@@ -223,8 +228,9 @@ func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used
 	}
 	usage, observeErr := ledger.FeatureUsage(ctx)
 	partitionUsed, partitionErr := ledger.PartitionFeatureInUse(ctx)
+	nativeEnginePartitionUsed, nativeEnginePartitionErr := ledger.NativeEnginePartitionFeatureInUse(ctx)
 	closeErr := ledger.Close()
-	if err = errors.Join(observeErr, partitionErr, closeErr); err != nil {
+	if err = errors.Join(observeErr, partitionErr, nativeEnginePartitionErr, closeErr); err != nil {
 		return err
 	}
 	if usage.ReservationIntents {
@@ -234,6 +240,10 @@ func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used
 		used[RuntimeCapabilityPhysicalQuotaHandoffV1] = true
 	}
 	if partitionUsed {
+		used[RuntimeCapabilityPhysicalQuotaPartitionV1] = true
+	}
+	if nativeEnginePartitionUsed {
+		used[RuntimeCapabilityNativeEnginePartitionV1] = true
 		used[RuntimeCapabilityPhysicalQuotaPartitionV1] = true
 	}
 	return nil

@@ -198,6 +198,7 @@ func TestRuntimeCapabilityManifestCompatibilityIsStrict(t *testing.T) {
 		"unsorted":                         {RuntimeCapabilityReadWorkersV1, RuntimeCapabilityProjectMemoryV1},
 		"copy_without_project_memory":      {RuntimeCapabilityProjectMemoryCopyV1},
 		"conflict_metadata_without_memory": {RuntimeCapabilityProjectMemoryConflictMetadataV1},
+		"native_engine_without_partition":  {RuntimeCapabilityNativeEnginePartitionV1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			revision := strings.Repeat("6", 40)

@@ -1034,7 +1034,7 @@ func partitionClass(partition quotaPartition, name string) string {
 		return "MUTABLE_SQLITE"
 	case "control.reserve":
 		return "CONTROL_RESERVE"
-	case "runtime-instance.json", "maintenance", "maintenance/gc":
+	case "native-engine.json", "runtime-instance.json", "maintenance", "maintenance/gc":
 		return "OWNER_STATIC"
 	default:
 		return ""
@@ -1078,7 +1078,7 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 	if err != nil {
 		return nil, err
 	}
-	if counts["MUTABLE_SQLITE"] == 0 || counts["CONTROL_RESERVE"] != 1 || counts["OWNER_STATIC"] != 3 || counts["ARCHIVE"] == 0 ||
+	if counts["MUTABLE_SQLITE"] == 0 || counts["CONTROL_RESERVE"] != 1 || (counts["OWNER_STATIC"] != 3 && counts["OWNER_STATIC"] != 4) || counts["ARCHIVE"] == 0 ||
 		(partition.Mode == EvaluationReportPartition && counts["REPORT_REMAINDER"] == 0) {
 		return nil, c.Fail(c.StoreIntegrityError, "physical quota partition is missing an owned component")
 	}
@@ -1124,7 +1124,7 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 		return nil, err
 	}
 	result["OWNER_STATIC"], err = measurePartitionSubset(ownerRoot, func(name string) bool {
-		return name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
+		return name == "native-engine.json" || name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
 	})
 	if err != nil {
 		return nil, err
@@ -1164,9 +1164,15 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 			return nil, c.Fail(c.StoreIntegrityError, "physical quota partition member inventory is incomplete")
 		}
 		if kind == "OWNER_STATIC" {
-			if len(actual) != 3 || len(measuredNames) != 1 ||
-				actual[0] != "maintenance" || actual[1] != "maintenance/gc" || actual[2] != "runtime-instance.json" ||
-				measuredNames[0] != "runtime-instance.json" {
+			validNames := len(actual) == 3 && len(measuredNames) == 1 &&
+				actual[0] == "maintenance" && actual[1] == "maintenance/gc" && actual[2] == "runtime-instance.json" &&
+				measuredNames[0] == "runtime-instance.json"
+			if len(actual) == 4 && len(measuredNames) == 2 {
+				validNames = actual[0] == "maintenance" && actual[1] == "maintenance/gc" &&
+					actual[2] == "native-engine.json" && actual[3] == "runtime-instance.json" &&
+					measuredNames[0] == "native-engine.json" && measuredNames[1] == "runtime-instance.json"
+			}
+			if !validNames {
 				return nil, c.Fail(c.StoreIntegrityError, "physical quota owner static member changed")
 			}
 		}
@@ -1373,8 +1379,16 @@ func validateInventoryBound(inventory Inventory, kind string, partition quotaPar
 		inventory.RootIdentity == "" {
 		return c.Fail(c.StaleAuthority, "physical quota partition member root is outside its bound path")
 	}
-	if kind == "OWNER_STATIC" && (len(inventory.Files) != 1 || inventory.Files[0].Path != "runtime-instance.json" || inventory.Entries != 3) {
-		return c.Fail(c.StoreIntegrityError, "physical quota owner static receipt is not the fixed runtime and maintenance namespace")
+	if kind == "OWNER_STATIC" {
+		baseline := len(inventory.Files) == 1 && inventory.Files[0].Path == "runtime-instance.json" && inventory.Entries == 3
+		withNativeEngine := len(inventory.Files) == 2 && inventory.Files[0].Path == "native-engine.json" &&
+			inventory.Files[1].Path == "runtime-instance.json" && inventory.Entries == 4
+		if !baseline && !withNativeEngine {
+			return c.Fail(c.StoreIntegrityError, "physical quota owner static receipt is not the fixed runtime and maintenance namespace")
+		}
+		if withNativeEngine && inventory.Files[0].LogicalBytes > 1024 {
+			return c.Fail(c.UnsupportedCapability, "native engine receipt exceeds its bounded reader size")
+		}
 	}
 	return nil
 }
@@ -1647,7 +1661,7 @@ func validateCommittedPartition(ctx context.Context, ledger *Ledger, partition q
 		return err
 	}
 	static, staticErr := measurePartitionSubset(owner, func(name string) bool {
-		return name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
+		return name == "native-engine.json" || name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
 	})
 	ownerCloseErr := owner.Close()
 	if err = errors.Join(staticErr, ownerCloseErr); err != nil {

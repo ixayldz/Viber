@@ -362,6 +362,168 @@ func TestOwnerPartitionCrashReopenSettlesOnceAndAllowsFreshGCReservation(t *test
 	}
 }
 
+func TestOwnerPartitionBindsOptionalNativeEngineFile(t *testing.T) {
+	ctx := context.Background()
+	authority, base := testAuthority(t)
+	limits := partitionTestLimits()
+	ledger := openTestLedger(t, authority, limits, "")
+	defer func() { _ = ledger.Close() }()
+	if used, err := ledger.NativeEnginePartitionFeatureInUse(ctx); err != nil || used {
+		t.Fatalf("fresh physical quota ledger reported native engine partition use: used=%v err=%v", used, err)
+	}
+
+	rootPath := filepath.Join(base, "native-partition-report")
+	ownerPath := filepath.Join(rootPath, "owner")
+	allocation, err := ledger.Reserve(ctx, Request{Writer: "evaluation", Family: "EVALUATION_REPORT", RequestDigest: c.HashBytes([]byte("native-engine-partition")), TargetRoot: rootPath, UpperBytes: 128 << 20, UpperEntries: 16384, Class: Payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.PreparePartition(ctx, EvaluationReportPartition); err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(rootPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fileguard.Private(root); err == nil {
+		err = allocation.BindPartitionRoot(ctx)
+	}
+	if err = errors.Join(err, root.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(ownerPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ownerRoot, err := os.OpenRoot(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fileguard.Private(ownerRoot); err == nil {
+		err = allocation.BindPartitionOwner(ctx, ownerPath)
+	}
+	if err = errors.Join(err, ownerRoot.Close()); err != nil {
+		t.Fatal(err)
+	}
+	createPartitionTestOwner(t, ownerPath)
+	ownerRoot, err = os.OpenRoot(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePartitionTestFile(t, ownerRoot, "native-engine.json", make([]byte, 1025))
+	if err = ownerRoot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root, err = os.OpenRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePartitionTestFile(t, root, "summary.json", []byte("{}\n"))
+	if err = root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.CommitPartition(ctx); err == nil {
+		t.Fatal("oversized native engine receipt entered the bootstrap owner pin")
+	}
+	pending, err := ledger.Capacity(ctx)
+	if err != nil || pending.OutstandingBytes != 128<<20 || pending.RetainedBytes != 0 {
+		t.Fatalf("oversized native engine receipt released its broad bootstrap charge: %+v err=%v", pending, err)
+	}
+	if err = os.WriteFile(filepath.Join(ownerPath, "native-engine.json"), []byte("{\"engine\":\"bound\"}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.CommitPartition(ctx); err != nil {
+		t.Fatalf("settle owner with the initial native engine receipt: %v", err)
+	}
+	if err = ledger.ValidateOwnerPartition(ctx, ownerPath); err != nil {
+		t.Fatalf("validate owner with its exact optional native engine file: %v", err)
+	}
+	if used, err := ledger.NativeEnginePartitionFeatureInUse(ctx); err != nil || !used {
+		t.Fatalf("durable native engine partition feature was not detected: used=%v err=%v", used, err)
+	}
+	committed, err := ledger.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(ownerPath, "native-engine.json"), []byte("{\"engine\":\"changed\"}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = ledger.ValidateOwnerPartition(ctx, ownerPath); err == nil {
+		t.Fatal("owner partition accepted a changed native engine receipt")
+	}
+	after, err := ledger.Capacity(ctx)
+	if err != nil || after != committed {
+		t.Fatalf("rejecting changed native engine bytes altered their conservative charge: before=%+v after=%+v err=%v", committed, after, err)
+	}
+}
+
+func TestRetainedReopenKeepsPurgedBytesChargedWithoutGenericPresenceRequirement(t *testing.T) {
+	ctx := context.Background()
+	authority, base := testAuthority(t)
+	ledger := openTestLedger(t, authority, smallLimits(), "")
+	defer func() { _ = ledger.Close() }()
+	owner := filepath.Join(base, "purge-owner")
+	output := filepath.Join(owner, "tasks", "purged-task")
+	if err := os.MkdirAll(output, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "content.bin"), []byte("private content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, measureErr := Measure(root, true)
+	closeErr := root.Close()
+	if err = errors.Join(measureErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	if err = ledger.ImportRetained(ctx, "privacy", "TASK_CONTENT", inventory); err != nil {
+		t.Fatal(err)
+	}
+	charged, err := ledger.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(output, "content.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(output); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Dir(output)); err != nil {
+		t.Fatal(err)
+	}
+	root, err = os.OpenRoot(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, measureErr := Measure(root, true)
+	closeErr = root.Close()
+	if err = errors.Join(measureErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := ledger.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validationErr := validateRetainedReopen(ctx, tx, current)
+	rollbackErr := tx.Rollback()
+	if err = errors.Join(validationErr, rollbackErr); err != nil {
+		t.Fatalf("generic privacy-purged receipt should remain conservatively charged and reopenable: %v", err)
+	}
+	after, err := ledger.Capacity(ctx)
+	if err != nil || after != charged || after.RetainedBytes == 0 {
+		t.Fatalf("purging bytes released or changed their retained charge: before=%+v after=%+v err=%v", charged, after, err)
+	}
+}
+
 func TestOwnerPartitionKeepsBootstrapChargeWhenOutputExceedsUpperBound(t *testing.T) {
 	ctx := context.Background()
 	authority, base := testAuthority(t)

@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/ixayldz/Viber/internal/agent"
+	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 )
 
 func followupCapabilityTask(t *testing.T, directory string) *agent.Session {
@@ -36,7 +39,7 @@ func followupCapabilityTask(t *testing.T, directory string) *agent.Session {
 }
 
 func TestRollbackRespectsDurableFollowupCapabilities(t *testing.T) {
-	for _, capability := range []string{RuntimeCapabilityProjectMemoryConflictMetadataV1, RuntimeCapabilityGCReceiptCompactionV1} {
+	for _, capability := range []string{RuntimeCapabilityProjectMemoryConflictMetadataV1, RuntimeCapabilityGCReceiptCompactionV1, RuntimeCapabilityNativeEnginePartitionV1} {
 		t.Run(capability, func(t *testing.T) {
 			ctx := context.Background()
 			parent := t.TempDir()
@@ -56,7 +59,16 @@ func TestRollbackRespectsDurableFollowupCapabilities(t *testing.T) {
 			legacyRevision := strings.Repeat("5", 40)
 			// Existing project-memory support is present to isolate the new
 			// witness capability rather than failing the older memory gate.
-			legacy, err := ParseArchive(fixtureArchiveCapabilities(t, legacyRevision, []string{RuntimeCapabilityProjectMemoryV1}, nil), "zip", legacyRevision, nativePlatform(t))
+			legacyCapabilities := []string{RuntimeCapabilityProjectMemoryV1}
+			if capability == RuntimeCapabilityNativeEnginePartitionV1 {
+				legacyCapabilities = []string{}
+				for _, declared := range supportedRuntimeCapabilities {
+					if declared != capability {
+						legacyCapabilities = append(legacyCapabilities, declared)
+					}
+				}
+			}
+			legacy, err := ParseArchive(fixtureArchiveCapabilities(t, legacyRevision, legacyCapabilities, nil), "zip", legacyRevision, nativePlatform(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,6 +81,8 @@ func TestRollbackRespectsDurableFollowupCapabilities(t *testing.T) {
 			}
 			if capability == RuntimeCapabilityProjectMemoryConflictMetadataV1 {
 				_, err = session.RecordProjectMemory(ctx, "compat-followup", "record-witness", "FACT", "greeting", "The greeting is hello.")
+			} else if capability == RuntimeCapabilityNativeEnginePartitionV1 {
+				bindNativeEnginePartitionForCompatibility(t, ctx, session, parent)
 			} else {
 				_, err = session.Run(ctx, "compat-followup")
 				if err == nil {
@@ -111,5 +125,71 @@ func TestRollbackRespectsDurableFollowupCapabilities(t *testing.T) {
 				t.Fatal("refused rollback changed selected version", status, err)
 			}
 		})
+	}
+}
+
+func bindNativeEnginePartitionForCompatibility(t *testing.T, ctx context.Context, session *agent.Session, parent string) {
+	t.Helper()
+	destination := filepath.Join(parent, "native-report")
+	bytes, entries := resource.PartitionStartupEnvelope()
+	allocation, err := session.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "evaluation", Family: "EVALUATION_REPORT", RequestDigest: c.HashBytes([]byte("native-partition-compatibility")), TargetRoot: destination, UpperBytes: bytes, UpperEntries: entries, Class: resource.Payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = allocation.PreparePartition(ctx, resource.EvaluationReportPartition); err == nil {
+		err = allocation.Begin(ctx)
+	}
+	if err == nil {
+		err = os.Mkdir(destination, 0700)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fileguard.Private(root); err == nil {
+		err = allocation.BindPartitionRoot(ctx)
+	}
+	closeErr := root.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	ownerPath := filepath.Join(destination, "owner")
+	child, err := session.OpenIndependentEvaluatorPartition(ctx, ownerPath, allocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	ownerRoot, err := os.OpenRoot(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerRoot.Close()
+	raw, err := fileguard.ReadRegular(ownerRoot, "runtime-instance.json", 4096)
+	var instance agent.RuntimeInstance
+	if err != nil || c.DecodeStrict(raw, &instance) != nil {
+		t.Fatal("fixture owner has no valid instance", err)
+	}
+	raw, err = c.CanonicalV1(agent.NativeEngineBinding{SchemaVersion: 1, InstanceID: instance.ID, EngineDigest: c.HashBytes([]byte("fixture-engine")), EndpointDigest: c.HashBytes([]byte("fixture-endpoint"))})
+	if err == nil {
+		err = fileguard.Publish(ownerRoot, "native-engine.json", raw)
+	}
+	if err == nil {
+		err = ownerRoot.Close()
+	}
+	if err == nil {
+		err = child.Close()
+	}
+	if err == nil {
+		err = allocation.CommitPartition(ctx)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, err := session.PhysicalQuota.NativeEnginePartitionFeatureInUse(ctx)
+	if err != nil || !used {
+		t.Fatal("native bootstrap receipt capability was not detected", used, err)
 	}
 }

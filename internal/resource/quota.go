@@ -1493,13 +1493,14 @@ func retainedSeedID(authority, rootPath, rootIdentity string) string {
 }
 
 func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id,status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root,free_before FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
+	rows, err := tx.QueryContext(ctx, "SELECT id,writer,family,status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root,free_before FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	known := map[string]FileReceipt{}
 	expectedOwners := map[string]uint64{}
+	strictMissing := map[string]uint64{}
 	pendingMissing := map[string]uint64{}
 	type pendingValidation struct {
 		allocation pendingAllocation
@@ -1509,10 +1510,10 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 	unknownRoots := make([]string, 0, 2)
 	var charged, entries uint64
 	for rows.Next() {
-		var id, status, target string
+		var id, writer, family, status, target string
 		var upperBytes, upperEntries, retainedBytes, retainedEntries, freeBefore int64
 		var raw []byte
-		if err = rows.Scan(&id, &status, &upperBytes, &upperEntries, &retainedBytes, &retainedEntries, &raw, &target, &freeBefore); err != nil {
+		if err = rows.Scan(&id, &writer, &family, &status, &upperBytes, &upperEntries, &retainedBytes, &retainedEntries, &raw, &target, &freeBefore); err != nil {
 			return err
 		}
 		if upperBytes < 0 || upperEntries < 0 || retainedBytes < 0 || retainedEntries < 0 || freeBefore < 0 {
@@ -1550,6 +1551,15 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 		if strictJSON(raw, &inventory) != nil {
 			return c.Fail(c.StoreIntegrityError, "invalid retained physical receipt")
 		}
+		gcRoot := filepath.Join(measured.RootPath, "maintenance", "gc")
+		gcOwnerRoot := filepath.Join(measured.RootPath, "owner", "maintenance", "gc")
+		// Privacy and retention may erase retained task/archive roots while
+		// their old byte charge remains conservative. Typed GC receipts keep a
+		// stricter presence rule here; committed static/report members are
+		// checked by the partition-specific exact-inventory validation.
+		strictGCMaintenance := writer == "agent" && family == "GC_MAINTENANCE" && filepath.Clean(target) == filepath.Clean(inventory.RootPath) &&
+			((filepath.Clean(target) != filepath.Clean(gcRoot) && partitionPathWithin(gcRoot, target)) ||
+				(filepath.Clean(target) != filepath.Clean(gcOwnerRoot) && partitionPathWithin(gcOwnerRoot, target)))
 		prefix := ""
 		if filepath.Clean(inventory.RootPath) == filepath.Clean(measured.RootPath) {
 			if inventory.RootIdentity != measured.RootIdentity {
@@ -1567,7 +1577,7 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 		}
 		if filepath.Clean(inventory.RootPath) != filepath.Clean(measured.RootPath) {
 			if err = verifyPartitionDirectory(inventory.RootPath, inventory.RootIdentity, inventory.VolumeIdentity); err != nil {
-				if status != "FREE_PENDING" || !errors.Is(err, os.ErrNotExist) {
+				if !errors.Is(err, os.ErrNotExist) || status != "FREE_PENDING" && strictGCMaintenance {
 					return c.Fail(c.StaleAuthority, "retained physical receipt root identity changed")
 				}
 			}
@@ -1588,6 +1598,9 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 			known[file.Path] = file
 			if !statOnlyFile(filepath.FromSlash(file.Path)) {
 				expectedOwners[file.Path]++
+				if strictGCMaintenance {
+					strictMissing[file.Path]++
+				}
 			}
 		}
 		if status == "FREE_PENDING" {
@@ -1657,11 +1670,11 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 			}
 		}
 	}
-	for path, owners := range expectedOwners {
+	for path, strictOwners := range strictMissing {
 		if _, exists := seen[path]; exists {
 			continue
 		}
-		if owners == 0 || pendingMissing[path] != owners {
+		if strictOwners == 0 || pendingMissing[path] != expectedOwners[path] {
 			return c.Fail(c.StaleAuthority, fmt.Sprintf("retained physical file is missing without an exact pending free intent: %s", path))
 		}
 	}
