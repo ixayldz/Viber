@@ -403,7 +403,8 @@ func TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	crashed, err := s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(intent), TargetRoot: crashedTarget, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control})
+	request := resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(intent), TargetRoot: crashedTarget, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control}
+	crashed, err := s.PhysicalQuota.Reserve(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,16 +432,53 @@ func TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts(t *testing.T
 	if adopted.OutstandingItems >= reserved.OutstandingItems || adopted.RetainedBytes <= before.RetainedBytes {
 		t.Fatal("GC control records did not settle from outstanding to retained", before, reserved, adopted)
 	}
+	verifyCurrentAllocation := func() (resource.Inventory, error) {
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, request)
+		if matchErr != nil {
+			return resource.Inventory{}, matchErr
+		}
+		if (match.Status != "RETAINED" && match.Status != "FREE_PENDING") || match.Allocation.ID != crashed.ID || match.RequestDigest != request.RequestDigest || match.UpperBytes != request.UpperBytes || match.UpperEntries != request.UpperEntries {
+			return resource.Inventory{}, errors.New("GC retry did not reuse its exact retained or pending-free allocation")
+		}
+		gcRoot, openErr := os.OpenRoot(crashedTarget)
+		if openErr != nil {
+			return resource.Inventory{}, openErr
+		}
+		inventory, measureErr := resource.Measure(gcRoot, true)
+		closeErr := gcRoot.Close()
+		if measureErr = errors.Join(measureErr, closeErr); measureErr != nil {
+			return resource.Inventory{}, measureErr
+		}
+		if match.Status == "RETAINED" {
+			if measureErr = match.Allocation.ValidateRetained(ctx, inventory); measureErr != nil {
+				return resource.Inventory{}, measureErr
+			}
+		} else if measureErr = match.Allocation.ValidateFreePending(ctx, inventory); measureErr != nil {
+			return resource.Inventory{}, measureErr
+		}
+		return inventory, nil
+	}
+	retainedInventory, err := verifyCurrentAllocation()
+	if err != nil {
+		t.Fatal("GC control directory differs from its exact retained or pending-free receipt", err)
+	}
 	second, err := s.CollectGarbage(ctx, command)
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatal("GC retry not idempotent", err)
+	}
+	retriedInventory, err := verifyCurrentAllocation()
+	if err != nil {
+		t.Fatal("GC retry changed its exact retained or pending-free inventory", err)
+	}
+	if !reflect.DeepEqual(retainedInventory, retriedInventory) {
+		t.Fatal("exact GC retry changed the retained control inventory", retainedInventory, retriedInventory)
 	}
 	retried, err := s.PhysicalQuota.Capacity(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retried != adopted {
-		t.Fatal("exact GC retry double-charged retained control records", adopted, retried)
+	if retried.Allocations != adopted.Allocations {
+		t.Fatal("exact GC retry created a new physical allocation", adopted, retried)
 	}
 }
 
