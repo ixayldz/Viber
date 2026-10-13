@@ -1,5 +1,11 @@
 # Doğrulama kaydı
 
+## 13 Ekim Windows çalışan sürümün kaldırılma koruması
+
+Son bağımsız inceleme Windows uninstall preflight'ının çalışan executable yolunu yalnız lexical karşılaştırdığını buldu. Version dizinine açılan junction üzerinden başlatma bu kontrolü atlayabiliyordu. Executable ve prefix artık açık native handle'ın final path'i ile karşılaştırılır; executable bilgisi veya çözümleme başarısızsa mutation öncesinde ret verilir. Pinned Go1.27.2 Windows focused launcher/preflight/command ve gerçek junction fixture **PASS** (4.423s). Fixture alias'ın managed binary olarak tanınmasını, ayrı portable bootstrap'ın engellenmemesini ve çözümlenemeyen executable'ın reddedilmesini gerektirir. Host kullanıcı PATH'i değiştirilmedi.
+
+İlk fixture denemesi Go `EvalSymlinks` ile alias çözümleme hatası verdi; `os.Stat` alias üzerinden aynı dosyaya erişebildi. Çözüm native handle üzerinden final path okumaya geçirildi. Bu yerel sonuç final exact-source CI/paket kabulünün yerine geçmez; yeni immutable source bütün yayın kapılarından geçmelidir.
+
 ## 13 Ekim cb889da macOS boundary-fixture düzeltmesi
 
 `cb889da9ff4302ea01eead2ae76036be5b1c9431` [core38425146250](https://github.com/ixayldz/Viber/actions/runs/38425146250) Docker/rootless, iki vault ve üç package işi SUCCESS; macOS full suite `TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary` içinde **FAIL**. Fixture `freshPrivate`/managed registration için macOS `/var` temp alias'ını kullanırken production `ExportSupport` intent ve root creation öncesinde `ResolveProspective` ile `/private/var` canonical hedefini bağlar. Fixture artık production sırasını takip eder. Runtime'ın exact directory, privacy suffix, inode ve stable-binding kontrolleri **gevşetilmedi**; alias'lı registry kaydı otomatik benimsenmez.

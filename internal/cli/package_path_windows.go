@@ -89,7 +89,14 @@ func managedPathRoot(create bool) (*os.Root, string, error) {
 func checkManagedPathOperation(prefix, action string, requested bool) error {
 	if action == "uninstall" {
 		executable, err := os.Executable()
-		if err == nil && isManagedVersionBinary(executable, prefix) {
+		if err != nil {
+			return c.Fail(c.PolicyDenied, "cannot prove the running executable is outside the managed version inventory")
+		}
+		managed, err := isManagedVersionBinary(executable, prefix)
+		if err != nil {
+			return c.Fail(c.PolicyDenied, "cannot resolve the running executable and install prefix before uninstall")
+		}
+		if managed {
 			return c.Fail(c.PolicyDenied, "run uninstall from the verified portable bootstrap; Windows cannot retire the executable currently running")
 		}
 	}
@@ -414,22 +421,47 @@ func validateCommandPath(name string) error {
 	return nil
 }
 
-func isManagedVersionBinary(executable, prefix string) bool {
-	executableAbs, err := filepath.Abs(executable)
+func isManagedVersionBinary(executable, prefix string) (bool, error) {
+	// GetModuleFileName may retain the junction used to launch the process.
+	// Resolve both paths before deciding whether uninstall would retire it.
+	executableAbs, err := resolvedManagedPath(executable)
 	if err != nil {
-		return false
+		return false, err
 	}
-	prefixAbs, err := canonicalPrefix(prefix)
+	prefixAbs, err := resolvedManagedPath(prefix)
 	if err != nil {
-		return false
+		return false, err
 	}
 	versions := filepath.Join(prefixAbs, "versions")
 	relative, err := filepath.Rel(versions, executableAbs)
 	if err != nil || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == ".." {
-		return false
+		return false, err
 	}
 	parts := strings.Split(relative, string(filepath.Separator))
-	return len(parts) == 2 && distribution.Revision(parts[0]) && strings.EqualFold(parts[1], "viber.exe")
+	return len(parts) == 2 && distribution.Revision(parts[0]) && strings.EqualFold(parts[1], "viber.exe"), nil
+}
+
+func resolvedManagedPath(name string) (string, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	buffer := make([]uint16, 32768)
+	n, err := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buffer[0], uint32(len(buffer)), 0)
+	if err != nil {
+		return "", err
+	}
+	if n == 0 || n >= uint32(len(buffer)) {
+		return "", c.Fail(c.UnsupportedCapability, "resolved managed path exceeds the Windows path profile")
+	}
+	resolved := windows.UTF16ToString(buffer[:n])
+	if strings.HasPrefix(resolved, `\\?\UNC\`) {
+		resolved = `\\` + strings.TrimPrefix(resolved, `\\?\UNC\`)
+	} else {
+		resolved = strings.TrimPrefix(resolved, `\\?\`)
+	}
+	return filepath.Clean(resolved), nil
 }
 
 func readManagedPathReceipt(root *os.Root, directory string) (managedPathReceipt, bool, error) {

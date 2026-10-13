@@ -78,3 +78,37 @@ func TestManagedCommandRejectsCMDExpansionCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedSelfUninstallResolvesJunction(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(root, "managed install")
+	version := filepath.Join(prefix, "versions", strings.Repeat("a", 40))
+	if err := os.MkdirAll(version, 0700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(version, "viber.exe")
+	if err := os.WriteFile(binary, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "version alias")
+	junctionCommand := "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path '" + strings.ReplaceAll(alias, "'", "''") + "' -Target '" + strings.ReplaceAll(version, "'", "''") + "' | Out-Null"
+	if output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", junctionCommand).CombinedOutput(); err != nil {
+		t.Fatalf("create junction: %v: %s", err, output)
+	}
+	for _, executable := range []string{binary, filepath.Join(alias, "viber.exe")} {
+		managed, err := isManagedVersionBinary(executable, prefix)
+		if err != nil || !managed {
+			t.Fatalf("running managed executable not recognized: %q managed=%v err=%v", executable, managed, err)
+		}
+	}
+	current, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed, err := isManagedVersionBinary(current, prefix); err != nil || managed {
+		t.Fatalf("portable bootstrap incorrectly blocked: managed=%v err=%v", managed, err)
+	}
+	if _, err := isManagedVersionBinary(filepath.Join(root, "missing.exe"), prefix); err == nil {
+		t.Fatal("unresolved executable must not permit uninstall")
+	}
+}
