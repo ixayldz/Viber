@@ -1,5 +1,13 @@
 # Doğrulama kaydı
 
+## 13 Ekim 28e6fb3 CI takip düzeltmesi
+
+`28e6fb34293c5d068fc1f5704d86e103224be396` [core38422926226](https://github.com/ixayldz/Viber/actions/runs/38422926226) Linux full suite ve Docker işi **FAIL**: mevcut `TestSupportAllowlistExcludesSourcePromptModelTextIdentifiersAndHashes`, ikinci aynı çağrıdaki başarıyı koşulsuz overwrite sayıyordu. Yeni exact retained retry kontratında mevcut byte'lar doğrulanıp aynı numeric rapor döndürülür; write yapılmaz. Test artık orijinal rapor/output byte'larının ve quota capacity'nin aynı kalmasını, ayrıca unrelated mevcut dizindeki canary'nin korunmasını ve reddin yeni quota tüketmemesini gerektirir. Mevcut bütün secrecy canary ve source/store overlap kontrolleri korunur.
+
+Pinned Go1.27.2 native Windows support allowlist/omits/retry seti **PASS** (27.139s). Son admission-before-foreign-directory düzeltmesi mevcut allowlist parent'ında **PASS** (6.387s); yabancı dizin source/privacy binding lookup sonrasında, reservation öncesinde reddedilir. Docker evidence invocation'a `resource` ve `distribution` paketleri eklendi; yeni mandatory delivery protocol parent'ları gerçekten çalıştırılmadan validator'a PASS verilemez. Eski kırmızı source yayımlanmaz.
+
+Kullanıcı yeni paket kabulünden sonra yalnız özel örnek projede sınırlı tek gerçek ChatGPT görevi için izin verdi; önceki offline tercih bu kabul dilimi için değişti. Gerçek giriş/plan kullanımı henüz yürütülmedi. [Resmî kabul örneği](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt#5-verify-chatgpt-plan-usage) giriş, model discovery ve tamamlanan inference'ın ayrı kanıtlar olduğunu belirtir; yalnız connected profil PASS sayılmayacak. API anahtarı veya Codex credential reuse istenmez.
+
 ## 13 Ekim core stabilization takip dilimi
 
 `b5af396414f10a40db26d58967077eca91d05578` [core38406658124](https://github.com/ixayldz/Viber/actions/runs/38406658124) **FAILURE**. Windows full suite, evidence validator, migration ve native slash/resize/detach **PASS**; test işi toplam 33m53 civarında `auto_ui_handoff` kontrolünde başarısız oldu. Diğer dokuz ilk aşama işi SUCCESS; foundation FAILED, installation/attestation SKIPPED. Önceki 45m cancellation giderildi; bu source public release değildir.

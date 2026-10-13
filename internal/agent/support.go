@@ -183,6 +183,10 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 			// envelope admitted alongside its original payload. The generic
 			// ledger matcher still enforces that envelope byte-for-byte.
 			upperBytes, upperEntries = prior.Match.UpperBytes, prior.Match.UpperEntries
+		} else if _, statErr := os.Lstat(target); statErr == nil {
+			return report, c.Fail(c.StaleAuthority, "support output must be fresh or bound to its exact saved intent")
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return report, statErr
 		}
 	}
 	if s.PhysicalQuota != nil {

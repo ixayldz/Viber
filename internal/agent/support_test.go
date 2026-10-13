@@ -49,8 +49,40 @@ func TestSupportAllowlistExcludesSourcePromptModelTextIdentifiersAndHashes(t *te
 	if report.RawPayloadsIncluded || report.CredentialMetadataIncluded || report.Telemetry || report.TrainingExport || report.ReleaseReady || len(report.Tasks) != 1 || report.Tasks[0].Quality != c.Unverified {
 		t.Fatal(report)
 	}
-	if _, err = s.ExportSupport(ctx, output); err == nil {
-		t.Fatal("support overwrote existing directory")
+	before, err := s.PhysicalQuota.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := s.ExportSupport(ctx, output)
+	if err != nil {
+		t.Fatal("exact retained support retry failed", err)
+	}
+	retryRaw, err := c.CanonicalV1(retry)
+	if err != nil || !bytes.Equal(retryRaw, raw) {
+		t.Fatal("exact retry changed the original numeric payload", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(output, "support.json"))
+	if err != nil || !bytes.Equal(stored, raw) {
+		t.Fatal("exact retry overwrote support output", err)
+	}
+	after, err := s.PhysicalQuota.Capacity(ctx)
+	if err != nil || before != after {
+		t.Fatal("exact retained retry changed quota accounting", before, after, err)
+	}
+	foreign := t.TempDir()
+	canary := filepath.Join(foreign, "keep.txt")
+	if err = os.WriteFile(canary, []byte("keep foreign content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ExportSupport(ctx, foreign); err == nil {
+		t.Fatal("support adopted an unrelated existing directory")
+	}
+	if kept, readErr := os.ReadFile(canary); readErr != nil || string(kept) != "keep foreign content" {
+		t.Fatal("refused export changed foreign content", readErr)
+	}
+	refused, err := s.PhysicalQuota.Capacity(ctx)
+	if err != nil || refused != after {
+		t.Fatal("foreign output was refused after consuming quota", after, refused, err)
 	}
 	for _, unsafe := range []string{source, filepath.Join(source, "bundle"), filepath.Join(s.directory, "bundle")} {
 		if _, err = s.ExportSupport(ctx, unsafe); err == nil {
