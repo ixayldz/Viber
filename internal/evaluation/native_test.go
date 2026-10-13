@@ -161,9 +161,13 @@ func TestActualIndependentHiddenFailureOverridesSelfVerifiedOnlyInEvaluation(t *
 		{"passing", []byte("HIDDEN-SIGNAL-DO-NOT-LEAK\n"), []byte("HIDDEN-SIGNAL-DO-NOT-LEAK\n"), c.Pass},
 		{"failing", []byte("hidden-signal-do-not-leak\n"), []byte("HIDDEN-SIGNAL-DO-NOT-LEAK\n"), c.FailVerdict},
 	} {
+		bundleRoot := t.TempDir()
 		t.Run(scenario.name, func(t *testing.T) {
 			hidden := nativeRecipe(image, "hidden", scenario.input, scenario.expected)
-			bundle := filepath.Join(t.TempDir(), "evaluation")
+			// The producer ledger retains each owner partition for as long as the
+			// parent test runs. Keep both candidate outputs alive until then; a
+			// subtest-owned temp directory disappears before the next scenario.
+			bundle := filepath.Join(bundleRoot, scenario.name)
 			result, err := RunCandidate(ctx, session, "producer", recipeFile(t, hidden), bundle)
 			if err != nil || result.IndependentVerdict != scenario.verdict || !result.EvaluatorQuiescent || len(result.Checks) != 1 || !result.Checks[0].NativeOwnership || result.Checks[0].Attempts != 2 || result.Checks[0].BaselineOverheadAttempts != 2 {
 				t.Fatal(result, err)
