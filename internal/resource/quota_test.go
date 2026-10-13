@@ -214,6 +214,79 @@ func TestOuterReservationCoversNestedWriterAndChargesOneReceipt(t *testing.T) {
 	}
 }
 
+func TestReserveOrMatchRequiresExactRetryEnvelopeAndSameClassAncestor(t *testing.T) {
+	authority, base := testAuthority(t)
+	ledger := openTestLedger(t, authority, smallLimits(), "")
+	defer ledger.Close()
+	ctx := context.Background()
+	target := filepath.Join(base, "retry-root")
+	request := Request{Writer: "export", Family: "SUPPORT", RequestDigest: c.HashBytes([]byte("report-v1")), TargetRoot: target, UpperBytes: 128 << 10, UpperEntries: 8, Class: Payload}
+	first, err := ledger.ReserveOrMatch(ctx, request)
+	if err != nil || !first.Created || first.Scope != ExactReservationScope || first.Status != "RESERVED" {
+		t.Fatalf("first reservation did not create an exact envelope: %+v err=%v", first, err)
+	}
+	reserved, err := ledger.ReserveOrMatch(ctx, request)
+	if err != nil || reserved.Created || reserved.Allocation.ID != first.Allocation.ID || reserved.Status != "RESERVED" {
+		t.Fatalf("reserved retry did not reuse its allocation: %+v err=%v", reserved, err)
+	}
+	if err = first.Allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writing, err := ledger.ReserveOrMatch(ctx, request)
+	if err != nil || writing.Created || writing.Allocation.ID != first.Allocation.ID || writing.Status != "WRITING" {
+		t.Fatalf("writing retry did not adopt its exact allocation: %+v err=%v", writing, err)
+	}
+	changed := []Request{
+		func() Request { r := request; r.Writer = "other"; return r }(),
+		func() Request { r := request; r.Family = "DELIVERY_PREVIEW"; return r }(),
+		func() Request { r := request; r.RequestDigest = c.HashBytes([]byte("report-v2")); return r }(),
+		func() Request { r := request; r.UpperBytes++; return r }(),
+		func() Request { r := request; r.UpperEntries++; return r }(),
+		func() Request { r := request; r.Class = Control; return r }(),
+	}
+	for _, retry := range changed {
+		if _, err = ledger.ReserveOrMatch(ctx, retry); err == nil {
+			t.Fatalf("changed exact retry envelope was accepted: %+v", retry)
+		} else {
+			var typed *c.Error
+			if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+				t.Fatalf("changed exact retry returned the wrong error: %v", err)
+			}
+		}
+	}
+	nested := request
+	nested.TargetRoot = filepath.Join(target, "nested", "child")
+	nested.Family = "DELIVERY_PREVIEW"
+	nested.RequestDigest = c.HashBytes([]byte("nested"))
+	nested.UpperBytes = 64 << 10
+	nested.UpperEntries = 4
+	if _, err = ledger.ReserveOrMatch(ctx, nested); err == nil {
+		t.Fatal("nested writer inherited arbitrary same-class ancestor without a family grant")
+	}
+	nested.AncestorFamily = "SUPPORT"
+	covered, err := ledger.ReserveOrMatch(ctx, nested)
+	if err != nil || covered.Scope != AncestorReservationScope || covered.Allocation.ID != first.Allocation.ID || covered.Status != "WRITING" {
+		t.Fatalf("same-class nested writer did not receive outer coverage: %+v err=%v", covered, err)
+	}
+	nested.UpperBytes = request.UpperBytes + 1
+	if _, err = ledger.ReserveOrMatch(ctx, nested); err == nil {
+		t.Fatal("nested writer exceeded its enclosing byte envelope")
+	}
+	nested.UpperBytes = 64 << 10
+	nested.Class = Control
+	if _, err = ledger.ReserveOrMatch(ctx, nested); err == nil {
+		t.Fatal("nested writer with a different class inherited outer coverage")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+			t.Fatalf("wrong-class nested writer returned the wrong error: %v", err)
+		}
+	}
+}
+
 func mustMeasure(t *testing.T, root *os.Root) Inventory {
 	t.Helper()
 	inventory, err := Measure(root, true)

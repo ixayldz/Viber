@@ -6,7 +6,7 @@ PRD §28 family kimlikleri sabit. Fixture yalnız çalışıp beklenen davranı�
 |---|---|---|---|
 | 1 | Partial write crash | Immutable blob-before-pointer; fresh stage/manifest publication; tam boundary kill suite eksik | PARTIAL |
 | 2 | Lost response/unknown effect | Durable intent+reserve, usage unknown restart/restore'da korunur; blind retry yok | PARTIAL |
-| 3–5 | Candidate/env/stale edit | Candidate/index/ignore/read-set binding; source edit resume'ı durdurur; B/C/U merge preview ve fresh immutable check task var; exclusive live apply açık | PARTIAL |
+| 3–5 | Candidate/env/stale edit | Candidate/index/ignore/read-set binding; source edit resume'ı durdurur; B/C/U merge preview ve fresh immutable check task var. `LIVE_APPLY` yalnız seçili backend/profile exclusive access kanıtlıyorsa ilan edilebilir; bu kanıt yoksa fail-closed candidate/patch teslimi ve durable receipt kullanılabilir. Full hostile apply/restore ve fresh-merge matrisi açık | PARTIAL |
 | 6 | Steering | Raw blob-before-barrier, aktif owner pause, bound spec/epoch revision, eski approval invalidation; semantic provider/fencing matrisi eksik | PARTIAL |
 | 7–11 | Lease/budget/process/FS isolation | Offline Docker readonly/non-root/no-network/timeout cleanup, exact mount source/image/argv/namespace/scratch binding; resource/fencing/escape matrisi eksik | PARTIAL |
 | 12–13 | Forged PASS/check weakening | Model/stdout PASS kalite yükseltemez; operator origin/closure guard/frozen binding ve gerçek Docker STDIO observer var; generic framework/authorized check revision/full closure acceptance açık | PARTIAL |

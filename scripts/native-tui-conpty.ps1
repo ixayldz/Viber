@@ -21,6 +21,12 @@ public static class NativeTuiConPty {
     private const int PseudoConsoleAttribute = 0x00020016;
     private const int MaxFrameBytes = 65536;
     private const int MaxDrainBytes = 262144;
+    private const uint WaitObject0 = 0x00000000;
+    private const uint WaitTimeout = 0x00000102;
+    private const uint StillActive = 259;
+    private const int ErrorBrokenPipe = 109;
+    private const int ErrorNoData = 232;
+    private const int ErrorPipeNotConnected = 233;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COORD {
@@ -126,13 +132,21 @@ public static class NativeTuiConPty {
         Console.Out.Flush();
     }
 
-    private static void Drain(IntPtr output, int maxBytes) {
+    private static void Drain(IntPtr output, int maxBytes, IntPtr child) {
         int total = 0;
         byte[] buffer = new byte[MaxFrameBytes];
         while (total < maxBytes) {
             uint available;
-            if (!PeekNamedPipe(output, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero))
+            if (!PeekNamedPipe(output, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero)) {
+                int error = Marshal.GetLastWin32Error();
+                // A stopped child closes the ConPTY output writer. Treat only
+                // documented pipe-shutdown errors as EOF, after the process
+                // handle proves that the child has exited.
+                if ((error == ErrorBrokenPipe || error == ErrorNoData || error == ErrorPipeNotConnected)
+                        && child != IntPtr.Zero && ChildStopped(child))
+                    return;
                 throw new InvalidOperationException("terminal_read");
+            }
             if (available == 0) return;
             uint take = (uint)Math.Min(Math.Min((int)available, buffer.Length), maxBytes - total);
             uint read;
@@ -145,8 +159,28 @@ public static class NativeTuiConPty {
 
     private static int ChildExitCode(IntPtr process) {
         uint code;
-        if (!GetExitCodeProcess(process, out code)) throw new InvalidOperationException("ui_exit_status");
+        if (!GetExitCodeProcess(process, out code) || code == StillActive)
+            throw new InvalidOperationException("ui_exit_status");
         return unchecked((int)code);
+    }
+
+    private static bool ChildStopped(IntPtr process) {
+        uint wait = WaitForSingleObject(process, 0);
+        if (wait == WaitObject0) {
+            ChildExitCode(process);
+            return true;
+        }
+        if (wait == WaitTimeout) return false;
+        throw new InvalidOperationException("ui_exit_status");
+    }
+
+    private static void StopChild(IntPtr process) {
+        if (process == IntPtr.Zero || ChildStopped(process)) return;
+        if (!TerminateProcess(process, 1) && !ChildStopped(process))
+            throw new InvalidOperationException("ui_terminate_failed");
+        if (WaitForSingleObject(process, 5000) != WaitObject0)
+            throw new InvalidOperationException("ui_terminate_timeout");
+        ChildExitCode(process);
     }
 
     private static void WriteInput(IntPtr input, byte[] bytes) {
@@ -160,16 +194,16 @@ public static class NativeTuiConPty {
         }
     }
 
-    private static void CloseAndDrain(IntPtr pseudoConsole, IntPtr output) {
+    private static void CloseAndDrain(IntPtr pseudoConsole, IntPtr output, IntPtr child) {
         var closer = new Thread(() => ClosePseudoConsole(pseudoConsole));
         closer.IsBackground = true;
         closer.Start();
         DateTime deadline = DateTime.UtcNow.AddSeconds(5);
         while (!closer.Join(20)) {
-            Drain(output, MaxDrainBytes);
+            Drain(output, MaxDrainBytes, child);
             if (DateTime.UtcNow >= deadline) throw new InvalidOperationException("conpty_close_timeout");
         }
-        Drain(output, MaxDrainBytes);
+        Drain(output, MaxDrainBytes, child);
     }
 
     public static int Run(string binary, string[] args, string currentDirectory) {
@@ -178,6 +212,7 @@ public static class NativeTuiConPty {
         IntPtr pseudoConsole = IntPtr.Zero, attributeList = IntPtr.Zero;
         IntPtr child = IntPtr.Zero, childThread = IntPtr.Zero;
         bool attributeListReady = false;
+        bool childStopAttempted = false;
         string failure = "conpty_start";
         try {
             Require(CreatePipe(out inputRead, out inputWrite, IntPtr.Zero, 0), "conpty_pipe");
@@ -218,26 +253,24 @@ public static class NativeTuiConPty {
             while (true) {
                 string command = Console.In.ReadLine();
                 if (command == null) {
-                    TerminateProcess(child, 1);
-                    WaitForSingleObject(child, 5000);
                     break;
                 }
                 if (command.Length > 100000) throw new InvalidOperationException("protocol_bound");
                 if (command == "POLL") {
-                    Drain(outputRead, MaxDrainBytes);
+                    Drain(outputRead, MaxDrainBytes, child);
                     Emit("END");
                     continue;
                 }
                 if (command == "WAIT") {
-                    Drain(outputRead, MaxDrainBytes);
-                    if (WaitForSingleObject(child, 0) == 0) Emit("EXIT:" + ChildExitCode(child));
+                    Drain(outputRead, MaxDrainBytes, child);
+                    if (ChildStopped(child)) Emit("EXIT:" + ChildExitCode(child));
                     else Emit("RUNNING");
                     continue;
                 }
                 if (command == "TERMINATE") {
-                    if (WaitForSingleObject(child, 0) != 0) TerminateProcess(child, 1);
-                    WaitForSingleObject(child, 5000);
-                    Drain(outputRead, MaxDrainBytes);
+                    childStopAttempted = true;
+                    StopChild(child);
+                    Drain(outputRead, MaxDrainBytes, child);
                     Emit("EXIT:" + ChildExitCode(child));
                     continue;
                 }
@@ -261,14 +294,13 @@ public static class NativeTuiConPty {
                     continue;
                 }
                 if (command == "CLOSE") {
-                    if (WaitForSingleObject(child, 0) != 0) {
-                        TerminateProcess(child, 1);
-                        WaitForSingleObject(child, 5000);
-                    }
-                    Drain(outputRead, MaxDrainBytes);
+                    childStopAttempted = true;
+                    StopChild(child);
+                    Drain(outputRead, MaxDrainBytes, child);
                     if (inputWrite != IntPtr.Zero) { CloseHandle(inputWrite); inputWrite = IntPtr.Zero; }
-                    CloseAndDrain(pseudoConsole, outputRead);
+                    IntPtr closingPseudoConsole = pseudoConsole;
                     pseudoConsole = IntPtr.Zero;
+                    CloseAndDrain(closingPseudoConsole, outputRead, child);
                     Emit("CLOSED");
                     break;
                 }
@@ -279,13 +311,27 @@ public static class NativeTuiConPty {
             failure = ex is InvalidOperationException ? ex.Message : "conpty_host";
             Emit("ERROR:" + failure);
         } finally {
-            if (child != IntPtr.Zero && WaitForSingleObject(child, 0) != 0) {
-                TerminateProcess(child, 1);
-                WaitForSingleObject(child, 5000);
+            if (child != IntPtr.Zero) {
+                try {
+                    if (childStopAttempted) {
+                        if (!ChildStopped(child)) throw new InvalidOperationException("ui_terminate_unproven");
+                    } else {
+                        StopChild(child);
+                    }
+                } catch (Exception ex) {
+                    failure = ex is InvalidOperationException ? ex.Message : "ui_terminate_unproven";
+                }
             }
             if (pseudoConsole != IntPtr.Zero) {
                 if (inputWrite != IntPtr.Zero) { CloseHandle(inputWrite); inputWrite = IntPtr.Zero; }
-                try { CloseAndDrain(pseudoConsole, outputRead); } catch { ClosePseudoConsole(pseudoConsole); }
+                IntPtr closingPseudoConsole = pseudoConsole;
+                pseudoConsole = IntPtr.Zero;
+                try { CloseAndDrain(closingPseudoConsole, outputRead, child); }
+                catch {
+                    // Do not retry a failed one-shot close: its worker may
+                    // already own and be closing this handle.
+                    if (failure == null) failure = "conpty_close";
+                }
             }
             if (attributeListReady) DeleteProcThreadAttributeList(attributeList);
             if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);

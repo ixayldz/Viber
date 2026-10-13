@@ -53,6 +53,27 @@ func (s *Session) validateProtection(doc Document) error {
 	if doc.Protection.SchemaVersion != 1 || doc.Protection.TaskID != doc.TaskID || doc.Protection.InitialSpecVersion != 1 || doc.Spec.Version < doc.Protection.InitialSpecVersion || doc.Protection.BaselineDigest != doc.Baseline.SnapshotDigest {
 		return c.Fail(c.StoreIntegrityError, "protected check origin binding mismatch")
 	}
+	if !c.ValidDigest(doc.Spec.ProtectedOrigin) || !c.ValidDigest(doc.Protection.InputDigest) {
+		return c.Fail(c.StoreIntegrityError, "protected check origin digest is invalid")
+	}
+	originDigest, err := c.Digest(*doc.Protection)
+	if err != nil || originDigest != doc.Spec.ProtectedOrigin {
+		return c.Fail(c.StoreIntegrityError, "protected check origin digest binding mismatch")
+	}
+	if err = doc.Protection.Plan.Validate(); err != nil {
+		return c.Fail(c.StoreIntegrityError, "protected check plan is invalid")
+	}
+	requirements := make(map[string]bool, len(doc.Spec.Requirements))
+	for _, requirement := range doc.Spec.Requirements {
+		requirements[requirement.ID] = true
+	}
+	for _, check := range doc.Protection.Plan.Checks {
+		for _, requirementID := range check.RequirementIDs {
+			if !requirements[requirementID] {
+				return c.Fail(c.StoreIntegrityError, "protected check criterion missing from current spec")
+			}
+		}
+	}
 	found := false
 	for _, input := range doc.Spec.Inputs {
 		if input.ID == "initial" && input.Digest == doc.Protection.InputDigest {
@@ -68,11 +89,17 @@ func (s *Session) validateProtection(doc Document) error {
 	// guarding run at their point of use with fresh hydration: check dispatch,
 	// frozen checks, observed evidence, candidate publication, delivery
 	// reverification and verified finals.
-	if _, err := s.Archive.ReadManifest(doc.Baseline); err != nil {
+	baseline, err := s.Archive.ReadManifest(doc.Baseline)
+	if err != nil {
 		return err
 	}
-	if _, err := s.Archive.ReadManifest(doc.Candidate); err != nil {
+	candidate, err := s.Archive.ReadManifest(doc.Candidate)
+	if err != nil {
 		return err
+	}
+	if baseline.TaskID != doc.TaskID || candidate.TaskID != doc.TaskID ||
+		doc.Protection.SourceRoot != baseline.Snapshot.Root || candidate.Snapshot.Root != baseline.Snapshot.Root {
+		return c.Fail(c.StoreIntegrityError, "protected check origin source identity mismatch")
 	}
 	return nil
 }

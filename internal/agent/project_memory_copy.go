@@ -155,6 +155,10 @@ func (s *Session) copyProjectMemoryLocked(ctx context.Context, sourceTask, targe
 		return empty, err
 	}
 
+	if err = s.preflightProjectMemoryCopyPolicy(ctx, sourceTask, targetTask); err != nil {
+		return empty, err
+	}
+
 	// Validate current source and target policy before reading any source memory
 	// body. In particular, context.read on the source does not grant a transfer
 	// to a target with a different effective provider/egress/privacy policy.
@@ -326,6 +330,11 @@ func (s *Session) copyProjectMemoryLocked(ctx context.Context, sourceTask, targe
 			return s.closePrivacyCopyAndReturn(root, lock, empty, err)
 		}
 	}
+	if s.projectMemoryCopyFault != nil {
+		if err = s.projectMemoryCopyFault("prepared-before-archive"); err != nil {
+			return s.closePrivacyCopyAndReturn(root, lock, empty, err)
+		}
+	}
 
 	// The registry intent remains durable if any following step fails. Stable
 	// retries either finish this exact publication or fail closed on drift.
@@ -364,6 +373,9 @@ func (s *Session) copyProjectMemoryLocked(ctx context.Context, sourceTask, targe
 		next.PolicyEpoch != targetState.PolicyEpoch || next.Execution != targetState.Execution || !sameProjectMemoryWorkBudget(budgetBefore, next.WorkBudget)) {
 		err = c.Fail(c.StoreIntegrityError, "project memory copy changed task authority or work budget")
 	}
+	if err == nil && s.projectMemoryCopyFault != nil {
+		err = s.projectMemoryCopyFault("target-journal-committed")
+	}
 	if err == nil {
 		view, err = readPrivacy(root)
 	}
@@ -388,6 +400,92 @@ func (s *Session) copyProjectMemoryLocked(ctx context.Context, sourceTask, targe
 		return empty, c.Fail(c.StoreIntegrityError, "project memory copy failed current document and pin validation")
 	}
 	return copyReceipt(metadata, "COPIED"), nil
+}
+
+// preflightProjectMemoryCopyPolicy reads only the exact journal-bound task
+// documents, so current effect and transfer-policy gates run before Load
+// validates (and therefore opens) any referenced memory-event bodies. Its
+// metadata is used only for this preflight; publication still uses fresh full
+// Load results and repeats the same gates on those validated documents.
+func (s *Session) preflightProjectMemoryCopyPolicy(ctx context.Context, sourceTask, targetTask string) error {
+	loadMetadata := func(task string) (c.TaskState, Document, error) {
+		var empty Document
+		state, err := s.State(ctx, task)
+		if err != nil {
+			return state, empty, err
+		}
+		if err = s.contentAvailable(task); err != nil {
+			return state, empty, err
+		}
+		if state.Deletion != nil || state.TaskID != task || state.TaskSeq < 1 || !c.ValidDigest(state.DocumentDigest) {
+			return state, empty, c.Fail(c.PolicyDenied, "project memory copy task is unavailable")
+		}
+		raw, err := s.Archive.GetBytes(task, state.DocumentDigest)
+		if err != nil {
+			return state, empty, err
+		}
+		var doc Document
+		if err = c.DecodeStrict(raw, &doc); err != nil || doc.SchemaVersion != 1 || doc.TaskID != task || doc.Spec.TaskID != task ||
+			doc.Spec.Version != state.SpecVersion || doc.Baseline.TaskID != task || doc.Candidate.TaskID != task ||
+			doc.Baseline.SnapshotDigest != state.BaselineDigest || doc.Candidate.SnapshotDigest != state.CandidateDigest {
+			return state, empty, c.Fail(c.StoreIntegrityError, "project memory copy task document binding mismatch")
+		}
+		canonical, err := c.CanonicalV1(doc)
+		if err != nil || !bytes.Equal(raw, canonical) {
+			return state, empty, c.Fail(c.StoreIntegrityError, "project memory copy task document is not canonical")
+		}
+		if err = doc.Spec.Validate(); err != nil {
+			return state, empty, err
+		}
+		if err = validateTaskConfig(doc); err != nil {
+			return state, empty, err
+		}
+		return state, doc, nil
+	}
+
+	sourceState, sourceDoc, err := loadMetadata(sourceTask)
+	if err != nil {
+		return err
+	}
+	targetState, targetDoc, err := loadMetadata(targetTask)
+	if err != nil {
+		return err
+	}
+	if !projectMemoryMutationQuiescent(sourceState) || !projectMemoryMutationQuiescent(targetState) {
+		return c.Fail(c.Conflict, "project memory copy requires quiescent source and target tasks")
+	}
+	if err = currentOperatorEffect(sourceDoc, "context.read"); err != nil {
+		return err
+	}
+	if err = currentOperatorEffect(targetDoc, "context.read"); err != nil {
+		return err
+	}
+	if err = currentOperatorEffect(targetDoc, "context.edit"); err != nil {
+		return err
+	}
+	source, err := s.projectMemorySource(ctx, sourceState, sourceDoc)
+	if err != nil {
+		return err
+	}
+	target, err := s.projectMemorySource(ctx, targetState, targetDoc)
+	if err != nil {
+		return err
+	}
+	if source.ProjectDigest != target.ProjectDigest || source.PolicyDigest != target.PolicyDigest || source.PolicyEpoch != target.PolicyEpoch {
+		return c.Fail(c.PolicyDenied, "project memory copy requires the same current project and retained policy epoch")
+	}
+	sourceEffective, err := projectMemoryEffectivePolicyDigest(sourceDoc)
+	if err != nil {
+		return err
+	}
+	targetEffective, err := projectMemoryEffectivePolicyDigest(targetDoc)
+	if err != nil {
+		return err
+	}
+	if sourceEffective != targetEffective {
+		return c.Fail(c.PolicyDenied, "source and target effective privacy/provider policies differ")
+	}
+	return nil
 }
 
 func projectMemoryMutationQuiescent(state c.TaskState) bool {

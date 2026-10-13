@@ -146,6 +146,7 @@ type Session struct {
 	clockDomain             string
 	creationFault           func(c.ExecutionState) error
 	attemptStageFault       func(int) error
+	projectMemoryCopyFault  func(string) error
 	mu                      sync.Mutex
 	directory               string
 	Journal                 *store.Store

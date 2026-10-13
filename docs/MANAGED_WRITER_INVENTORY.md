@@ -6,6 +6,8 @@ Durum — 13 Ekim 2026: çekirdek `resource.Ledger` (Reserve/Begin/Commit, Enclo
 
 ## Mevcut yazma yolları
 
+13 Ekim [handoff denetimi](REPOSITORY_AUDIT_2026_10_13.md) support/preview/GC reservation matching ve completion-settlement hatalarını buldu. Takip düzeltmesi exact own reservation'ı payload/class/family/upper ile eşleştirir; bu üç writer için örtük ancestor adoption kapalıdır. Support'un değişen canlı kapasite gözlemi nedeniyle tam crash retry hâlâ özgün payload intent'i gerektirir. Bound writer etiketi purge/free-receipt, legacy import veya bütün lifetime kabulünün tamamlandığı anlamına gelmez. Restore/evaluator için [atomik devir tasarımı](OWNER_QUOTA_HANDOFF_DESIGN.md), privacy/fence için [bootstrap ve lifetime tasarımı](PRIVACY_AND_FENCE_QUOTA_DESIGN.md) gereklidir.
+
 | Writer / giriş noktası | Mevcut admission ve sahiplik | Ortak kota için bağlanacak noktalar |
 |---|---|---|
 | Task CAS: [artifact/archive.go](../internal/artifact/archive.go), `publish`, `Put`, `PutControlBytes` | Task-scoped immutable hash; existing exact bytes dedup; [disk.go](../internal/artifact/disk.go) archive workUsed/reopen scan ve journal low-water callback | İlk temp creation'dan önce temp + final allocation; same inode dedup; global retained/outstanding ledger |

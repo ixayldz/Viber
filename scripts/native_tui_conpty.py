@@ -14,12 +14,16 @@ from pathlib import Path
 MAX_CAPTURE = 4 << 20
 MAX_FRAME = 65536
 MAX_PROTOCOL_LINE = 100000
+HELPER_GRACE_SECONDS = 12.0
+HELPER_KILL_WAIT_SECONDS = 2.0
+READER_JOIN_SECONDS = 1.0
 
 
 class ConPTYFailure(Exception):
-    def __init__(self, stage: str):
+    def __init__(self, stage: str, *, cleanup_complete: bool | None = None):
         super().__init__(stage)
         self.stage = stage
+        self.cleanup_complete = cleanup_complete
 
 
 class WindowsConPTY:
@@ -44,8 +48,10 @@ class WindowsConPTY:
 
         self.capture = bytearray()
         self.closed = False
+        self.cleanup_complete: bool | None = None
         self.exit_code: int | None = None
         self.lines: queue.Queue[bytes | None] = queue.Queue(maxsize=64)
+        self.reader_error: bytes | None = None
         startup = subprocess.STARTUPINFO()
         startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = subprocess.SW_HIDE
@@ -80,12 +86,78 @@ class WindowsConPTY:
                 creationflags=creation_flags,
             )
         except OSError:
-            raise ConPTYFailure("conpty_helper_start")
-        self.reader = threading.Thread(target=self._read_stdout, name="viber-conpty-reader", daemon=True)
-        self.reader.start()
-        first = self._next_line(10.0 if onboarding else 20.0, "conpty_helper_start")
-        if first != b"READY":
-            self._raise_protocol_error(first, "conpty_helper_start")
+            raise ConPTYFailure("conpty_helper_start", cleanup_complete=False)
+        try:
+            self.reader = threading.Thread(target=self._read_stdout, name="viber-conpty-reader", daemon=True)
+            self.reader.start()
+            first = self._next_line(10.0 if onboarding else 20.0, "conpty_helper_start")
+            if first != b"READY":
+                self._raise_protocol_error(first, "conpty_helper_start")
+        except Exception as failure:
+            cleanup_complete = self._shutdown_after_eof()
+            stage = failure.stage if isinstance(failure, ConPTYFailure) else "conpty_helper_start"
+            raise ConPTYFailure(stage, cleanup_complete=cleanup_complete) from failure
+
+    def _publish_reader_line(self, line: bytes | None) -> bool:
+        try:
+            self.lines.put_nowait(line)
+            return True
+        except queue.Full:
+            self.reader_error = b"ERROR:protocol_queue_full"
+            return False
+
+    def _shutdown_after_eof(self) -> bool:
+        """Close helper stdin first so its managed finally can stop its child."""
+        self.closed = True
+        stdin = self.process.stdin
+        if stdin is not None:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+        try:
+            graceful_exit = False
+            try:
+                self.process.wait(timeout=HELPER_GRACE_SECONDS)
+                graceful_exit = True
+            except OSError:
+                try:
+                    graceful_exit = self.process.poll() is not None
+                except OSError:
+                    graceful_exit = False
+            except subprocess.TimeoutExpired:
+                try:
+                    graceful_exit = self.process.poll() is not None
+                except OSError:
+                    graceful_exit = False
+            if not graceful_exit:
+                try:
+                    still_running = self.process.poll() is None
+                except OSError:
+                    still_running = True
+                if still_running:
+                    try:
+                        # This is only the helper returned by our Popen call. A
+                        # forced helper kill cannot prove its managed child ended.
+                        self.process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        self.process.wait(timeout=HELPER_KILL_WAIT_SECONDS)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+            cleanup_complete = graceful_exit and self.process.returncode == 0
+            self.cleanup_complete = cleanup_complete
+        finally:
+            if self.process.stdout is not None:
+                try:
+                    self.process.stdout.close()
+                except (OSError, ValueError):
+                    pass
+            if getattr(self, "reader", None) is not None and self.reader.ident is not None:
+                self.reader.join(timeout=READER_JOIN_SECONDS)
+        return cleanup_complete
 
     def _read_stdout(self) -> None:
         try:
@@ -95,20 +167,25 @@ class WindowsConPTY:
                 if not line:
                     break
                 if len(line) > MAX_PROTOCOL_LINE or not line.endswith(b"\n"):
-                    self.lines.put(b"ERROR:protocol_bound")
+                    self._publish_reader_line(b"ERROR:protocol_bound")
                     break
-                self.lines.put(line[:-1].removesuffix(b"\r"))
+                if not self._publish_reader_line(line[:-1].removesuffix(b"\r")):
+                    break
         except Exception:
-            self.lines.put(b"ERROR:protocol_read")
+            self.reader_error = b"ERROR:protocol_read"
         finally:
-            self.lines.put(None)
+            self._publish_reader_line(None)
 
     def _next_line(self, timeout: float, stage: str) -> bytes:
         try:
             line = self.lines.get(timeout=max(0.0, timeout))
         except queue.Empty:
+            if self.reader_error is not None:
+                self._raise_protocol_error(self.reader_error, stage)
             raise ConPTYFailure(stage)
         if line is None:
+            if self.reader_error is not None:
+                self._raise_protocol_error(self.reader_error, stage)
             raise ConPTYFailure(stage)
         if line.startswith(b"ERROR:"):
             self._raise_protocol_error(line, stage)
@@ -205,6 +282,7 @@ class WindowsConPTY:
                     self.exit_code = int(line[5:].decode("ascii"))
                 except ValueError:
                     raise ConPTYFailure("ui_exit_status")
+                self.cleanup_complete = True
                 return self.exit_code
             raise ConPTYFailure("protocol_response")
 
@@ -228,7 +306,13 @@ class WindowsConPTY:
         raise ConPTYFailure(stage)
 
     def terminate(self) -> None:
-        if self.exit_code is not None or self.process.poll() is not None:
+        if self.exit_code is not None:
+            self.cleanup_complete = True
+            return
+        if self.process.poll() is not None:
+            self.cleanup_complete = self.process.returncode == 0
+            if not self.cleanup_complete:
+                raise ConPTYFailure("ui_terminate_cleanup_unknown", cleanup_complete=False)
             return
         try:
             self._send(b"TERMINATE")
@@ -242,22 +326,22 @@ class WindowsConPTY:
                         self.exit_code = int(line[5:].decode("ascii"))
                     except ValueError:
                         raise ConPTYFailure("ui_terminate")
+                    self.cleanup_complete = True
                     return
                 raise ConPTYFailure("ui_terminate")
-        except ConPTYFailure:
-            if self.process.poll() is None:
-                self.process.kill()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
+        except ConPTYFailure as failure:
+            self.cleanup_complete = self._shutdown_after_eof()
+            if not self.cleanup_complete:
+                raise ConPTYFailure(failure.stage, cleanup_complete=False) from failure
 
     def close(self) -> None:
         if self.closed:
+            if self.cleanup_complete is False:
+                raise ConPTYFailure("conpty_cleanup_unknown", cleanup_complete=False)
             return
         self.closed = True
-        if self.process.poll() is None:
-            try:
+        try:
+            if self.process.poll() is None:
                 self._send(b"CLOSE")
                 while True:
                     line = self._next_line(7.0, "conpty_close")
@@ -268,20 +352,24 @@ class WindowsConPTY:
                         break
                     raise ConPTYFailure("conpty_close")
                 self.process.wait(timeout=5)
-            except (ConPTYFailure, subprocess.TimeoutExpired):
-                if self.process.poll() is None:
-                    self.process.kill()
-                    try:
-                        self.process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-        if self.process.stdin is not None:
-            try:
-                self.process.stdin.close()
-            except OSError:
-                pass
-        if self.process.stdout is not None:
-            try:
-                self.process.stdout.close()
-            except OSError:
-                pass
+            self.cleanup_complete = self.process.returncode == 0
+            if not self.cleanup_complete:
+                raise ConPTYFailure("conpty_close")
+        except (ConPTYFailure, subprocess.TimeoutExpired) as failure:
+            self.cleanup_complete = self._shutdown_after_eof()
+            if not self.cleanup_complete:
+                raise ConPTYFailure("conpty_cleanup_unknown", cleanup_complete=False) from failure
+            raise ConPTYFailure("conpty_close", cleanup_complete=True) from failure
+        finally:
+            if self.process.stdin is not None:
+                try:
+                    self.process.stdin.close()
+                except (OSError, ValueError):
+                    pass
+            if self.process.stdout is not None:
+                try:
+                    self.process.stdout.close()
+                except (OSError, ValueError):
+                    pass
+            if getattr(self, "reader", None) is not None and self.reader.ident is not None:
+                self.reader.join(timeout=READER_JOIN_SECONDS)

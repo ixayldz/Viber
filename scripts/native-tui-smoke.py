@@ -35,9 +35,10 @@ RESIZED_SIZE = (180, 36)
 
 
 class SmokeFailure(Exception):
-    def __init__(self, stage: str):
+    def __init__(self, stage: str, *, preserve_private_root: bool = False):
         super().__init__(stage)
         self.stage = stage
+        self.preserve_private_root = preserve_private_root
 
 
 def _platform_name() -> str:
@@ -276,7 +277,10 @@ def _terminal(binary: Path, task: str, store: Path, cwd: Path, env: dict[str, st
         try:
             return WindowsConPTY(argv, cwd, env)
         except ConPTYFailure as failure:
-            raise SmokeFailure(failure.stage)
+            raise SmokeFailure(
+                failure.stage,
+                preserve_private_root=failure.cleanup_complete is False,
+            ) from failure
     return PosixPTY(argv, cwd, env)
 
 
@@ -325,6 +329,7 @@ def _journey(binary: Path, revision: str) -> dict:
     private = Path(tempfile.mkdtemp(prefix="viber-native-tui-smoke-"))
     owner = None
     owner_stopped = False
+    preserve_private_root = False
     cwd = private
     env = None
     capture_bytes = 0
@@ -438,13 +443,24 @@ def _journey(binary: Path, revision: str) -> dict:
                 raise SmokeFailure(stage)
             capture_bytes = captured_before_help + captured_escape_output + len(ui.capture)
             ui.close()
+            if getattr(ui, "cleanup_complete", None) is False:
+                preserve_private_root = True
+                raise SmokeFailure("terminal_cleanup_unknown", preserve_private_root=True)
             ui = None
         finally:
             if ui is not None:
                 try:
-                    ui.terminate()
+                    try:
+                        ui.terminate()
+                    except Exception:
+                        pass
                 finally:
-                    ui.close()
+                    try:
+                        ui.close()
+                    except Exception:
+                        pass
+                    if getattr(ui, "cleanup_complete", None) is False:
+                        preserve_private_root = True
 
         if not _stop_owner(binary, store, cwd, env, owner):
             raise SmokeFailure("owner_stop")
@@ -499,14 +515,15 @@ def _journey(binary: Path, revision: str) -> dict:
             "source_sha256": hashlib.sha256(source_bytes_after).hexdigest(),
             "control_file_sha256": hashlib.sha256(control_bytes).hexdigest(),
         }
-    except SmokeFailure:
+    except SmokeFailure as failure:
+        preserve_private_root = preserve_private_root or failure.preserve_private_root
         raise
     finally:
         # Stop the exact tracked owner even after an intermediate failure. Do
         # not remove its store while it could still be writing.
         if owner is not None and owner.poll() is None and env is not None:
             owner_stopped = _stop_owner(binary, private / "store", cwd, env, owner)
-        if owner is None or owner.poll() is not None or owner_stopped:
+        if not preserve_private_root and (owner is None or owner.poll() is not None or owner_stopped):
             try:
                 cleanup_target = private.resolve(strict=True)
                 is_junction = getattr(private, "is_junction", lambda: False)()

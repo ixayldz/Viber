@@ -160,6 +160,64 @@ func TestOriginCannotBeRemovedAndLegacySessionsAreNotUpgraded(t *testing.T) {
 		t.Fatal("legacy upgraded to protected assurance")
 	}
 }
+
+func TestMetadataOnlyProtectionValidationBindsOriginPlanAndSource(t *testing.T) {
+	session, _, opts := protectionSession(t, "guided", operatorPlan(t, verify.CheckScope{Path: "check.txt"}))
+	defer session.Close()
+	fresh := func(t *testing.T) Document {
+		t.Helper()
+		_, doc, err := session.Load(context.Background(), opts.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+
+	t.Run("origin digest", func(t *testing.T) {
+		doc := fresh(t)
+		doc.Protection.Plan.Checks[0].Argv[0] = "different-runner"
+		if err := session.validateProtection(doc); err == nil {
+			t.Fatal("changed protected origin metadata passed its retained digest binding")
+		}
+	})
+	t.Run("plan structure", func(t *testing.T) {
+		doc := fresh(t)
+		doc.Protection.Plan.SchemaVersion = 2
+		digest, err := c.Digest(*doc.Protection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc.Spec.ProtectedOrigin = digest
+		if err := session.validateProtection(doc); err == nil {
+			t.Fatal("digest-bound but malformed check plan was accepted")
+		}
+	})
+	t.Run("requirement binding", func(t *testing.T) {
+		doc := fresh(t)
+		doc.Protection.Plan.Checks[0].RequirementIDs = []string{"foreign-requirement"}
+		digest, err := c.Digest(*doc.Protection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc.Spec.ProtectedOrigin = digest
+		if err := session.validateProtection(doc); err == nil {
+			t.Fatal("digest-bound check criterion absent from the current spec was accepted")
+		}
+	})
+	t.Run("source identity", func(t *testing.T) {
+		doc := fresh(t)
+		doc.Protection.SourceRoot = "different-source-root"
+		digest, err := c.Digest(*doc.Protection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc.Spec.ProtectedOrigin = digest
+		if err := session.validateProtection(doc); err == nil {
+			t.Fatal("digest-bound origin from another source root was accepted")
+		}
+	})
+}
+
 func TestScopeRevisionPreservesProtectedOriginAndRejectsOldCoverage(t *testing.T) {
 	session, _, opts := protectionSession(t, "guided", operatorPlan(t, verify.CheckScope{Path: "check.txt"}))
 	defer session.Close()

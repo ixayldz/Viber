@@ -25,6 +25,7 @@ MAX_DATASET_BYTES = 16 << 20
 MAX_REPORT_BYTES = 256 << 20
 MAX_REPORT_LINE_BYTES = 2 << 20
 MAX_REPLY_BYTES = 1 << 20
+MAX_ARGUMENT_BYTES = 64 << 10
 MAX_QUERY_COUNT = 10_000
 MAX_CONDITIONS = 8
 MAX_FILES_PER_REPOSITORY = 100_000
@@ -207,6 +208,10 @@ def source_set_digest(files: list[dict[str, Any]]) -> str:
     return viber_digest(refs)
 
 
+def is_link_or_junction(path: Path) -> bool:
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 def scan_source_root(root_value: str, repository: dict[str, Any]) -> dict[str, Path]:
     try:
         root = Path(root_value).resolve(strict=True)
@@ -223,8 +228,8 @@ def scan_source_root(root_value: str, repository: dict[str, Any]) -> dict[str, P
             base = Path(directory)
             for name in list(dirnames):
                 child = base / name
-                if child.is_symlink():
-                    raise InvalidInput("symlink directories are not accepted in source roots")
+                if is_link_or_junction(child):
+                    raise InvalidInput("linked directories are not accepted in source roots")
             for name in filenames:
                 child = base / name
                 relative = child.relative_to(root).as_posix()
@@ -309,7 +314,17 @@ def validate_dataset(raw: bytes, expected_digest: str, roots: dict[str, str]) ->
     split_repo_ids: dict[str, set[str]] = {"DEV": set(), "HOLDOUT": set()}
     split_repo_digests: dict[str, set[str]] = {"DEV": set(), "HOLDOUT": set()}
     split_snapshot_digests: dict[str, set[str]] = {"DEV": set(), "HOLDOUT": set()}
-    need(set(roots) == {item.get("id") for item in repositories if isinstance(item, dict)}, "provide exactly one --source-root REPOSITORY_ID=PATH for each repository")
+    repository_ids: list[str] = []
+    for repository in repositories:
+        shaped = exact_fields(
+            repository,
+            {"id", "split", "repository_digest", "source_snapshot_digest", "policy_digest", "history_cutoff_utc", "snapshot_at_utc", "files"},
+            set(),
+            "repository manifest",
+        )
+        repository_ids.append(safe_id(shaped["id"], "repository id"))
+    need(len(repository_ids) == len(set(repository_ids)), "duplicate repository id")
+    need(set(roots) == set(repository_ids), "provide exactly one --source-root REPOSITORY_ID=PATH for each repository")
     for repository in repositories:
         exact_fields(
             repository,
@@ -492,7 +507,7 @@ def validate_partition(result: dict[str, Any], repo: dict[str, Any], args: dict[
 def validate_runtime_reply(raw_reply: str, args_raw: str, query: dict[str, Any], repo: dict[str, Any], source_paths: dict[str, Path]) -> dict[str, Any]:
     need(len(raw_reply.encode("utf-8")) <= MAX_REPLY_BYTES, "fs_search reply exceeds its size bound")
     parsed = parse_json(raw_reply.encode("utf-8"), MAX_REPLY_BYTES, "fs_search reply")
-    call_args = parse_json(args_raw.encode("utf-8"), 8192, "fs_search call arguments")
+    call_args = parse_json(args_raw.encode("utf-8"), MAX_ARGUMENT_BYTES, "fs_search call arguments")
     exact_fields(call_args, {"query", "mode"}, {"intent", "candidate_digest", "limit", "partition", "cursor"}, "fs_search call arguments")
     effective_intent = call_args.get("intent", "IDENTIFIER")
     need(call_args["mode"] == "ranked" and call_args["query"] == query["query"] and effective_intent == query["intent"], "fs_search arguments differ from the frozen query")
@@ -613,13 +628,7 @@ def exact_line_count(path: Path, end: int) -> int:
 
 def read_reports(path: str, dataset: dict[str, Any]) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
     report_path = Path(path)
-    try:
-        info = report_path.stat()
-        need(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_REPORT_BYTES, "reports input is not a bounded regular file")
-        raw_file = report_path.read_bytes()
-    except OSError as exc:
-        raise InvalidInput("reports file could not be read") from exc
-    need(len(raw_file) <= MAX_REPORT_BYTES, "reports file exceeds its size bound")
+    raw_file = read_bounded_regular_file(report_path, MAX_REPORT_BYTES, "reports input")
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     task_sequences: set[tuple[str, str, int]] = set()
     call_ids: set[tuple[str, str, str]] = set()
@@ -855,6 +864,14 @@ def self_test() -> dict[str, Any]:
     label_provenance = digest_bytes(b"synthetic human-label receipt")
     with tempfile.TemporaryDirectory(prefix="viber-retrieval-selftest-") as temporary:
         root = Path(temporary)
+        class JunctionFixture:
+            def is_symlink(self) -> bool:
+                return False
+
+            def is_junction(self) -> bool:
+                return True
+
+        need(is_link_or_junction(JunctionFixture()), "self-test did not reject a Windows directory junction")
         dev_root = root / "dev"
         holdout_root = root / "holdout"
         dev_root.mkdir()
@@ -891,6 +908,17 @@ def self_test() -> dict[str, Any]:
         }
         dataset_raw = canonical(dataset_obj)
         dataset = validate_dataset(dataset_raw, digest_bytes(dataset_raw), {"dev-repo": str(dev_root), "holdout-repo": str(holdout_root)})
+        malformed_repo = json.loads(dataset_raw)
+        malformed_repo["repositories"][0]["id"] = {"unhashable": "repository id"}
+        malformed_repo_raw = canonical(malformed_repo)
+        expect_rejects(
+            lambda: validate_dataset(
+                malformed_repo_raw,
+                digest_bytes(malformed_repo_raw),
+                {"dev-repo": str(dev_root), "holdout-repo": str(holdout_root)},
+            ),
+            "self-test did not turn a malformed repository id into a bounded input error",
+        )
         expect_rejects(
             lambda: validate_dataset(dataset_raw, digest_bytes(b"wrong pinned bytes"), {"dev-repo": str(dev_root), "holdout-repo": str(holdout_root)}),
             "self-test did not reject a mismatched frozen dataset digest",
@@ -914,6 +942,12 @@ def self_test() -> dict[str, Any]:
         }
         reply = json.dumps(reply_obj, separators=(",", ":"))
         arguments = json.dumps({"query": "find_item", "mode": "ranked", "intent": "IDENTIFIER", "candidate_digest": dev_repo["source_snapshot_digest"], "limit": 3}, separators=(",", ":"))
+        padded_arguments = (" " * 9000) + arguments
+        need(
+            len(padded_arguments.encode("utf-8")) <= MAX_ARGUMENT_BYTES
+            and validate_runtime_reply(reply, padded_arguments, dataset["_queries_by_id"]["dev-find"], dev_repo, dataset["_paths_by_repo"]["dev-repo"])["status"] == "RANKED",
+            "self-test did not accept a valid fs_search call within the Go exporter argument bound",
+        )
         forged_reply_obj = json.loads(reply)
         forged_reply_obj["retrieval"]["hits"][0]["file_digest"] = digest_bytes(b"not the source")
         forged_reply = json.dumps(forged_reply_obj, separators=(",", ":"))
@@ -961,6 +995,13 @@ def self_test() -> dict[str, Any]:
             lambda: read_reports_bytes_for_test(reports_raw + reports_raw, dataset),
             "self-test did not reject a duplicate query assignment",
         )
+        bounded_path = root / "bounded-input.json"
+        bounded_path.write_bytes(b"1234")
+        need(read_bounded_file(str(bounded_path), 4, "self-test input") == b"1234", "self-test bounded reader changed exact file bytes")
+        expect_rejects(
+            lambda: read_bounded_file(str(bounded_path), 3, "self-test input"),
+            "self-test bounded reader accepted a file above the declared maximum",
+        )
         metrics = evaluate(dataset, rows, info)
         condition_metrics = metrics["conditions"][0]
         need(condition_metrics["dev"]["mrr"]["value"] == 1.0, "self-test expected MRR=1.0")
@@ -968,7 +1009,7 @@ def self_test() -> dict[str, Any]:
         need(condition_metrics["holdout"]["missing_reports"] == 1 and condition_metrics["holdout"]["metric_denominator_queries"] == 0, "self-test expected missing HOLDOUT coverage to remain visible")
         need(condition_metrics["dev"]["model_reported_tokens"]["combined_token_p95_nearest_rank"]["value"] == 270, "self-test expected a known combined-token p95 sample")
         need(metrics["release_evidence"] is False and metrics["adoption_allowed"] is False, "self-test quality gates must remain false")
-        return {"self_test": "PASS", "scope": "SYNTHETIC_FIXTURE_ONLY", "checks": 10}
+        return {"self_test": "PASS", "scope": "SYNTHETIC_FIXTURE_ONLY", "checks": 15}
 
 
 def expect_rejects(operation: Any, message: str) -> None:
@@ -998,15 +1039,33 @@ def parse_root_argument(value: str) -> tuple[str, str]:
 
 
 def read_bounded_file(path_value: str, maximum: int, label: str) -> bytes:
-    path = Path(path_value)
+    return read_bounded_regular_file(Path(path_value), maximum, label)
+
+
+def read_bounded_regular_file(path: Path, maximum: int, label: str) -> bytes:
     try:
-        info = path.stat()
-        need(stat.S_ISREG(info.st_mode) and 0 <= info.st_size <= maximum, f"{label} is not a bounded regular file")
-        raw = path.read_bytes()
+        with path.open("rb") as stream:
+            before = os.fstat(stream.fileno())
+            need(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= maximum, f"{label} is not a bounded regular file")
+            chunks: list[bytes] = []
+            total = 0
+            while total <= maximum:
+                block = stream.read(min(1 << 20, maximum + 1 - total))
+                if not block:
+                    break
+                chunks.append(block)
+                total += len(block)
+            need(total <= maximum, f"{label} exceeds its size bound")
+            after = os.fstat(stream.fileno())
+            need(
+                after.st_size == before.st_size == total
+                and after.st_mtime_ns == before.st_mtime_ns
+                and after.st_ctime_ns == before.st_ctime_ns,
+                f"{label} changed while being read",
+            )
+            return b"".join(chunks)
     except OSError as exc:
         raise InvalidInput(f"{label} could not be read") from exc
-    need(len(raw) <= maximum, f"{label} exceeds its size bound")
-    return raw
 
 
 def revalidate_source_roots(dataset: dict[str, Any]) -> None:

@@ -321,6 +321,7 @@ def _journey(binary: Path, revision: str) -> dict:
     store_absent_proven = False
     owner_stopped = False
     private_root_valid = False
+    preserve_partial_tree = False
     source_bytes = b"hello"
     try:
         private = private.resolve(strict=True)
@@ -342,7 +343,11 @@ def _journey(binary: Path, revision: str) -> dict:
                 env.pop(name, None)
 
         if os.name == "nt":
-            terminal = helpers.WindowsConPTY([str(binary)], private, env)
+            try:
+                terminal = helpers.WindowsConPTY([str(binary)], private, env)
+            except helpers.ConPTYFailure as failure:
+                preserve_partial_tree = failure.cleanup_complete is False
+                raise JourneyFailure(failure.stage) from failure
         else:
             terminal = helpers.PosixPTY([str(binary)], private, env)
 
@@ -422,13 +427,14 @@ def _journey(binary: Path, revision: str) -> dict:
                 terminal.close()
             except Exception:
                 pass
+            preserve_partial_tree = preserve_partial_tree or getattr(terminal, "cleanup_complete", None) is False
         if env is not None and private_root_valid and confirmed_demo and store is None:
             store, store_absent_proven = _discover_task_store(private, env)
             if store is not None:
                 task_id = store.name
         if env is not None and private_root_valid and store is not None and not owner_stopped:
             owner_stopped = _stop_owner(helpers, binary, store, private, env)
-        can_delete = not confirmed_demo or store_absent_proven or owner_stopped
+        can_delete = not preserve_partial_tree and (not confirmed_demo or store_absent_proven or owner_stopped)
         if private_root_valid and can_delete:
             try:
                 target = private.resolve(strict=True)

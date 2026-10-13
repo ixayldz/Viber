@@ -68,6 +68,8 @@ Kabul: altered registration/build/dataset, missing run, unfair budget/model, fut
 
 ## Kapsam haritası ve kapanış
 
+13 Ekim kapsamlı handoff denetimi ve öncelikli düzeltmeler [repository audit](REPOSITORY_AUDIT_2026_10_13.md) içinde kaynak revizyonuna bağlıdır. Tam Support crash recovery, restore/evaluator atomik quota handoff, metadata bootstrap/mutable-tree admission, native durable fence lifetime ve purge/legacy quota closure hâlâ yazılım işleridir. Plan dosyasının varlığı veya güvenli fail-closed retry bunların tamamlanması sayılmaz; yalnız API-key işleri kaldığı ilan edilmez.
+
 FR-01/02: mevcut raw source-bound intent/tek writer kernel, yukarıdaki bütün değişikliklerde regression gate. FR-03–09: 1–3/6/8. FR-10–18: 4/7/6. FR-19–27: 3/5/9/1/4. FR-28–32: 4/7. FR-33–37: 8. FR-38–42: 6/8. NFR-01–12 her ilgili paketin recovery/policy/verdict/egress/quota/backup/performance/privacy/protocol/export/eval kabulüne dahildir; bir kapsam maddesi atlanmış sayılmaz.
 
 Kodlama sırası **1 → 2 → 3/4 → 5/6 → 7/8 → 9**; bağımlı olmayan read-only ölçüm hazırlığı öne alınabilir. Her runtime commit üç OS full/vet/vulnerability/migration, Linux race/fuzz, gerçek rootful Docker ve iki native vault ile exact-SHA foundation kabulü ister. Kırmızı CI önce düzeltilir. Kullanıcının diğer yerel değişiklikleri commit kapsamına alınmaz.

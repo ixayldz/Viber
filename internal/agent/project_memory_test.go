@@ -536,3 +536,179 @@ func TestProjectMemoryCopyRestoreAndDeletionClosure(t *testing.T) {
 		t.Fatal("source purge failed after copy target purge", err)
 	}
 }
+
+func TestProjectMemoryCopyPreparedPublicationRecoversAfterRestart(t *testing.T) {
+	for _, stage := range []string{"prepared-before-archive", "target-journal-committed"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			s, source, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+			defer func() {
+				if s != nil {
+					_ = s.Close()
+				}
+			}()
+			target := projectMemorySibling(t, s, source, "copy-recovery-target", []Turn{{Text: "done", UsageKnown: true}})
+			if _, err := s.Run(ctx, source.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Run(ctx, target.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			assertion, err := s.RecordProjectMemory(ctx, source.TaskID, "copy-recovery-source-record", "DECISION", "build.validation", "Run the focused recovery test.")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := s.State(ctx, target.TaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.projectMemoryCopyFault = func(point string) error {
+				if point == stage {
+					return errors.New("injected process interruption")
+				}
+				return nil
+			}
+			if _, err = s.CopyProjectMemory(ctx, source.TaskID, target.TaskID, "copy-recovery-command", assertion.ItemID, assertion.EventDigest); err == nil {
+				t.Fatal("copy interruption point was not reached")
+			}
+			s.projectMemoryCopyFault = nil
+			interrupted, err := s.State(ctx, target.TaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "prepared-before-archive" {
+				if interrupted.TaskSeq != before.TaskSeq || interrupted.ProjectMemoryCopyCount != before.ProjectMemoryCopyCount {
+					t.Fatal("pre-archive interruption published target state", before, interrupted)
+				}
+			} else {
+				if interrupted.TaskSeq != before.TaskSeq+1 || interrupted.ProjectMemoryCopyCount != before.ProjectMemoryCopyCount+1 {
+					t.Fatal("post-journal interruption did not leave the exact committed target", before, interrupted)
+				}
+				if _, _, err = s.Load(ctx, target.TaskID); err == nil {
+					t.Fatal("target exposed a copy before its ACTIVE registry record")
+				}
+			}
+
+			directory := s.directory
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s = nil
+			s, err = OpenExisting(ctx, directory)
+			if err != nil {
+				t.Fatal("prepared copy store did not reopen", err)
+			}
+			receipt, err := s.CopyProjectMemory(ctx, source.TaskID, target.TaskID, "copy-recovery-command", assertion.ItemID, assertion.EventDigest)
+			if err != nil || receipt.Status != "COPIED" {
+				t.Fatal("exact retry did not recover the prepared copy", receipt, err)
+			}
+			recovered, doc, err := s.Load(ctx, target.TaskID)
+			if err != nil {
+				t.Fatal("recovered copy failed active reference validation", err)
+			}
+			if recovered.ProjectMemoryCopyCount != before.ProjectMemoryCopyCount+1 ||
+				recovered.ProjectMemoryRevision != before.ProjectMemoryRevision+1 ||
+				len(doc.ProjectMemoryRefs) != 1 {
+				t.Fatal("recovery duplicated or lost the target copy counters and reference", recovered, doc.ProjectMemoryRefs)
+			}
+			search, err := s.SearchProjectMemory(ctx, target.TaskID, "recovery", 0, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item := projectMemoryItemByID(t, search, receipt.CopyID); item.Status != "ACTIVE" || item.EvidenceClass != "USER_COPIED" {
+				t.Fatal("recovered copy was not active advisory memory", item)
+			}
+		})
+	}
+}
+
+func TestProjectMemoryCopyPolicyDenialPrecedesSourceMemoryHydration(t *testing.T) {
+	ctx := context.Background()
+	sourceRoot := t.TempDir()
+	storeDir := t.TempDir()
+	policyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "a.txt"), []byte("before\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(ctx, storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	fixture, err := json.Marshal(Fixture{SchemaVersion: 1, Turns: []Turn{{Text: "done", UsageKnown: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceOptions := StartOptions{Root: sourceRoot, Prompt: []byte("Inspect source."), TaskID: "copy-policy-source", Budget: DefaultBudget(),
+		Autonomy: "guided", AllowUnverified: true, Fixture: fixture}
+	if _, err = s.Create(ctx, sourceOptions); err != nil {
+		t.Fatal(err)
+	}
+	assertion, err := s.RecordProjectMemory(ctx, sourceOptions.TaskID, "copy-policy-source-memory", "DECISION", "transfer.rule", "Do not read this body when context.read is denied.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := []string{"snapshot.read", "model.infer"}
+	authority := config.Authority{SchemaVersion: 1, Revision: 1, AllowedEffects: &effects}
+	policyPath := filepath.Join(policyDir, "operator.json")
+	policyBytes, err := c.CanonicalV1(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(policyPath, policyBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	authorityRef, err := config.BindAuthority(policyPath, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.Resolve(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.Authority = &authorityRef
+	sourceState, sourceDoc, err := s.Load(ctx, sourceOptions.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDoc.Config = &resolved // Bind a current operator policy that denies context.read.
+	if _, err = s.record(ctx, sourceState, sourceDoc, "SessionRecorded", c.EventPayload{}); err != nil {
+		t.Fatal(err)
+	}
+	targetOptions := sourceOptions
+	targetOptions.TaskID = "copy-policy-target"
+	if _, err = s.Create(ctx, targetOptions); err != nil {
+		t.Fatal(err)
+	}
+	blobPath, err := artifact.ScopedBlobPath(sourceOptions.TaskID, assertion.EventDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(s.directory, "artifacts", filepath.FromSlash(blobPath))); err != nil {
+		t.Fatal(err)
+	}
+	targetBefore, err := s.State(ctx, targetOptions.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CopyProjectMemory(ctx, sourceOptions.TaskID, targetOptions.TaskID, "copy-policy-denied", assertion.ItemID, assertion.EventDigest); err == nil {
+		t.Fatal("copy unexpectedly crossed the current source context.read denial")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.PolicyDenied {
+			t.Fatalf("copy hydrated the missing source body before denying context.read: %v", err)
+		}
+	}
+	targetAfter, err := s.State(ctx, targetOptions.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetAfter.TaskSeq != targetBefore.TaskSeq || targetAfter.DocumentDigest != targetBefore.DocumentDigest ||
+		targetAfter.ProjectMemoryRevision != targetBefore.ProjectMemoryRevision || targetAfter.ProjectMemoryCopyCount != targetBefore.ProjectMemoryCopyCount {
+		t.Fatal("denied copy wrote target task state", targetBefore, targetAfter)
+	}
+	used, err := ProjectMemoryCopyCapabilityUsed(ctx, s.Journal)
+	if err != nil || used {
+		t.Fatalf("denied copy left a PREPARED capability intent: used=%v err=%v", used, err)
+	}
+}

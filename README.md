@@ -19,19 +19,19 @@ ChatGPT hesabınızla kullanabilirsiniz. **Bu giriş için OpenAI API anahtarı 
 
 Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension çalıştırmak için gerekir. İnternetsiz demoda ChatGPT hesabı da gerekmez.
 
-## Yeni kaynak sürümünde hızlı başlangıç
+## Hızlı başlangıç
 
-**Bu kolay başlangıç main kaynak kodundadır; aşağıda bağlantısı verilen public `5e6a006` paketi henüz içermez.** Önce [kaynaktan kurulum](#kaynaktan-kurulum) ile yeni binary'yi derleyin. Sonra Windows'ta `.\bin\viber.exe`, Linux/macOS'ta `./bin/viber` çalıştırın. PATH'e kurduysanız sadece `viber` yazın.
+[Güncel paketi](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) indirip doğruladıktan sonra arşivi yeni bir klasöre çıkarın. O klasörde terminal açıp Windows'ta `.\viber.exe`, Linux/macOS'ta `./viber` çalıştırın. PATH'e eklediyseniz yalnız `viber` yazın. Başlangıç ekranı proje, model ve görev seçimini adım adım yapar.
 
 Başlangıç ekranında **1: ChatGPT**, **2: yerel Ollama**, **3: internetsiz örnek** seçilir. ChatGPT/Ollama için proje klasörünü seçip görevi kendi sözlerinizle yazın. Görev kimliği ve proje dışındaki özel kayıt klasörü otomatik oluşturulur. ChatGPT'ye proje bağlamı gönderilmeden önce `YES` istenir; giriş gerekiyorsa `LOGIN` seçimi resmî tarayıcı akışını açar. Ollama için kurulu modelin adını girin. `CANCEL` veya `q` başlangıcı durdurur.
 
 Gerçek terminalde görev başladıktan sonra TUI otomatik açılır. `/` ile komutlara bakın, `/requests` ile bekleyen öneriyi inceleyin, onayladıktan sonra `/resume` kullanın. `/diff` değişiklikleri gösterir; `/exit` arayüzden ayrılır ve geçmişi korur. İnternetsiz örnek yalnız özel bir `hello.txt` projesinde sabit demo çalıştırır; kendi projenizi okumaz, gerçek model kullanmaz ve **UNVERIFIED / exit 2** kalır.
 
-`viber start` başlangıcı açıkça başlatır. Girdi/çıktı terminal değilse bare `viber` yardım gösterir; scriptler `run` komutunu kullanabilir. Gelişmiş ve önceki public pakete uygun adımlar aşağıdadır.
+`viber start` başlangıcı açıkça başlatır. Girdi/çıktı terminal değilse bare `viber` yardım gösterir; scriptler `run` komutunu kullanabilir. Elle kurulum ve gelişmiş komutlar aşağıdadır. Kaynak branch'indeki yeni eklemelerin paket kapsamı [destek tablosunda](docs/CAPABILITIES.md), son kod denetimi [13 Ekim raporunda](docs/REPOSITORY_AUDIT_2026_10_13.md) açıklanır.
 
 ## 1. İndirin ve kurun
 
-**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-5e6a006ff6c0cde18caa8ba48e9341075275d6eb) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
+**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
 
 | Bilgisayarınız | Dosya |
 | --- | --- |
@@ -119,7 +119,7 @@ Görev onay bekliyorsa arayüzü açın:
 
 Linux/macOS'ta aynı komut `./viber ui first-task --store "$store"` olur. Arayüzde `/requests` bekleyen önerileri gösterir. İncelediğiniz isteği `/respond REQUEST_ID approve` ile onaylayın, ardından `/resume` yazın. `/diff` değişiklikleri, `/status` durumu, `/help` mevcut komutları gösterir. `REQUEST_ID` yerine ekrandaki gerçek kimliği yazın.
 
-**Yeni main arayüzü:** `/` yazınca komut menüsü açılır. Bu menü ve aşağıdaki yeni bellek/analiz komutları public `5e6a006` paketinden sonraki geliştirmelerdir; kullanmak için [kaynaktan kurulum](#kaynaktan-kurulum) adımını izleyin.
+`/` komut menüsü, captured project talimatları, source-bound `/memory` kayıt/arama ve `/workers` analizleri public `af70426` paketindedir; aşağıdaki örnek komutlar bu sürümde de kullanılabilir. Explicit project-memory copy ve retrieval report/scoring (`18188ea`) ile support/delivery-preview/GC kota entegrasyonu (`1765582`) yalnız sonraki yerel `main` içindedir; bu iki commit exact-source CI ve paket kabulü almamıştır. Bu eklemeler için [kaynaktan kurulum](#kaynaktan-kurulum) adımını izleyin.
 
 | Tuş / komut | Ne yapar? |
 | --- | --- |

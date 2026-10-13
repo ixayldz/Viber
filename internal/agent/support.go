@@ -156,26 +156,39 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 		return report, err
 	}
 	var allocation resource.Allocation
-	covered := false
+	owned := false
 	if s.PhysicalQuota != nil {
-		_, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, target)
-		if err != nil {
-			return report, err
+		// ReserveOrMatch distinguishes a retry of this exact support export
+		// from coverage by a compound writer. A path-only WRITING match would
+		// let changed output bytes inherit someone else's envelope.
+		upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(nil, raw)
+		if estimateErr != nil {
+			return report, estimateErr
 		}
-		if !covered {
-			// The free-space probe above is not a durable reservation; charge
-			// the shared physical quota before the output root exists.
-			upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(nil, raw)
-			if estimateErr != nil {
-				return report, estimateErr
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(raw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+		if matchErr != nil {
+			return report, matchErr
+		}
+		switch match.Scope {
+		case resource.AncestorReservationScope:
+			// The trusted outer writer owns this receipt; do not settle it here.
+		case resource.ExactReservationScope:
+			allocation = match.Allocation
+			owned = true
+			switch match.Status {
+			case "RESERVED":
+				if err = allocation.Begin(ctx); err != nil {
+					return report, err
+				}
+			case "WRITING":
+				// Resume an interrupted writer under its original reservation.
+			case "RETAINED":
+				return report, c.Fail(c.StaleAuthority, "support output was already published")
+			default:
+				return report, c.Fail(c.StaleAuthority, "support output reservation is not writable")
 			}
-			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(raw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
-			if err != nil {
-				return report, err
-			}
-			if err = allocation.Begin(ctx); err != nil {
-				return report, err
-			}
+		default:
+			return report, c.Fail(c.StoreIntegrityError, "support physical reservation scope is invalid")
 		}
 	}
 	root, err := freshPrivate(target)
@@ -207,7 +220,7 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 	if err = fileguard.SyncParents(parent, filepath.Dir("support.json")); err != nil {
 		return report, err
 	}
-	if s.PhysicalQuota != nil && !covered {
+	if s.PhysicalQuota != nil && owned {
 		inventory, measureErr := resource.Measure(root, true)
 		if measureErr != nil {
 			return report, measureErr

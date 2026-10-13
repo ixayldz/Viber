@@ -141,24 +141,36 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 		return result, err
 	}
 	var allocation resource.Allocation
-	covered := false
+	owned := false
 	if s.PhysicalQuota != nil {
-		_, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, target)
-		if err != nil {
-			return result, err
+		upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(pending, manifestRaw)
+		if estimateErr != nil {
+			return result, estimateErr
 		}
-		if !covered {
-			upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(pending, manifestRaw)
-			if estimateErr != nil {
-				return result, estimateErr
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, resource.Request{Writer: "agent", Family: "DELIVERY_PREVIEW", RequestDigest: c.HashBytes(manifestRaw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+		if matchErr != nil {
+			return result, matchErr
+		}
+		switch match.Scope {
+		case resource.AncestorReservationScope:
+			// The trusted outer writer owns this receipt; do not settle it here.
+		case resource.ExactReservationScope:
+			allocation = match.Allocation
+			owned = true
+			switch match.Status {
+			case "RESERVED":
+				if err = allocation.Begin(ctx); err != nil {
+					return result, err
+				}
+			case "WRITING":
+				// Resume an interrupted writer under its original reservation.
+			case "RETAINED":
+				return result, c.Fail(c.StaleAuthority, "delivery preview was already published")
+			default:
+				return result, c.Fail(c.StaleAuthority, "delivery preview reservation is not writable")
 			}
-			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "DELIVERY_PREVIEW", RequestDigest: c.HashBytes(manifestRaw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
-			if err != nil {
-				return result, err
-			}
-			if err = allocation.Begin(ctx); err != nil {
-				return result, err
-			}
+		default:
+			return result, c.Fail(c.StoreIntegrityError, "delivery preview physical reservation scope is invalid")
 		}
 	}
 	root, err := freshPrivate(target)
@@ -190,7 +202,7 @@ func (s *Session) DeliveryPreview(ctx context.Context, task, output string) (Del
 	if err = fileguard.Publish(root, "manifest.json", manifestRaw); err != nil {
 		return result, err
 	}
-	if s.PhysicalQuota != nil && !covered {
+	if s.PhysicalQuota != nil && owned {
 		inventory, measureErr := resource.Measure(root, true)
 		if measureErr != nil {
 			return result, measureErr

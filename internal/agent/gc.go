@@ -415,9 +415,7 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if err != nil {
 		return result, err
 	}
-	if err = s.Journal.DiskAdmission(int64(len(raw))+2<<20, true); err != nil {
-		return result, err
-	}
+	commandRaw := raw
 	intentPath := filepath.Join(base, "intent.json")
 	previousIntent, intentErr := fileguard.ReadRegular(root, intentPath, 2<<20)
 	resuming := intentErr == nil
@@ -427,8 +425,9 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if intentErr != nil && !errors.Is(intentErr, os.ErrNotExist) {
 		return result, intentErr
 	}
-	// A completed command owns a retained physical allocation already; an
-	// exact retry writes nothing and must not double-charge the same records.
+	// A completion marker may have reached disk immediately before a crash
+	// prevented the WRITING allocation from being settled. Reconcile that exact
+	// allocation below instead of assuming the marker implies a retained row.
 	completePath := filepath.Join(base, "complete.json")
 	previousComplete, completeErr := fileguard.ReadRegular(root, completePath, 2<<20)
 	if completeErr != nil && !errors.Is(completeErr, os.ErrNotExist) {
@@ -442,29 +441,44 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 		}
 		alreadyComplete = true
 	}
-	var allocation resource.Allocation
-	covered := false
-	if s.PhysicalQuota != nil && !alreadyComplete {
-		gcTarget := filepath.Join(s.directory, base)
-		allocation, covered, err = s.PhysicalQuota.EnclosingReservation(ctx, gcTarget)
-		if err != nil {
+	if !alreadyComplete {
+		if err = s.Journal.DiskAdmission(int64(len(commandRaw))+2<<20, true); err != nil {
 			return result, err
 		}
-		if !covered {
-			// The free-space probe above is not a durable reservation; charge
-			// the control budget before the first record is written. A crashed
-			// attempt keeps its charge and is adopted instead of doubled.
-			upperBytes, upperEntries, estimateErr := gcPhysicalEstimate(raw, len(plan.Objects))
-			if estimateErr != nil {
-				return result, estimateErr
+	}
+	var allocation resource.Allocation
+	owned := false
+	retained := false
+	if s.PhysicalQuota != nil {
+		gcTarget := filepath.Join(s.directory, base)
+		upperBytes, upperEntries, estimateErr := gcPhysicalEstimate(commandRaw, len(plan.Objects))
+		if estimateErr != nil {
+			return result, estimateErr
+		}
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(commandRaw), TargetRoot: gcTarget, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control})
+		if matchErr != nil {
+			return result, matchErr
+		}
+		if match.Scope == resource.ExactReservationScope {
+			allocation = match.Allocation
+			owned = true
+			switch match.Status {
+			case "RESERVED":
+				if err = allocation.Begin(ctx); err != nil {
+					return result, err
+				}
+			case "WRITING":
+				// Continue under the exact envelope after an interrupted attempt.
+			case "RETAINED":
+				if !alreadyComplete {
+					return result, c.Fail(c.StaleAuthority, "GC output is retained without its completion record")
+				}
+				retained = true
+			default:
+				return result, c.Fail(c.StaleAuthority, "GC physical allocation is not writable")
 			}
-			allocation, err = s.PhysicalQuota.Reserve(ctx, resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(raw), TargetRoot: gcTarget, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control})
-			if err != nil {
-				return result, err
-			}
-			if err = allocation.Begin(ctx); err != nil {
-				return result, err
-			}
+		} else if match.Scope != resource.AncestorReservationScope {
+			return result, c.Fail(c.StoreIntegrityError, "GC physical reservation scope is invalid")
 		}
 	}
 	objects, err := s.Archive.Inventory(ctx)
@@ -530,7 +544,7 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if err = publishGCSame(root, filepath.Join(base, "complete.json"), raw); err != nil {
 		return result, err
 	}
-	if s.PhysicalQuota != nil && !alreadyComplete {
+	if s.PhysicalQuota != nil && owned {
 		gcRoot, openErr := os.OpenRoot(filepath.Join(s.directory, base))
 		if openErr != nil {
 			return result, openErr
@@ -540,7 +554,11 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 		if err = errors.Join(measureErr, closeErr); err != nil {
 			return result, err
 		}
-		if err = allocation.Commit(ctx, inventory); err != nil {
+		if retained {
+			if err = allocation.ValidateRetained(ctx, inventory); err != nil {
+				return result, err
+			}
+		} else if err = allocation.Commit(ctx, inventory); err != nil {
 			return result, err
 		}
 	}

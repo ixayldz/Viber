@@ -1,10 +1,10 @@
 # Anahtarsız çalışma yüzeyleri
 
-Aşağıda ayrıca main geliştirmesi olarak belirtilen yeni komutlar haricinde bu kılavuzun komutları [12 Ekim engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-5e6a006ff6c0cde18caa8ba48e9341075275d6eb) bulunur. Exact source `5e6a006ff6c0cde18caa8ba48e9341075275d6eb`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38224054501) başarılıdır. Üç platformdaki gerçek yönetilen kurulum kabulü ve public indirme/provenance readback'i geçti. Stable readiness ayrı PRD kapısıdır.
+Aşağıda ayrıca sonraki kaynak geliştirmesi olarak belirtilen eklemeler haricinde bu kılavuzun komutları [güncel engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) bulunur. Exact source `af70426fe61756c63d8722b6221fe31f26a3f087`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38294014619) başarılıdır. Üç native yönetilen kurulum raporu ve 11 public asset/dokuz provenance subject readback'i doğrulandı; yerel readback indirilen binary'leri çalıştırmadı. Stable readiness ayrı PRD kapısıdır.
 
 ## Yönetilen kurulum
 
-Main'deki yeni `/memory`, `/workers`, slash palette ve captured instruction profilleri için [CLI referansını](CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler) okuyun. Bunlar public `5e6a006` paketinden sonraki geliştirmelerdir. Yeni managed pakette kullanılan memory/read-worker capability'sini okuyamayan eski binary'ye rollback engellenir; yeni manifesti tanımayan bootstrap yerine yeni doğrulanmış portable binary gerekir.
+`/memory`, `/workers`, slash palette ve proje talimatları güncel public pakettedir; [CLI referansında](CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler) kullanımını okuyun. Explicit memory copy ve retrieval report/scoring sonraki kaynak eklemeleridir; kendi exact-source kabulünü gerektirir. Managed pakette kullanılan memory/read-worker capability'sini okuyamayan eski binary'ye rollback engellenir; yeni manifesti tanımayan bootstrap yerine yeni doğrulanmış portable binary gerekir.
 
 İlk bootstrap binary'sini doğrulanmış portable paketten ayrı bir dizine açın. `package install` aynı byte snapshot'ında GitHub provenance'ını repo/workflow/ref/full SHA ile doğrular; checksum tek başına yeterli değildir. `--gh` PATH yerine operatörün seçtiği GitHub CLI'nin tam yoludur.
 
@@ -127,7 +127,7 @@ Dataset asset inventory, condition/build/source/recipe ve single-use STARTED kay
 
 | Kaynak/platform | Live apply/restore profili | Kabul sınırı |
 |---|---|---|
-| Windows fixed NTFS / yayımlanan `5e6a006ff6c0` | `apply --exclusive-ntfs` ile opt-in; exact owned checkpoint üzerinden restore ve read-only `delivery-reconcile`. | Exact-source Windows hostile-writer/checkpoint CI geçti. Mevcut single-link regular dosya içerikleriyle sınırlı profil; genel dosya oluşturma/silme yetkisi değildir. |
+| Windows fixed NTFS / yayımlanan `af70426` | `apply --exclusive-ntfs` ile opt-in; exact owned checkpoint üzerinden restore ve read-only `delivery-reconcile`. | Exact-source Windows hostile-writer/checkpoint CI geçti. Mevcut single-link regular dosya içerikleriyle sınırlı profil; genel dosya oluşturma/silme yetkisi değildir. |
 | Current main / Linux veya macOS | Doğrudan live apply/restore unsupported; fresh review package ve patch üretilebilir. | Advisory lock/hash/path kontrolü hostile writer'ı durdurmadığından fail-closed; PRD §13.3'ün candidate/patch fallback'idir, tek başına koşulsuz PRD açığı değildir. |
 | Yayımlanmış eski `engineering-f1b323d…` paket | Yeni main live-delivery komut/profili yok; yayımlanmış export akışını kullanın. | Main'deki değişiklik ve kabul eski public binary'ye aktarılmaz. |
 
