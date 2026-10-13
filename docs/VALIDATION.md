@@ -1,5 +1,11 @@
 # Doğrulama kaydı
 
+## 13 Ekim Linux race suite süre bölümlendirmesi
+
+`9a1edb6e34dac338c4da9ad8f3754b131d5f1d00` [core38427799190](https://github.com/ixayldz/Viber/actions/runs/38427799190) Linux race işi **FAIL**: `internal/agent` paketinin bütün testleri tek process'te çalışırken 900.036s package timeout doldu. Logdaki son test `TestResumeRejectsChangedLiveSourceAndPendingIntent` henüz yaklaşık üç saniye çalışmıştı; stack JSON parser içinde runnable gösterdi. Logda `WARNING: DATA RACE` bulunmadı; bu bulgu bütün race kabulü PASS demek değildir.
+
+Race invocation artık Windows complete-suite helper'ının `--race` modu ile bütün package ve Test/Fuzz/Example parent'larını keşfeder. Owner ilk sırada, diğer non-agent package'lar seri; agent dört shard ve en fazla iki worker. Her test invocation race instrumented, 15m timeout korunur; hiçbir test çıkarılmaz ve çıktılar ayrı dosyalardan JSONL olarak birleştirilir. Inventory/owner/race flag/coverage/failure-output sözleşmesi **5** Python kontrolünde PASS. Native Linux race ve bütün final exact-source yayın kapıları ayrıca geçmelidir. `feccfe3` bu scheduling düzeltmesini içermez ve kabul edilmiş paket sayılmaz.
+
 ## 13 Ekim Windows çalışan sürümün kaldırılma koruması
 
 Son bağımsız inceleme Windows uninstall preflight'ının çalışan executable yolunu yalnız lexical karşılaştırdığını buldu. Version dizinine açılan junction üzerinden başlatma bu kontrolü atlayabiliyordu. Executable ve prefix artık açık native handle'ın final path'i ile karşılaştırılır; executable bilgisi veya çözümleme başarısızsa mutation öncesinde ret verilir. Pinned Go1.27.2 Windows focused launcher/preflight/command ve gerçek junction fixture **PASS** (4.423s). Fixture alias'ın managed binary olarak tanınmasını, ayrı portable bootstrap'ın engellenmemesini ve çözümlenemeyen executable'ın reddedilmesini gerektirir. Host kullanıcı PATH'i değiştirilmedi.

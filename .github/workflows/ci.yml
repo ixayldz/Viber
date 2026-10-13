@@ -107,24 +107,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -o pipefail
-          # Execute every package once, with owner concurrency first so a
-          # steering/admission regression does not wait behind slow fixtures.
-          task_owner_package='github.com/ixayldz/Viber/internal/owner'
-          task_package_inventory="$(go list ./...)"
-          task_race_packages=()
-          task_owner_found=false
-          while IFS= read -r task_package; do
-            if [[ "$task_package" == "$task_owner_package" ]]; then
-              task_owner_found=true
-            else
-              task_race_packages+=("$task_package")
-            fi
-          done <<< "$task_package_inventory"
-          [[ "$task_owner_found" == true && "${#task_race_packages[@]}" -gt 0 ]]
-          {
-            go test -race -p 1 -json -count=1 -timeout 15m "$task_owner_package" || exit $?
-            go test -race -p 1 -json -count=1 -timeout 15m "${task_race_packages[@]}" || exit $?
-          } | tee evidence/race.jsonl
+          # Discover all packages and Test/Fuzz/Example parents; no omissions.
+          # Keep owner first and CLI/owner serial, then bound the large agent
+          # package in four instrumented shards with at most two workers.
+          python scripts/native-test-shards.py --race | tee evidence/race.jsonl
           python scripts/verify-test-results.py evidence/race.jsonl --privacy --retrieval --delivery --vault-failure
       - name: All fuzz targets
         if: runner.os == 'Linux'

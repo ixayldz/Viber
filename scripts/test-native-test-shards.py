@@ -16,6 +16,30 @@ spec.loader.exec_module(module)
 
 
 class ShardContracts(unittest.TestCase):
+    def test_race_keeps_owner_first_and_instruments_every_shard(self):
+        package = "github.com/ixayldz/Viber/internal/agent"
+        owner = "github.com/ixayldz/Viber/internal/owner"
+        packages = ["cli", package, "resource", owner]
+        names = ["TestA", "FuzzB", "ExampleC", "TestD", "TestE"]
+        with patch.object(module, "checked", side_effect=[packages, names]) as checked, patch.object(module, "execute") as execute:
+            module.main(race=True)
+        self.assertIn("-race", checked.call_args_list[1].args[0])
+        commands = execute.call_args.args[0]
+        self.assertEqual(commands[0][-3:], [owner, "cli", "resource"])
+        for command in commands:
+            self.assertEqual(command.count("-race"), 1)
+            self.assertEqual(command[command.index("-timeout") + 1], "15m")
+        observed = []
+        for command in commands[1:]:
+            observed.extend(command[command.index("-run") + 1][4:-2].split("|"))
+        self.assertEqual(sorted(observed), sorted(names))
+
+    def test_race_rejects_missing_owner_inventory(self):
+        with patch.object(module, "checked", side_effect=[["other", "github.com/ixayldz/Viber/internal/agent"], ["TestA"]]), patch.object(module, "execute") as execute:
+            with self.assertRaisesRegex(RuntimeError, "owner race inventory"):
+                module.main(race=True)
+        execute.assert_not_called()
+
     def test_inventory_distributes_every_test_fuzz_and_example_once(self):
         package = "github.com/ixayldz/Viber/internal/agent"
         names = ["TestZulu", "TestAlpha", "FuzzInput", "ExampleRun", "TestBeta"]

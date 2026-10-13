@@ -4,7 +4,10 @@ No test is filtered out: discover Test/Fuzz/Example names and distribute all of
 them. Other packages run first and serially, preserving owner/CLI isolation.
 Agent shards then run with at most two workers. Each worker has a separate
 output file; complete JSONL is merged in shard order without interleaving.
+With --race every discovered package and shard uses the race detector, and the
+owner package runs first in the serial package batch.
 """
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 import re
 import shutil
@@ -57,12 +60,13 @@ def execute(commands):
         raise RuntimeError(f"native acceptance failed in shards {failures}")
 
 
-def main():
+def main(race=False):
     package = "github.com/ixayldz/Viber/internal/agent"
     packages = checked(["go", "list", "./..."])
     if packages.count(package) != 1 or len(packages) < 2:
         raise RuntimeError("complete native package inventory unavailable")
-    names = [line for line in checked(["go", "test", "-list", ".", package])
+    race_flags = ["-race"] if race else []
+    names = [line for line in checked(["go", "test"] + race_flags + ["-list", ".", package])
              if re.fullmatch(r"(?:Test|Fuzz|Example)[A-Za-z0-9_]+", line)]
     if not names or len(names) != len(set(names)):
         raise RuntimeError("complete agent test inventory unavailable")
@@ -70,9 +74,15 @@ def main():
     shards = [names[index::4] for index in range(4)]
     if sorted(name for shard in shards for name in shard) != names:
         raise RuntimeError("native shard coverage mismatch")
-    commands = [["go", "test", "-p", "1", "-json", "-count=1", "-timeout", "15m"]
-                + [name for name in packages if name != package]]
-    commands += [["go", "test", "-p", "1", "-json", "-count=1", "-timeout", "15m",
+    other_packages = [name for name in packages if name != package]
+    if race:
+        owner = "github.com/ixayldz/Viber/internal/owner"
+        if other_packages.count(owner) != 1:
+            raise RuntimeError("owner race inventory unavailable")
+        other_packages = [owner] + [name for name in other_packages if name != owner]
+    commands = [["go", "test"] + race_flags + ["-p", "1", "-json", "-count=1", "-timeout", "15m"]
+                + other_packages]
+    commands += [["go", "test"] + race_flags + ["-p", "1", "-json", "-count=1", "-timeout", "15m",
                   "-run", "^(?:" + "|".join(shard) + ")$", package]
                  for shard in shards if shard]
     execute(commands)
@@ -80,7 +90,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("--race", action="store_true", help="run every package with the race detector")
+        main(race=parser.parse_args().race)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
