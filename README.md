@@ -4,7 +4,7 @@
 
 ChatGPT hesabınızla kullanabilirsiniz. **Bu giriş için OpenAI API anahtarı gerekmez.** Yerel Ollama ve internetsiz demo da desteklenir.
 
-> **Sürüm durumu:** 0.9.0-dev, engineering ön sürümü. İndirilebilir paket vardır; kararlı üretim sürümü henüz ilan edilmemiştir. Bu public paket için ChatGPT hesabıyla ilk görev kabulü **NOT_RUN**; her hesapta çalıştığı iddia edilmez. [Destek durumu](docs/CAPABILITIES.md).
+> **Sürüm durumu:** 0.9.0-dev, engineering ön sürümü. İndirilebilir paket vardır; kararlı üretim sürümü henüz ilan edilmemiştir. Windows public `08d4bf8` paketiyle gerçek ChatGPT giriş ve model listesi kabulü geçti. İlk kodlama çağrısı optional araç şeması nedeniyle `invalid_function_parameters` ile reddedildi; tamamlanmış inference kabulü henüz yoktur. Düzeltme kaynak kodunda hazırdır; yeni exact-source paket kabulünden sonra aynı özel görev sürdürülecektir. [Destek durumu](docs/CAPABILITIES.md).
 
 [İndir](https://github.com/ixayldz/Viber/releases) · [Kurulum ayrıntıları](docs/INSTALL.md) · [CLI kılavuzu](docs/CLI_REFERENCE.md) · [PRD](prd.md) · [MIT lisansı](LICENSE)
 
@@ -21,11 +21,11 @@ Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension
 
 ## Hızlı başlangıç
 
-[Güncel paketi](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) indirip doğruladıktan sonra arşivi yeni bir klasöre çıkarın. O klasörde terminal açıp Windows'ta `.\viber.exe`, Linux/macOS'ta `./viber` çalıştırın. PATH'e eklediyseniz yalnız `viber` yazın. Başlangıç ekranı proje, model ve görev seçimini adım adım yapar.
+[Güncel paketi](https://github.com/ixayldz/Viber/releases/tag/engineering-08d4bf868c02bfeea5e90cd095d11945b3cf8f6c) indirip doğruladıktan sonra arşivi yeni bir klasöre çıkarın. O klasörde terminal açıp Windows'ta `.\viber.exe`, Linux/macOS'ta `./viber` çalıştırın. PATH'e eklediyseniz yalnız `viber` yazın. Başlangıç ekranı proje, model ve görev seçimini adım adım yapar.
 
 Başlangıç ekranında **1: ChatGPT**, **2: yerel Ollama**, **3: internetsiz örnek** seçilir. ChatGPT/Ollama için proje klasörünü seçip görevi kendi sözlerinizle yazın. Görev kimliği ve proje dışındaki özel kayıt klasörü otomatik oluşturulur. ChatGPT'ye proje bağlamı gönderilmeden önce `YES` istenir; giriş gerekiyorsa `LOGIN` seçimi resmî tarayıcı akışını açar. Ollama için kurulu modelin adını girin. `CANCEL` veya `q` başlangıcı durdurur.
 
-Yeni main kaynağında ChatGPT/Ollama görevi oluşturulunca arayüz modelin bitmesini beklemeden açılır. Önerilen kod değişiklikleri incelemenizi bekler; `/requests` ve `/diff` ile bakıp `/respond REQUEST_ID approve` ve `/resume` ile devam edebilirsiniz. Bağımsız kontrolü olmayan sonucun teslimi ayrıca onay ister ve UNVERIFIED kalır. Bu takip değişikliği henüz public `af70426` paketinde değildir.
+Public `08d4bf8` paketinde ChatGPT/Ollama görevi oluşturulunca arayüz modelin bitmesini beklemeden açılır. Önerilen kod değişiklikleri incelemenizi bekler; `/requests` ve `/diff` ile bakıp `/respond REQUEST_ID approve` ve `/resume` ile devam edebilirsiniz. Bağımsız kontrolü olmayan sonucun teslimi ayrıca onay ister ve UNVERIFIED kalır. Bu akış public pakettedir; yukarıdaki gerçek ChatGPT kabul sınırını dikkate alın.
 
 Gerçek terminalde görev başladıktan sonra TUI otomatik açılır. `/` ile komutlara bakın, `/requests` ile bekleyen öneriyi inceleyin, onayladıktan sonra `/resume` kullanın. `/diff` değişiklikleri gösterir; `/exit` arayüzden ayrılır ve geçmişi korur. İnternetsiz örnek yalnız özel bir `hello.txt` projesinde sabit demo çalıştırır; kendi projenizi okumaz, gerçek model kullanmaz ve **UNVERIFIED / exit 2** kalır.
 
@@ -33,7 +33,7 @@ Gerçek terminalde görev başladıktan sonra TUI otomatik açılır. `/` ile ko
 
 ## 1. İndirin ve kurun
 
-**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
+**Go kurmanız gerekmez.** [Yayımlanmış engineering paketinin](https://github.com/ixayldz/Viber/releases/tag/engineering-08d4bf868c02bfeea5e90cd095d11945b3cf8f6c) Assets bölümünden işletim sisteminize uygun arşivi indirin. Kaynak revizyonu ve public varlık doğrulaması [kurulum kılavuzunda](docs/INSTALL.md) yer alır:
 
 | Bilgisayarınız | Dosya |
 | --- | --- |
@@ -61,7 +61,7 @@ Linux / macOS:
 
 Main branch, son public paketten daha yeni geliştirmeler içerebilir. **Releases'ten indirilen pakette bütün main komutları bulunduğunu varsaymayın.** Güncel kaynak kodunu kullanmak için aşağıdaki [kaynaktan kurulum](#kaynaktan-kurulum) yolunu izleyin.
 
-**Yeni main: terminalden `viber` ile açma.** Doğrulanmış yeni arşivi `package install --launcher` ile kurunca Windows kullanıcı PATH'ine sahipliği izlenen `viber.cmd` eklenir; yeni terminalde `viber` çalışır. Linux/macOS için kurulumun verdiği `export PATH=…` satırını çalıştırın. [Tam kurulum komutu ve sınırlar](docs/INSTALL.md#terminalde-viber-komutu-yeni-main). Public `af70426` bu seçeneği içermez.
+**Terminalden `viber` ile açma.** Doğrulanmış yeni arşivi `package install --launcher` ile kurunca Windows kullanıcı PATH'ine sahipliği izlenen `viber.cmd` eklenir; yeni terminalde `viber` çalışır. Linux/macOS için kurulumun verdiği `export PATH=…` satırını çalıştırın. [Tam kurulum komutu ve sınırlar](docs/INSTALL.md#terminalde-viber-komutu-yeni-main). Public `08d4bf8` bu seçeneği içerir; Windows kurulumu gerçek host üzerinde de kabul edildi.
 
 Bu exact-source paket için üç native platformda yönetilen kurulum, ilk offline görev, önceki public `90bc97` sürümünden yükseltme → geri dönüş → yeniden yükseltme ve yalnız yönetilen program dosyalarını kaldırma kabulü geçti. Mevcut görevin durumu ve dış store korundu. `package install`, `status`, `rollback` ve `uninstall` adımları [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#yönetilen-kurulum) anlatılır.
 
@@ -123,7 +123,7 @@ Görev onay bekliyorsa arayüzü açın:
 
 Linux/macOS'ta aynı komut `./viber ui first-task --store "$store"` olur. Arayüzde `/requests` bekleyen önerileri gösterir. İncelediğiniz isteği `/respond REQUEST_ID approve` ile onaylayın, ardından `/resume` yazın. `/diff` değişiklikleri, `/status` durumu, `/help` mevcut komutları gösterir. `REQUEST_ID` yerine ekrandaki gerçek kimliği yazın.
 
-`/` komut menüsü, captured project talimatları, source-bound `/memory` kayıt/arama ve `/workers` analizleri public `af70426` paketindedir; aşağıdaki örnek komutlar bu sürümde de kullanılabilir. Explicit project-memory copy ve retrieval report/scoring (`18188ea`) ile support/delivery-preview/GC kota entegrasyonu (`1765582`) yalnız sonraki yerel `main` içindedir; bu iki commit exact-source CI ve paket kabulü almamıştır. Bu eklemeler için [kaynaktan kurulum](#kaynaktan-kurulum) adımını izleyin.
+`/` komut menüsü, proje talimatları (AGENTS/CLAUDE), `/memory`, `/workers`, explicit memory copy, retrieval report/scoring, support ve delivery preview public `08d4bf8` paketindedir. Yeni GC receipt compaction, evaluator owner partition ve conflict metadata sınırları henüz sonraki kaynak değişikliğidir; kendi paket kabulünü bekler.
 
 | Tuş / komut | Ne yapar? |
 | --- | --- |

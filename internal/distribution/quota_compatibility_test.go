@@ -12,7 +12,7 @@ import (
 )
 
 func TestInstallAndRollbackRespectPhysicalQuotaProtocols(t *testing.T) {
-	for _, protocol := range []string{RuntimeCapabilityPhysicalQuotaIntentV1, RuntimeCapabilityPhysicalQuotaHandoffV1} {
+	for _, protocol := range []string{RuntimeCapabilityPhysicalQuotaIntentV1, RuntimeCapabilityPhysicalQuotaHandoffV1, RuntimeCapabilityPhysicalQuotaPartitionV1} {
 		t.Run(protocol, func(t *testing.T) {
 			ctx := context.Background()
 			platform := nativePlatform(t)
@@ -49,11 +49,17 @@ func TestInstallAndRollbackRespectPhysicalQuotaProtocols(t *testing.T) {
 			request := resource.Request{Writer: "compatibility", Family: "QUOTA_PROTOCOL", RequestDigest: c.HashBytes([]byte("intent")), TargetRoot: filepath.Join(parent, ".stage"), UpperBytes: 1 << 20, UpperEntries: 32, Class: resource.Payload}
 			if protocol == RuntimeCapabilityPhysicalQuotaIntentV1 {
 				_, _, err = session.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, []byte("stable-binding"), []byte("{}"))
-			} else {
+			} else if protocol == RuntimeCapabilityPhysicalQuotaHandoffV1 {
 				var allocation resource.Allocation
 				allocation, err = session.PhysicalQuota.Reserve(ctx, request)
 				if err == nil {
 					err = allocation.PrepareHandoff(ctx, filepath.Join(parent, "final"))
+				}
+			} else {
+				var allocation resource.Allocation
+				allocation, err = session.PhysicalQuota.Reserve(ctx, request)
+				if err == nil {
+					err = allocation.PreparePartition(ctx, resource.IndependentOwnerPartition)
 				}
 			}
 			if err != nil {

@@ -36,7 +36,11 @@ func encodeRequest(provider string, r Request) (any, string, error) {
 		}
 		tools := []any{}
 		for _, tool := range r.Tools {
-			tools = append(tools, map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "parameters": tool.Parameters, "strict": true})
+			// Native schemas deliberately allow omitted paging/config fields.
+			// Responses strict mode requires every property to be required; do
+			// not silently change those schemas or default/null semantics.
+			// Tool arguments still pass the native decoder and policy gates.
+			tools = append(tools, map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "parameters": tool.Parameters, "strict": false})
 		}
 		return map[string]any{"model": r.Model, "instructions": r.Instructions, "input": input, "tools": tools, "store": false, "stream": r.Stream, "parallel_tool_calls": false, "truncation": "disabled", "max_output_tokens": r.MaxOutputTokens, "include": []string{"reasoning.encrypted_content"}}, "/v1/responses", nil
 	case "anthropic":

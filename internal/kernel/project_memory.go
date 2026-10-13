@@ -44,6 +44,10 @@ func validProjectMemoryMutation(state *c.TaskState, event c.Event, payload c.Eve
 		event.KernelGeneration < state.KernelGeneration || requireRebind && event.KernelGeneration <= state.KernelGeneration {
 		return false
 	}
+	if witness := m.ConflictMetadata; witness != nil &&
+		(witness.BaselineDigest != state.BaselineDigest || witness.CandidateDigest != state.CandidateDigest) {
+		return false
+	}
 	if state.Deletion != nil || state.InputBarrier || len(state.PendingInputIDs) != 0 ||
 		state.WorkBudget != nil && state.WorkBudget.EffectPending || hasUnsettledWorkExposure(*state) ||
 		!projectMemoryExecutionQuiescent(state.Execution) {

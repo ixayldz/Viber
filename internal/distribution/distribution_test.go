@@ -193,10 +193,11 @@ func TestRuntimeCapabilityManifestCompatibilityIsStrict(t *testing.T) {
 		t.Fatal("old strict package reader silently accepted a manifest with unknown runtime semantics")
 	}
 	for name, invalid := range map[string][]string{
-		"unknown":                     {RuntimeCapabilityProjectMemoryV1, "future_feature_v9"},
-		"duplicate":                   {RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityProjectMemoryV1},
-		"unsorted":                    {RuntimeCapabilityReadWorkersV1, RuntimeCapabilityProjectMemoryV1},
-		"copy_without_project_memory": {RuntimeCapabilityProjectMemoryCopyV1},
+		"unknown":                          {RuntimeCapabilityProjectMemoryV1, "future_feature_v9"},
+		"duplicate":                        {RuntimeCapabilityProjectMemoryV1, RuntimeCapabilityProjectMemoryV1},
+		"unsorted":                         {RuntimeCapabilityReadWorkersV1, RuntimeCapabilityProjectMemoryV1},
+		"copy_without_project_memory":      {RuntimeCapabilityProjectMemoryCopyV1},
+		"conflict_metadata_without_memory": {RuntimeCapabilityProjectMemoryConflictMetadataV1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			revision := strings.Repeat("6", 40)

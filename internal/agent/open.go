@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -41,5 +42,14 @@ func OpenExisting(ctx context.Context, directory string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Open(ctx, directory)
+	session, err := Open(ctx, directory)
+	if err != nil {
+		return nil, err
+	}
+	if session.PhysicalQuota != nil {
+		if err = session.PhysicalQuota.ValidateOwnerPartition(ctx, directory); err != nil {
+			return nil, errors.Join(err, session.Close())
+		}
+	}
+	return session, nil
 }

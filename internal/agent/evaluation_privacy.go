@@ -9,12 +9,23 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 )
 
 // OpenIndependentEvaluator creates a fresh separate owner under the original's
 // external deletion authority. Its durable scope and owner lease precede raw
 // candidate import. It never adopts or rebinds an existing store.
 func (s *Session) OpenIndependentEvaluator(ctx context.Context, directory string) (*Session, error) {
+	return s.openIndependentEvaluator(ctx, directory, nil)
+}
+
+// OpenIndependentEvaluatorPartition binds a freshly created report owner to
+// its outer physical quota partition before the owner store starts writing.
+func (s *Session) OpenIndependentEvaluatorPartition(ctx context.Context, directory string, allocation resource.Allocation) (*Session, error) {
+	return s.openIndependentEvaluator(ctx, directory, &allocation)
+}
+
+func (s *Session) openIndependentEvaluator(ctx context.Context, directory string, partition *resource.Allocation) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensurePrivacy(ctx); err != nil {
@@ -33,6 +44,11 @@ func (s *Session) OpenIndependentEvaluator(ctx context.Context, directory string
 	}
 	if err = root.Close(); err != nil {
 		return nil, err
+	}
+	if partition != nil {
+		if err = partition.BindPartitionOwner(ctx, destination); err != nil {
+			return nil, err
+		}
 	}
 	return openSession(ctx, destination, s.privacy)
 }

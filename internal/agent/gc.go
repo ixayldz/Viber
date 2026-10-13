@@ -4,14 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
-	"os"
-	"path/filepath"
-	"sort"
 )
 
 type GCPlan struct {
@@ -436,6 +438,16 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if intentErr != nil && !errors.Is(intentErr, os.ErrNotExist) {
 		return result, intentErr
 	}
+	if intentErr != nil && errors.Is(intentErr, os.ErrNotExist) {
+		// A completion or object receipt without its original intent cannot
+		// authorize replay or receipt retirement.
+		entries, readDirErr := fs.ReadDir(root.FS(), filepath.ToSlash(base))
+		if readDirErr == nil && len(entries) != 0 {
+			return result, c.Fail(c.StoreIntegrityError, "GC records exist without their durable intent")
+		} else if readDirErr != nil && !errors.Is(readDirErr, os.ErrNotExist) {
+			return result, readDirErr
+		}
+	}
 	// A completion marker may have reached disk immediately before a crash
 	// prevented the WRITING allocation from being settled. Reconcile that exact
 	// allocation below instead of assuming the marker implies a retained row.
@@ -447,10 +459,26 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	alreadyComplete := false
 	if completeErr == nil {
 		var prior GCResult
+		if err = validateGCRecord(filepath.ToSlash(completePath), previousComplete); err != nil {
+			return result, err
+		}
 		if c.DecodeStrict(previousComplete, &prior) != nil || prior.CommandID != command.CommandID || prior.PlanDigest != command.Plan.Digest {
 			return result, c.Fail(c.CommandIDConflict, "immutable GC record differs")
 		}
+		if err = validateGCCompletionAgainstCommand(command, prior); err != nil {
+			return result, err
+		}
+		result = prior
 		alreadyComplete = true
+	}
+	if resuming {
+		records, recordsErr := readGCCommandRecords(root, base)
+		if recordsErr != nil {
+			return result, recordsErr
+		}
+		if err = validateGCMaintenanceRecords(records); err != nil {
+			return result, err
+		}
 	}
 	if !alreadyComplete {
 		if err = s.Journal.DiskAdmission(int64(len(commandRaw))+2<<20, true); err != nil {
@@ -485,6 +513,26 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 					return result, c.Fail(c.StaleAuthority, "GC output is retained without its completion record")
 				}
 				retained = true
+			case "FREE_PENDING":
+				if alreadyComplete {
+					// A pending member free may have been interrupted after unlink.
+					// Verify every still-retained command file against its saved
+					// inventory before returning the completion without another unlink.
+					pendingRoot, openErr := os.OpenRoot(gcTarget)
+					if openErr != nil {
+						return result, openErr
+					}
+					pendingInventory, measureErr := resource.Measure(pendingRoot, true)
+					closeErr := pendingRoot.Close()
+					if err = errors.Join(measureErr, closeErr); err != nil {
+						return result, err
+					}
+					if err = allocation.ValidateFreePending(ctx, pendingInventory); err != nil {
+						return result, err
+					}
+					return result, nil
+				}
+				return result, c.Fail(c.StaleAuthority, "incomplete GC output has an unresolved physical free intent")
 			default:
 				return result, c.Fail(c.StaleAuthority, "GC physical allocation is not writable")
 			}
@@ -512,57 +560,59 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 	if err = publishGCSame(root, intentPath, raw); err != nil {
 		return result, err
 	}
-	for _, object := range plan.Objects {
-		if err = ctx.Err(); err != nil {
+	if !alreadyComplete {
+		for _, object := range plan.Objects {
+			if err = ctx.Err(); err != nil {
+				return result, err
+			}
+			name := filepath.Join(base, c.HashBytes([]byte(object.Path))+".json")
+			prior, readErr := fileguard.ReadRegular(root, name, 4096)
+			var receipt GCObjectReceipt
+			if readErr == nil {
+				if c.DecodeStrict(prior, &receipt) != nil || receipt.Object != object || (receipt.Status != "UNLINKED_AND_DIRECTORY_SYNCED" && receipt.Status != "ALREADY_ABSENT_AFTER_INTENT") {
+					return result, c.Fail(c.StoreIntegrityError, "GC receipt binding invalid")
+				}
+			} else {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					return result, readErr
+				}
+				removed, err := s.Archive.RemoveOrphan(object)
+				if err != nil {
+					return result, err
+				}
+				receipt = GCObjectReceipt{Object: object, Status: "ALREADY_ABSENT_AFTER_INTENT"}
+				if removed {
+					receipt.Status = "UNLINKED_AND_DIRECTORY_SYNCED"
+				}
+				raw, err = c.CanonicalV1(receipt)
+				if err != nil {
+					return result, err
+				}
+				if err = fileguard.Publish(root, name, raw); err != nil {
+					return result, err
+				}
+			}
+			result.Objects = append(result.Objects, receipt)
+			if receipt.Status == "UNLINKED_AND_DIRECTORY_SYNCED" {
+				result.BytesRemoved += object.Size
+			}
+		}
+		raw, err = c.CanonicalV1(result)
+		if err != nil {
 			return result, err
 		}
-		name := filepath.Join(base, c.HashBytes([]byte(object.Path))+".json")
-		prior, readErr := fileguard.ReadRegular(root, name, 4096)
-		var receipt GCObjectReceipt
-		if readErr == nil {
-			if c.DecodeStrict(prior, &receipt) != nil || receipt.Object != object || (receipt.Status != "UNLINKED_AND_DIRECTORY_SYNCED" && receipt.Status != "ALREADY_ABSENT_AFTER_INTENT") {
-				return result, c.Fail(c.StoreIntegrityError, "GC receipt binding invalid")
-			}
-		} else {
-			if !errors.Is(readErr, os.ErrNotExist) {
-				return result, readErr
-			}
-			removed, err := s.Archive.RemoveOrphan(object)
-			if err != nil {
-				return result, err
-			}
-			receipt = GCObjectReceipt{Object: object, Status: "ALREADY_ABSENT_AFTER_INTENT"}
-			if removed {
-				receipt.Status = "UNLINKED_AND_DIRECTORY_SYNCED"
-			}
-			raw, err = c.CanonicalV1(receipt)
-			if err != nil {
-				return result, err
-			}
-			if err = fileguard.Publish(root, name, raw); err != nil {
-				return result, err
-			}
+		if err = publishGCSame(root, filepath.Join(base, "complete.json"), raw); err != nil {
+			return result, err
 		}
-		result.Objects = append(result.Objects, receipt)
-		if receipt.Status == "UNLINKED_AND_DIRECTORY_SYNCED" {
-			result.BytesRemoved += object.Size
-		}
-	}
-	raw, err = c.CanonicalV1(result)
-	if err != nil {
-		return result, err
-	}
-	if err = publishGCSame(root, filepath.Join(base, "complete.json"), raw); err != nil {
-		return result, err
 	}
 	if s.PhysicalQuota != nil && owned {
 		gcRoot, openErr := os.OpenRoot(filepath.Join(s.directory, base))
 		if openErr != nil {
 			return result, openErr
 		}
+		defer gcRoot.Close()
 		inventory, measureErr := resource.Measure(gcRoot, true)
-		closeErr := gcRoot.Close()
-		if err = errors.Join(measureErr, closeErr); err != nil {
+		if err = measureErr; err != nil {
 			return result, err
 		}
 		if retained {
@@ -572,8 +622,83 @@ func (s *Session) CollectGarbage(ctx context.Context, command GCCommand) (GCResu
 		} else if err = allocation.Commit(ctx, inventory); err != nil {
 			return result, err
 		}
+		pending, retireErr := s.retireGCObjectReceipts(ctx, gcRoot, command, result)
+		if retireErr != nil {
+			return result, retireErr
+		}
+		if pending {
+			return result, nil
+		}
+		inventory, err = resource.Measure(gcRoot, true)
+		if err != nil {
+			return result, err
+		}
+		if err = allocation.ValidateRetained(ctx, inventory); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
+}
+
+// retireGCObjectReceipts removes only the per-object files already represented
+// by a matching durable completion. The original command and exact result stay
+// retained for retries and backup/restore; quota free intents reconcile each
+// unlink before the next receipt is considered.
+func (s *Session) retireGCObjectReceipts(ctx context.Context, root *os.Root, command GCCommand, result GCResult) (bool, error) {
+	if s.PhysicalQuota == nil {
+		return false, nil
+	}
+	commandRaw, err := c.CanonicalV1(command)
+	if err != nil {
+		return false, err
+	}
+	upperBytes, upperEntries, err := gcPhysicalEstimate(commandRaw, len(command.Plan.Objects))
+	if err != nil {
+		return false, err
+	}
+	request := resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(commandRaw), TargetRoot: root.Name(), UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control}
+	for _, receipt := range result.Objects {
+		if err = ctx.Err(); err != nil {
+			return false, err
+		}
+		name := c.HashBytes([]byte(receipt.Object.Path)) + ".json"
+		raw, readErr := fileguard.ReadRegular(root, name, 4096)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+		if err = validateGCRecord(filepath.ToSlash(filepath.Join("maintenance", "gc", c.HashBytes([]byte(command.CommandID)), name)), raw); err != nil {
+			return false, err
+		}
+		var actual GCObjectReceipt
+		if c.DecodeStrict(raw, &actual) != nil || actual != receipt {
+			return false, c.Fail(c.StoreIntegrityError, "GC object receipt differs from its durable completion")
+		}
+		if _, err = s.PhysicalQuota.ReleaseFile(ctx, root, name, c.HashBytes(raw), int64(len(raw)), int64(len(raw))); err != nil {
+			return false, err
+		}
+		if _, statErr := root.Lstat(name); statErr == nil {
+			return false, c.Fail(c.StaleAuthority, "GC object receipt was not physically released")
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return false, statErr
+		}
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, request)
+		if matchErr != nil {
+			return false, matchErr
+		}
+		if match.Scope != resource.ExactReservationScope {
+			return false, c.Fail(c.StoreIntegrityError, "GC physical allocation scope changed during receipt retirement")
+		}
+		if match.Status == "FREE_PENDING" {
+			return true, nil
+		}
+		if match.Status != "RETAINED" {
+			return false, c.Fail(c.BudgetLimitReached, "GC receipt retirement awaits physical free reconciliation")
+		}
+	}
+	return false, nil
 }
 
 // gcPhysicalEstimate bounds the durable control records of one GC command:

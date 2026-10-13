@@ -164,7 +164,7 @@ jobs:
           [[ "$VIBER_GO_GRAPH_TEST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
           export VIBER_GO_GRAPH_TEST_IMAGE
           set -o pipefail
-          go test -p 1 -json -count=1 -timeout 15m ./internal/intelligence ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation ./internal/extensions ./internal/resource ./internal/distribution | tee evidence/docker.jsonl
+          go test -p 1 -json -count=1 -timeout 15m ./internal/intelligence ./internal/runner ./internal/cli ./internal/agent ./internal/evaluation ./internal/extensions ./internal/resource ./internal/distribution ./internal/model | tee evidence/docker.jsonl
           python3 scripts/verify-test-results.py evidence/docker.jsonl --docker --delivery
       - name: Bounded physical filesystem pressure
         shell: bash

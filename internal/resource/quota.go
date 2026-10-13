@@ -360,6 +360,12 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = ensureHandoffSchema(db); err != nil {
 		return nil, err
 	}
+	if err = ensureQuotaPartitionSchema(db); err != nil {
+		return nil, err
+	}
+	if err = validateQuotaPartitionRecords(db, stored.LedgerID); err != nil {
+		return nil, err
+	}
 	if err = validateHandoffRecordsOnOpen(db, root, authority, stored.LedgerID); err != nil {
 		return nil, err
 	}
@@ -906,6 +912,9 @@ func (l *Ledger) reserveOrMatchIntent(ctx context.Context, request Request, matc
 				return nil
 			}
 		}
+		if err = checkPartitionAdmissionTx(ctx, tx, request, target, targetExisted); err != nil {
+			return err
+		}
 		capacity, err := capacityTx(tx, l.Limits)
 		if err != nil {
 			return err
@@ -987,6 +996,7 @@ func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request
 		AND id NOT IN (
 			SELECT base_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_mutable_replacements
 			UNION SELECT base_id FROM quota_control_reserves UNION SELECT standby_id FROM quota_control_reserves
+			UNION SELECT member_id FROM quota_partition_members
 		)`)
 	if err != nil {
 		return ReservationMatch{}, nil, false, err
@@ -1203,6 +1213,14 @@ func (a Allocation) Commit(ctx context.Context, inventory Inventory) error {
 		}
 		defer tx.Rollback()
 		var pendingHandoff int
+		var partitionMember int
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM quota_partitions WHERE allocation_id=?) OR
+			EXISTS(SELECT 1 FROM quota_partition_members WHERE member_id=?)`, a.ID, a.ID).Scan(&partitionMember); err != nil {
+			return err
+		}
+		if partitionMember != 0 {
+			return c.Fail(c.StaleAuthority, "partition member receipts must be settled by their atomic partition transaction")
+		}
 		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM quota_handoffs WHERE allocation_id=? AND state IN ('PREPARED','STAGE_BOUND')", a.ID).Scan(&pendingHandoff); err != nil {
 			return err
 		}
@@ -1475,35 +1493,53 @@ func retainedSeedID(authority, rootPath, rootIdentity string) string {
 }
 
 func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory) error {
-	rows, err := tx.QueryContext(ctx, "SELECT status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
+	rows, err := tx.QueryContext(ctx, "SELECT id,status,upper_bytes,upper_entries,retained_bytes,retained_entries,receipt,target_root,free_before FROM quota_allocations WHERE id NOT IN (SELECT standby_id FROM quota_mutable_replacements UNION SELECT standby_id FROM quota_control_reserves)")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	known := map[string]FileReceipt{}
+	expectedOwners := map[string]uint64{}
+	pendingMissing := map[string]uint64{}
+	type pendingValidation struct {
+		allocation pendingAllocation
+		prefix     string
+	}
+	pending := make([]pendingValidation, 0, 2)
+	unknownRoots := make([]string, 0, 2)
 	var charged, entries uint64
-	unknown := false
 	for rows.Next() {
-		var status, target string
-		var upperBytes, upperEntries, retainedBytes, retainedEntries int64
+		var id, status, target string
+		var upperBytes, upperEntries, retainedBytes, retainedEntries, freeBefore int64
 		var raw []byte
-		if err = rows.Scan(&status, &upperBytes, &upperEntries, &retainedBytes, &retainedEntries, &raw, &target); err != nil {
+		if err = rows.Scan(&id, &status, &upperBytes, &upperEntries, &retainedBytes, &retainedEntries, &raw, &target, &freeBefore); err != nil {
 			return err
 		}
-		if upperBytes < 0 || upperEntries < 0 || retainedBytes < 0 || retainedEntries < 0 {
+		if upperBytes < 0 || upperEntries < 0 || retainedBytes < 0 || retainedEntries < 0 || freeBefore < 0 {
 			return c.Fail(c.StoreIntegrityError, "invalid physical allocation counters")
 		}
 		if status == "RESERVED" || status == "WRITING" {
-			if filepath.Clean(target) == filepath.Clean(measured.RootPath) {
-				unknown = true
-				charged, err = add(charged, uint64(upperBytes))
-				if err != nil {
-					return err
+			relative := ""
+			if partitionPathWithin(measured.RootPath, target) {
+				var relOK bool
+				relative, relOK = partitionRelativePath(measured.RootPath, target)
+				if !relOK {
+					continue
 				}
-				entries, err = add(entries, uint64(upperEntries))
-				if err != nil {
-					return err
-				}
+			} else if partitionPathWithin(target, measured.RootPath) {
+				// An admitted ancestor root owns the whole measured subtree.
+				relative = "."
+			} else {
+				continue
+			}
+			unknownRoots = append(unknownRoots, filepath.ToSlash(relative))
+			charged, err = add(charged, uint64(upperBytes))
+			if err != nil {
+				return err
+			}
+			entries, err = add(entries, uint64(upperEntries))
+			if err != nil {
+				return err
 			}
 			continue
 		}
@@ -1529,6 +1565,13 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 		if inventory.VolumeIdentity != measured.VolumeIdentity {
 			return c.Fail(c.StaleAuthority, "retained physical volume changed")
 		}
+		if filepath.Clean(inventory.RootPath) != filepath.Clean(measured.RootPath) {
+			if err = verifyPartitionDirectory(inventory.RootPath, inventory.RootIdentity, inventory.VolumeIdentity); err != nil {
+				if status != "FREE_PENDING" || !errors.Is(err, os.ErrNotExist) {
+					return c.Fail(c.StaleAuthority, "retained physical receipt root identity changed")
+				}
+			}
+		}
 		charged, err = add(charged, uint64(retainedBytes))
 		if err != nil {
 			return err
@@ -1543,26 +1586,87 @@ func validateRetainedReopen(ctx context.Context, tx *sql.Tx, measured Inventory)
 				return c.Fail(c.StoreIntegrityError, "conflicting physical file receipts")
 			}
 			known[file.Path] = file
+			if !statOnlyFile(filepath.FromSlash(file.Path)) {
+				expectedOwners[file.Path]++
+			}
+		}
+		if status == "FREE_PENDING" {
+			pending = append(pending, pendingValidation{allocation: pendingAllocation{
+				ID: id, Target: target, Volume: inventory.VolumeIdentity, Status: status,
+				RetainedBytes: retainedBytes, RetainedEntries: retainedEntries, Before: freeBefore, Receipt: raw,
+			}, prefix: prefix})
 		}
 	}
 	if err = rows.Err(); err != nil {
 		return err
 	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range pending {
+		intent, found, intentErr := readFreeIntentForValidation(ctx, tx, item.allocation.ID)
+		if intentErr != nil {
+			return intentErr
+		}
+		if !found {
+			// Legacy pending receipts have no exact member identity. They remain
+			// charged as UNKNOWN, but cannot authorize a missing retained file.
+			continue
+		}
+		saved, validateErr := validatePendingIntent(item.allocation, intent)
+		if validateErr != nil {
+			return validateErr
+		}
+		pendingPath := item.prefix + filepath.ToSlash(intent.Path)
+		var exact FileReceipt
+		foundExact := false
+		for _, file := range saved.Files {
+			if file.Path == intent.Path {
+				exact = file
+				foundExact = true
+				break
+			}
+		}
+		exact.Path = pendingPath
+		if !foundExact || !sameReceipt(known[pendingPath], exact) {
+			return c.Fail(c.StoreIntegrityError, "pending free member is not bound to its retained physical path")
+		}
+		pendingMissing[pendingPath]++
+	}
 	if measured.ChargedBytes > charged || measured.Entries > entries {
 		return c.Fail(c.StaleAuthority, fmt.Sprintf("physical tree exceeds retained or outstanding admission (bytes=%d/%d entries=%d/%d)", measured.ChargedBytes, charged, measured.Entries, entries))
 	}
 	unadmitted := make([]string, 0)
+	seen := make(map[string]struct{}, len(measured.Files))
 	for _, file := range measured.Files {
+		seen[file.Path] = struct{}{}
 		if expected, ok := known[file.Path]; ok {
 			if file != expected {
-				return c.Fail(c.StaleAuthority, "retained physical file identity or bytes changed")
+				return c.Fail(c.StaleAuthority, fmt.Sprintf("retained physical file identity or bytes changed: %s", file.Path))
 			}
-		} else if !unknown {
-			unadmitted = append(unadmitted, file.Path)
+		} else {
+			admitted := false
+			for _, root := range unknownRoots {
+				if root == "." || partitionNameAtOrBelow(file.Path, root) {
+					admitted = true
+					break
+				}
+			}
+			if !admitted {
+				unadmitted = append(unadmitted, file.Path)
+			}
+		}
+	}
+	for path, owners := range expectedOwners {
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		if owners == 0 || pendingMissing[path] != owners {
+			return c.Fail(c.StaleAuthority, fmt.Sprintf("retained physical file is missing without an exact pending free intent: %s", path))
 		}
 	}
 	if len(unadmitted) != 0 {
-		writeQuotaTreeDiagnostic(measured, known, charged, entries, unknown, unadmitted)
+		writeQuotaTreeDiagnostic(measured, known, charged, entries, len(unknownRoots) != 0, unadmitted)
 		return c.Fail(c.StaleAuthority, "physical tree contains an unadmitted file")
 	}
 	return nil
@@ -1956,6 +2060,23 @@ func (l *Ledger) finishFreeIntent(ctx context.Context, allocation pendingAllocat
 	if err != nil || changed != 1 {
 		return c.Fail(c.StaleAuthority, "physical free intent changed before receipt commit")
 	}
+	var partitionKind string
+	partitionErr := tx.QueryRowContext(ctx, "SELECT kind FROM quota_partition_members WHERE member_id=?", allocation.ID).Scan(&partitionKind)
+	if partitionErr == nil {
+		if partitionKind != "ARCHIVE" {
+			return c.Fail(c.StoreIntegrityError, "immutable physical partition member cannot be released")
+		}
+		result, err = tx.ExecContext(ctx, "UPDATE quota_partition_members SET receipt_digest=? WHERE member_id=? AND kind='ARCHIVE'", c.HashBytes(raw), allocation.ID)
+		if err != nil {
+			return err
+		}
+		changed, err = result.RowsAffected()
+		if err != nil || changed != 1 {
+			return c.Fail(c.StaleAuthority, "physical archive partition receipt changed before commit")
+		}
+	} else if !errors.Is(partitionErr, sql.ErrNoRows) {
+		return partitionErr
+	}
 	return tx.Commit()
 }
 
@@ -2108,7 +2229,10 @@ func (l *Ledger) ReleaseFile(ctx context.Context, root *os.Root, name, digest st
 		if err != nil {
 			return err
 		}
-		rows, err := l.db.QueryContext(ctx, "SELECT id,status,receipt,free_before FROM quota_allocations WHERE status IN ('RETAINED','FREE_PENDING') AND receipt IS NOT NULL AND target_root=?", rootPath)
+		rows, err := l.db.QueryContext(ctx, `SELECT id,status,receipt,free_before FROM quota_allocations
+			WHERE status IN ('RETAINED','FREE_PENDING') AND receipt IS NOT NULL AND target_root=? AND id NOT IN (
+				SELECT member_id FROM quota_partition_members WHERE kind!='ARCHIVE'
+			)`, rootPath)
 		if err != nil {
 			return err
 		}
@@ -2443,7 +2567,8 @@ func Measure(root *os.Root, includeFiles bool) (Inventory, error) {
 }
 
 func statOnlyFile(name string) bool {
-	if filepath.ToSlash(name) == "control.reserve" {
+	switch filepath.ToSlash(name) {
+	case "control.reserve", "owner/control.reserve":
 		return true
 	}
 	switch filepath.Base(filepath.FromSlash(name)) {

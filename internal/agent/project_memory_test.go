@@ -13,6 +13,7 @@ import (
 	"github.com/ixayldz/Viber/internal/config"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/model"
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 func projectMemorySibling(t *testing.T, s *Session, original StartOptions, task string, turns []Turn) StartOptions {
@@ -125,7 +126,7 @@ func TestProjectMemoryFreshnessUsesQueryCandidateAndPolicy(t *testing.T) {
 	}
 }
 
-func TestAutomaticProjectMemoryConflictScopeIsSameTask(t *testing.T) {
+func TestAutomaticProjectMemoryConflictMetadataFindsForeignAssertionWithoutHydratingBody(t *testing.T) {
 	ctx := context.Background()
 	s, original, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
 	defer s.Close()
@@ -140,19 +141,6 @@ func TestAutomaticProjectMemoryConflictScopeIsSameTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, doc, err := s.Load(ctx, original.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var contextItems []ProjectMemoryItem
-	var truncated bool
-	s.mu.Lock()
-	contextItems, truncated, err = s.projectMemoryContextLocked(ctx, state, doc)
-	s.mu.Unlock()
-	if err != nil || truncated || len(contextItems) != 1 || contextItems[0].ID != local.ItemID || contextItems[0].Status != "ACTIVE" {
-		t.Fatalf("foreign task conflict affected same-task automatic context: items=%#v truncated=%v err=%v", contextItems, truncated, err)
-	}
-
 	// Explicit manual same-project search retains its cross-task conflict view.
 	search, err := s.SearchProjectMemory(ctx, original.TaskID, "build.command", 0, 20)
 	if err != nil {
@@ -163,6 +151,220 @@ func TestAutomaticProjectMemoryConflictScopeIsSameTask(t *testing.T) {
 	}
 	if item := projectMemoryItemByID(t, search, foreign.ItemID); item.Status != "CONFLICT" {
 		t.Fatalf("manual same-project search lost the foreign conflicting assertion: %#v", item)
+	}
+
+	// Once manual search has proven the third-task body is valid, remove that
+	// body. Automatic context must still detect the journal metadata conflict,
+	// and must not try to hydrate that unrelated archive object.
+	blob, err := artifact.ScopedBlobPath(other.TaskID, foreign.EventDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(s.directory, "artifacts", filepath.FromSlash(blob))); err != nil {
+		t.Fatal(err)
+	}
+	state, doc, err := s.Load(ctx, original.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contextItems []ProjectMemoryItem
+	var truncated bool
+	s.mu.Lock()
+	contextItems, truncated, err = s.projectMemoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if err != nil || truncated || len(contextItems) != 0 {
+		t.Fatalf("foreign current conflict was not excluded by metadata-only automatic context: items=%#v truncated=%v err=%v", contextItems, truncated, err)
+	}
+}
+
+func TestProjectMemoryConflictComparisonIncludesCopiedItemContent(t *testing.T) {
+	project := c.HashBytes([]byte("project"))
+	ownDigest := c.HashBytes([]byte("copied assertion"))
+	otherDigest := c.HashBytes([]byte("one current foreign assertion"))
+	item := ProjectMemoryItem{Source: ProjectMemorySource{ProjectDigest: project}, Kind: "FACT", Key: "release.rule",
+		ContentDigest: ownDigest, EvidenceClass: "USER_COPIED", Status: "ACTIVE"}
+	key := project + "\x00FACT\x00release.rule"
+	if !projectMemoryItemHasCurrentConflict(item, map[string]map[string]bool{key: {otherDigest: true}}) {
+		t.Fatal("copied assertion was not compared against the one differing current metadata digest")
+	}
+	if projectMemoryItemHasCurrentConflict(item, map[string]map[string]bool{key: {ownDigest: true}}) {
+		t.Fatal("matching assertion digest was treated as a conflict")
+	}
+	item.Status = "STALE"
+	if projectMemoryItemHasCurrentConflict(item, map[string]map[string]bool{key: {otherDigest: true}}) {
+		t.Fatal("stale copied assertion was treated as a current conflict")
+	}
+	item.Status = "ACTIVE"
+	item.Redacted = true
+	if projectMemoryItemHasCurrentConflict(item, map[string]map[string]bool{key: {otherDigest: true}}) {
+		t.Fatal("redacted assertion was treated as a comparable conflict")
+	}
+}
+
+func TestAutomaticProjectMemoryConflictIgnoresStaleThirdTaskAssertion(t *testing.T) {
+	ctx := context.Background()
+	s, original, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	third := projectMemorySibling(t, s, original, "task-three-stale-conflict", []Turn{
+		{Calls: []model.Call{patchCall()}, UsageKnown: true},
+		{Text: "done", UsageKnown: true},
+	})
+	local, err := s.RecordProjectMemory(ctx, original.TaskID, "memory-current-local", "FACT", "release.rule", "Keep the local release rule.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordProjectMemory(ctx, third.TaskID, "memory-stale-third", "FACT", "release.rule", "A conflicting rule from the old source."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Run(ctx, third.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	state, doc, err := s.Load(ctx, original.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	items, truncated, err := s.projectMemoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if err != nil || truncated || len(items) != 1 || items[0].ID != local.ItemID || items[0].Status != "ACTIVE" {
+		t.Fatalf("stale third-task source incorrectly suppressed current local memory: items=%#v truncated=%v err=%v", items, truncated, err)
+	}
+}
+
+func TestAutomaticProjectMemoryConflictIgnoresPrivacyDeletedThirdTask(t *testing.T) {
+	ctx := context.Background()
+	s, original, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	third := projectMemorySibling(t, s, original, "task-three-revoked-conflict", []Turn{{Text: "done", UsageKnown: true}})
+	if _, err := s.Run(ctx, third.TaskID); err != nil {
+		t.Fatal("complete third task before privacy revocation", err)
+	}
+	local, err := s.RecordProjectMemory(ctx, original.TaskID, "memory-current-local-after-revocation", "FACT", "privacy.rule", "Keep the local privacy rule.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordProjectMemory(ctx, third.TaskID, "memory-revoked-third", "FACT", "privacy.rule", "A conflicting rule from a task later deleted."); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.DeletionPreview(ctx, third.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DeleteContent(ctx, DeletionCommand{CommandID: "delete-revoked-memory-source", Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	state, doc, err := s.Load(ctx, original.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	items, truncated, err := s.projectMemoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if err != nil || truncated || len(items) != 1 || items[0].ID != local.ItemID || items[0].Status != "ACTIVE" {
+		t.Fatalf("privacy-deleted third-task assertion remained a conflict: items=%#v truncated=%v err=%v", items, truncated, err)
+	}
+}
+
+func TestAutomaticCopiedMemoryConflictUsesThirdTaskMetadataAndLegacyIsExplicit(t *testing.T) {
+	ctx := context.Background()
+	s, original, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	target := projectMemorySibling(t, s, original, "task-two-copy-target", []Turn{{Text: "done", UsageKnown: true}})
+	third := projectMemorySibling(t, s, original, "task-three-copy-conflict", []Turn{{Text: "done", UsageKnown: true}})
+	source, err := s.RecordProjectMemory(ctx, original.TaskID, "memory-copy-source", "DECISION", "review.rule", "Review the source change before merging.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := s.CopyProjectMemory(ctx, original.TaskID, target.TaskID, "memory-copy-to-target", source.ItemID, source.EventDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := s.RecordProjectMemory(ctx, third.TaskID, "memory-third-conflict", "DECISION", "review.rule", "Skip review before merging.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Conflict/redacted copies intentionally omit their key and text, so an
+	// unfiltered metadata listing is needed to inspect their current status.
+	search, err := s.SearchProjectMemory(ctx, target.TaskID, "", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyItem := projectMemoryItemByID(t, search, copied.CopyID)
+	if copyItem.Status != "CONFLICT" {
+		t.Fatalf("manual search did not include the third-task conflict for the explicit copy: %#v", copyItem)
+	}
+	conflictBlob, err := artifact.ScopedBlobPath(third.TaskID, conflict.EventDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(s.directory, "artifacts", filepath.FromSlash(conflictBlob))); err != nil {
+		t.Fatal(err)
+	}
+	state, doc, err := s.Load(ctx, target.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	items, truncated, err := s.projectMemoryContextLocked(ctx, state, doc)
+	s.mu.Unlock()
+	if err != nil || truncated || len(items) != 0 {
+		t.Fatalf("explicit copied memory stayed active despite metadata-only third-task conflict: items=%#v truncated=%v err=%v", items, truncated, err)
+	}
+
+	legacyTask := projectMemorySibling(t, s, original, "task-four-legacy-memory", []Turn{{Text: "done", UsageKnown: true}})
+	legacyState, err := s.State(ctx, legacyTask.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyMutation := &c.ProjectMemoryMutation{SourceDocumentDigest: legacyState.DocumentDigest, EventDigest: c.HashBytes([]byte("legacy memory")),
+		CommandID: "legacy-memory-command", EventBytes: 64, SourceTaskSeq: legacyState.TaskSeq, SpecVersion: legacyState.SpecVersion,
+		PolicyEpoch: legacyState.PolicyEpoch, KernelGeneration: s.Journal.Generation(), Action: "ASSERT"}
+	if _, err = s.Journal.Execute(ctx, store.Command{ID: "legacy-memory-command", TaskID: legacyTask.TaskID, Actor: "user",
+		ExpectedTaskSeq: legacyState.TaskSeq, Type: "ProjectMemoryRecorded", Payload: c.EventPayload{
+			DocumentDigest: c.HashBytes([]byte("legacy memory document")), ProjectMemoryMutation: legacyMutation}}); err != nil {
+		t.Fatal("legacy metadata-only event no longer replays", err)
+	}
+	index, err := s.Journal.ProjectMemoryConflictMetadata(ctx, source.Source.ProjectDigest, projectMemoryMaxEvents, projectMemoryMaxBytes)
+	if err != nil || index.Complete || index.Reason != store.ProjectMemoryConflictLegacyWitness {
+		t.Fatalf("legacy journal event did not make conflict coverage explicitly incomplete: index=%#v err=%v", index, err)
+	}
+	localState, localDoc, err := s.Load(ctx, original.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	contextText, err := s.projectMemoryAdvisoryContextLocked(ctx, localState, localDoc)
+	s.mu.Unlock()
+	if err != nil || !strings.Contains(contextText, "PROJECT_MEMORY_CONFLICT_INDEX_INCOMPLETE") ||
+		strings.Contains(contextText, "ACTIVE_MEMORY_OUTPUT_LIMIT") || strings.Contains(contextText, "OPERATOR_CONTEXT_READ_DENIED") {
+		t.Fatalf("legacy conflict uncertainty was not reported with its own omission reason: text=%s err=%v", contextText, err)
+	}
+}
+
+func TestProjectMemoryConflictCapabilityDetectionSurvivesReferenceRemoval(t *testing.T) {
+	ctx := context.Background()
+	s, options, _ := startFixture(t, []Turn{{Text: "done", UsageKnown: true}}, true)
+	defer s.Close()
+	if _, err := s.RecordProjectMemory(ctx, options.TaskID, "memory-capability-durable", "FACT", "durable.rule", "A durable advisory statement."); err != nil {
+		t.Fatal(err)
+	}
+	used, err := s.Journal.ProjectMemoryConflictMetadataUsed(ctx)
+	if err != nil || !used {
+		t.Fatalf("durable witness use was not detected: used=%v err=%v", used, err)
+	}
+	s.mu.Lock()
+	state, doc, err := s.Load(ctx, options.TaskID)
+	if err == nil {
+		doc.ProjectMemoryRefs = nil
+		_, err = s.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
+	}
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal("remove live references for durable-capability regression", err)
+	}
+	used, err = s.Journal.ProjectMemoryConflictMetadataUsed(ctx)
+	if err != nil || !used {
+		t.Fatalf("witness capability scan depended on live task references: used=%v err=%v", used, err)
 	}
 }
 

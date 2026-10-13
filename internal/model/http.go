@@ -188,7 +188,7 @@ func (client *Client) Complete(ctx context.Context, r Request) (result Result, c
 		result.ProviderRequestID = response.Header.Get("request-id")
 	}
 	var data []byte
-	if r.Stream {
+	if response.StatusCode == http.StatusOK && (r.Stream || client.config.Provider == "chatgpt") {
 		data, err = readProviderStream(ctx, response.Body, client.config.MaxResponseBytes, client.config.Provider)
 	} else {
 		data, err = io.ReadAll(io.LimitReader(response.Body, client.config.MaxResponseBytes+1))

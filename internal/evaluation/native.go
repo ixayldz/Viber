@@ -229,11 +229,12 @@ func runCandidatePrepared(ctx context.Context, original *agent.Session, task str
 		}
 		candidateBytes += uint64(entry.Size)
 	}
-	if candidateBytes > (resource.DefaultLimits().Bytes-(128<<20))/2 {
+	startupBytes, startupEntries := resource.PartitionStartupEnvelope()
+	if candidateBytes > (resource.DefaultLimits().Bytes-startupBytes)/2 {
 		return result, c.Fail(c.UnsupportedCapability, "candidate exceeds bounded evaluation output reservation")
 	}
-	upperBytes := candidateBytes*2 + (128 << 20)
-	upperEntries := uint64(len(capture.Snapshot.Entries))*2 + uint64(len(capture.Snapshot.Directories)) + 4096
+	upperBytes := candidateBytes*2 + startupBytes
+	upperEntries := uint64(len(capture.Snapshot.Entries))*2 + uint64(len(capture.Snapshot.Directories)) + startupEntries
 	if upperEntries > resource.DefaultLimits().Entries {
 		return result, c.Fail(c.UnsupportedCapability, "candidate exceeds bounded evaluation output entry reservation")
 	}
@@ -258,6 +259,9 @@ func runCandidatePrepared(ctx context.Context, original *agent.Session, task str
 	if err != nil {
 		return result, err
 	}
+	if err = allocation.PreparePartition(ctx, resource.EvaluationReportPartition); err != nil {
+		return result, err
+	}
 	if err = allocation.Begin(ctx); err != nil {
 		return result, err
 	}
@@ -276,12 +280,20 @@ func runCandidatePrepared(ctx context.Context, original *agent.Session, task str
 	if err = fileguard.Private(root); err != nil {
 		return result, err
 	}
-	owner, err := original.OpenIndependentEvaluator(ctx, filepath.Join(destination, "owner"))
+	if err = allocation.BindPartitionRoot(ctx); err != nil {
+		return result, err
+	}
+	owner, err := original.OpenIndependentEvaluatorPartition(ctx, ownerPath, allocation)
 	if err != nil {
 		return result, err
 	}
 	taskID := owner.EvaluationTaskID()
-	defer owner.Close()
+	ownerClosed := false
+	defer func() {
+		if !ownerClosed {
+			_ = owner.Close()
+		}
+	}()
 	fixture, err := evaluatorFixture(recipe)
 	if err != nil {
 		return result, err
@@ -421,11 +433,11 @@ func runCandidatePrepared(ctx context.Context, original *agent.Session, task str
 	if err = fileguard.SyncParents(root, "."); err != nil {
 		return result, err
 	}
-	inventory, measureErr := resource.Measure(root, true)
-	if measureErr != nil {
-		return result, measureErr
+	if err = owner.Close(); err != nil {
+		return result, err
 	}
-	if err = allocation.Commit(ctx, inventory); err != nil {
+	ownerClosed = true
+	if err = allocation.CommitPartition(ctx); err != nil {
 		return result, err
 	}
 	// UNKNOWN/FAIL are inspectable results; admission/infrastructure errors never

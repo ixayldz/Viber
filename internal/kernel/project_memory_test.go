@@ -55,3 +55,37 @@ func TestProjectMemoryMetadataRebindDoesNotResumeOrGrantAuthority(t *testing.T) 
 		})
 	}
 }
+
+func TestProjectMemoryConflictWitnessBindsCurrentTaskSnapshots(t *testing.T) {
+	state := c.TaskState{SchemaVersion: 1, TaskID: "memory-task", SpecVersion: 3, Execution: c.Ready, PolicyEpoch: 2, KernelGeneration: 1,
+		TaskSeq: 7, StoreSeq: 9, DocumentDigest: c.HashBytes([]byte("current document")),
+		BaselineDigest: c.HashBytes([]byte("baseline")), CandidateDigest: c.HashBytes([]byte("candidate"))}
+	event := c.Event{SchemaVersion: 1, ID: "memory-witness-command", CausationID: "memory-witness-command", TaskID: state.TaskID,
+		TaskSeq: 8, StoreSeq: 10, KernelGeneration: 1, Actor: "user", Type: "ProjectMemoryRecorded"}
+	witness := &c.ProjectMemoryConflictMetadata{SchemaVersion: 1, ProjectDigest: c.HashBytes([]byte("project")),
+		BaselineDigest: state.BaselineDigest, CandidateDigest: state.CandidateDigest, PolicyDigest: c.HashBytes([]byte("policy")),
+		AssertionID: "pm-0123456789abcdef0123456789abcdef", Kind: "FACT", Key: "release.rule", ContentDigest: c.HashBytes([]byte("advisory"))}
+	mutation := c.ProjectMemoryMutation{SourceDocumentDigest: state.DocumentDigest, EventDigest: c.HashBytes([]byte("assertion")),
+		CommandID: event.ID, EventBytes: 100, SourceTaskSeq: state.TaskSeq, SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch,
+		KernelGeneration: event.KernelGeneration, Action: "ASSERT", ConflictMetadata: witness}
+	payload := c.EventPayload{DocumentDigest: c.HashBytes([]byte("next document")), ProjectMemoryMutation: &mutation}
+	if _, err := Reduce(&state, event, payload); err != nil {
+		t.Fatal("valid source-bound conflict metadata rejected", err)
+	}
+	witness.CandidateDigest = c.HashBytes([]byte("stale candidate"))
+	if _, err := Reduce(&state, event, payload); err == nil {
+		t.Fatal("conflict witness with a stale candidate was admitted")
+	}
+}
+
+func TestLegacyProjectMemoryMutationJSONRemainsReplayableWithoutWitness(t *testing.T) {
+	raw := []byte(`{"source_document_digest":"` + c.HashBytes([]byte("document")) + `","event_digest":"` + c.HashBytes([]byte("event")) +
+		`","command_id":"legacy-memory-command","event_bytes":64,"source_task_seq":2,"spec_version":1,"policy_epoch":0,"kernel_generation":1,"action":"ASSERT"}`)
+	var mutation c.ProjectMemoryMutation
+	if err := c.DecodeStrict(raw, &mutation); err != nil {
+		t.Fatal("legacy mutation JSON was rejected", err)
+	}
+	if err := mutation.Validate(); err != nil || mutation.ConflictMetadata != nil {
+		t.Fatalf("legacy mutation no longer validates as witness-less: mutation=%#v err=%v", mutation, err)
+	}
+}

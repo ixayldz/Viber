@@ -126,8 +126,15 @@ func (s *Session) projectMemoryAdvisoryContextLocked(ctx context.Context, state 
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
+			var conflictIndexErr *projectMemoryConflictIndexError
 			var policyErr *c.Error
-			if errors.As(memoryErr, &policyErr) && policyErr.Code == c.PolicyDenied {
+			if errors.As(memoryErr, &conflictIndexErr) {
+				if conflictIndexErr.incomplete {
+					envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_CONFLICT_INDEX_INCOMPLETE")
+				} else {
+					envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_CONFLICT_INDEX_UNAVAILABLE")
+				}
+			} else if errors.As(memoryErr, &policyErr) && policyErr.Code == c.PolicyDenied {
 				envelope.Omissions = append(envelope.Omissions, "OPERATOR_CONTEXT_READ_DENIED")
 			} else {
 				envelope.Omissions = append(envelope.Omissions, "PROJECT_MEMORY_SOURCE_OR_POLICY_UNAVAILABLE")

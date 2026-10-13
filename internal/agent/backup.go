@@ -52,6 +52,7 @@ func validateBackupManifest(m BackupManifest) error {
 		return c.Fail(c.UnsupportedCapability, "unsupported or invalid backup manifest")
 	}
 	total := int64(0)
+	gcTotal := int64(0)
 	previous := ""
 	database := false
 	migrationFiles := 0
@@ -67,6 +68,12 @@ func validateBackupManifest(m BackupManifest) error {
 		}
 		if !valid || f.Path <= previous || !c.ValidDigest(f.Digest) || f.Size < 0 || f.Size > backupFileLimit(f.Path) || f.Size > backupMaxBytes-total {
 			return c.Fail(c.StoreIntegrityError, "invalid backup path, ordering, digest or quota")
+		}
+		if gcMaintenancePath(f.Path) {
+			if f.Size > gcMaintenanceMaxBytes-gcTotal {
+				return c.Fail(c.BudgetLimitReached, "backup GC maintenance byte quota exceeded")
+			}
+			gcTotal += f.Size
 		}
 		total += f.Size
 		previous = f.Path
@@ -626,6 +633,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 		return m, err
 	}
 	// Preflight every digest and embedded source root before creating anything.
+	gcRecords := map[string][]byte{}
 	for _, f := range m.Files {
 		if err = ctx.Err(); err != nil {
 			return m, err
@@ -638,6 +646,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 			if err = validateGCRecord(f.Path, raw); err != nil {
 				return m, err
 			}
+			gcRecords[f.Path] = raw
 		}
 		if strings.Contains(f.Path, "/snapshots/") {
 			var snapshot artifact.Manifest
@@ -648,6 +657,9 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 				return m, err
 			}
 		}
+	}
+	if err = validateGCMaintenanceRecords(gcRecords); err != nil {
+		return m, err
 	}
 	parent, err := os.OpenRoot(filepath.Dir(target))
 	if err != nil {

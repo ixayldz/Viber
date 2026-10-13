@@ -117,3 +117,5 @@ The code and exact-SHA validation record must include:
 - Evaluator lifecycle tests use deterministic fixture execution only. Real provider/model acceptance remains separate, and this change makes no quality or readiness claim.
 
 This design satisfies only the physical admission/handoff part of package 2 when implemented and accepted. It does not close external privacy authority/checkpoint/migration accounting, native fence identity quota, rootless or power-loss profiles, or the remaining release gates in the PRD delivery plan.
+
+Implementation follow-up: evaluator report output now prepares and binds a nonoverlapping owner partition before bootstrap writes, then atomically settles REPORT_REMAINDER, OWNER_STATIC, MUTABLE_SQLITE, CONTROL_RESERVE and ARCHIVE receipts. Native default-32MiB tests cover reopen, exact later task/artifact and GC writes, and denial of foreign bytes. The original upper envelope remains charged on uncertainty. Restore callsites and full metadata/fence/legacy lifetime remain open; this is not complete A10/A11 acceptance.

@@ -20,7 +20,7 @@ import tarfile
 import tempfile
 import zipfile
 
-RUNTIME_CAPABILITIES = ["physical_quota_handoff_v1", "physical_quota_retry_intent_v1", "project_memory_copy_v1", "project_memory_v1", "read_workers_v1"]
+RUNTIME_CAPABILITIES = ["gc_completed_receipt_compaction_v1", "physical_quota_handoff_v1", "physical_quota_owner_partition_v1", "physical_quota_retry_intent_v1", "project_memory_conflict_metadata_v1", "project_memory_copy_v1", "project_memory_v1", "read_workers_v1"]
 
 MAX_FILES = 256
 MAX_BYTES = 128 << 20

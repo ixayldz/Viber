@@ -205,6 +205,20 @@ type projectMemorySourceBudget struct {
 	bytes            int64
 }
 
+type projectMemoryConflictIndexError struct {
+	incomplete bool
+	cause      error
+}
+
+func (e *projectMemoryConflictIndexError) Error() string {
+	if e.cause != nil {
+		return "project memory conflict index unavailable: " + e.cause.Error()
+	}
+	return "project memory conflict index incomplete"
+}
+
+func (e *projectMemoryConflictIndexError) Unwrap() error { return e.cause }
+
 func (copy ProjectMemoryCopy) Validate(ref ProjectMemoryRef, targetTask string) error {
 	if copy.SchemaVersion != 1 || ref.Type != "PROJECT_MEMORY_COPY" || ref.ID != copy.ID || !projectMemoryCopyIDPattern.MatchString(copy.ID) ||
 		!c.ValidDigest(ref.Digest) || !c.ValidDigest(copy.RequestDigest) || !c.ValidDigest(copy.ContentDigest) ||
@@ -1220,6 +1234,15 @@ func projectMemoryAssertionConflicted(assertion ProjectMemoryEvent, events map[s
 	return false
 }
 
+func projectMemoryConflictMetadataForEvent(event ProjectMemoryEvent) *c.ProjectMemoryConflictMetadata {
+	return &c.ProjectMemoryConflictMetadata{
+		SchemaVersion: 1, ProjectDigest: event.Source.ProjectDigest, BaselineDigest: event.Source.BaselineDigest,
+		CandidateDigest: event.Source.CandidateDigest, PolicyDigest: event.Source.PolicyDigest,
+		AssertionID: event.ID, ContentDigest: event.ContentDigest, TargetID: event.TargetID, TargetDigest: event.TargetDigest,
+		Kind: event.Kind, Key: event.Key,
+	}
+}
+
 func projectMemoryFilter(items []ProjectMemoryItem, query string, offset, limit int) (ProjectMemorySearchResult, error) {
 	result := ProjectMemorySearchResult{SchemaVersion: 1, Items: []ProjectMemoryItem{}, Query: query, Offset: offset, Limit: limit}
 	if offset < 0 || limit < 0 || limit > projectMemoryMaxPage || !utf8.ValidString(query) || len(query) > 1024 {
@@ -1302,6 +1325,17 @@ func (s *Session) projectMemoryContextLocked(ctx context.Context, state c.TaskSt
 	if err != nil {
 		return nil, false, err
 	}
+	conflictDigests, err := s.projectMemoryConflictDigests(ctx, querySource)
+	if err != nil {
+		return nil, false, err
+	}
+	for index := range items {
+		item := &items[index]
+		if projectMemoryItemHasCurrentConflict(*item, conflictDigests) {
+			item.Status = "CONFLICT"
+			item.StatusReason = "different current project assertions share this key"
+		}
+	}
 	selected := make([]ProjectMemoryItem, 0, 8)
 	usedBytes := 0
 	truncated := false
@@ -1335,6 +1369,117 @@ func (s *Session) projectMemoryContextLocked(ctx context.Context, state c.TaskSt
 		usedBytes += itemBytes
 	}
 	return selected, truncated, nil
+}
+
+func projectMemoryItemHasCurrentConflict(item ProjectMemoryItem, conflictDigests map[string]map[string]bool) bool {
+	if item.Status != "ACTIVE" || item.Redacted || !c.ValidDigest(item.ContentDigest) ||
+		(item.EvidenceClass != "USER_ASSERTED" && item.EvidenceClass != "USER_COPIED") {
+		return false
+	}
+	key := item.Source.ProjectDigest + "\x00" + item.Kind + "\x00" + item.Key
+	for digest := range conflictDigests[key] {
+		if digest != item.ContentDigest {
+			return true
+		}
+	}
+	return false
+}
+
+// projectMemoryConflictDigests resolves project-wide assertion freshness from
+// the journal's bounded metadata index. It does not load any other task's
+// archive document or assertion body.
+func (s *Session) projectMemoryConflictDigests(ctx context.Context, querySource ProjectMemorySource) (map[string]map[string]bool, error) {
+	index, err := s.Journal.ProjectMemoryConflictMetadata(ctx, querySource.ProjectDigest, projectMemoryMaxEvents, projectMemoryMaxBytes)
+	if err != nil {
+		return nil, &projectMemoryConflictIndexError{cause: err}
+	}
+	if !index.Complete {
+		return nil, &projectMemoryConflictIndexError{incomplete: true}
+	}
+	var privacy *privacyView
+	if s.privacy != nil {
+		view, viewErr := s.retentionView(ctx)
+		if viewErr != nil {
+			return nil, &projectMemoryConflictIndexError{cause: viewErr}
+		}
+		privacy = &view
+	}
+	current := make(map[string]bool, len(index.Records))
+	byID := make(map[string]store.ProjectMemoryConflictRecord, len(index.Records))
+	for _, record := range index.Records {
+		mutation := record.Mutation
+		witness := mutation.ConflictMetadata
+		if witness == nil {
+			return nil, &projectMemoryConflictIndexError{cause: c.Fail(c.StoreIntegrityError, "project memory conflict witness disappeared")}
+		}
+		if mutation.Action == "COPY" {
+			continue
+		}
+		if witness.AssertionID == "" || witness.ProjectDigest != querySource.ProjectDigest {
+			return nil, &projectMemoryConflictIndexError{cause: c.Fail(c.StoreIntegrityError, "project memory assertion witness is incomplete")}
+		}
+		if _, duplicate := byID[witness.AssertionID]; duplicate {
+			return nil, &projectMemoryConflictIndexError{cause: c.Fail(c.StoreIntegrityError, "duplicate project memory assertion identity")}
+		}
+		byID[witness.AssertionID] = record
+		state, found := index.CurrentStates[record.TaskID]
+		isCurrent := found && state.Deletion == nil && state.TaskID == record.TaskID && state.TaskSeq > mutation.SourceTaskSeq &&
+			state.SpecVersion == mutation.SpecVersion && state.PolicyEpoch == mutation.PolicyEpoch &&
+			state.BaselineDigest == witness.BaselineDigest && state.CandidateDigest == witness.CandidateDigest &&
+			witness.ProjectDigest == querySource.ProjectDigest && witness.BaselineDigest == querySource.BaselineDigest &&
+			witness.CandidateDigest == querySource.CandidateDigest && mutation.PolicyEpoch == querySource.PolicyEpoch &&
+			witness.PolicyDigest == querySource.PolicyDigest
+		if isCurrent && privacy != nil {
+			if _, deleted := privacy.DeletionSequences[record.TaskID]; deleted {
+				isCurrent = false
+			}
+			if _, deleted := privacy.Deletions[record.TaskID]; deleted {
+				isCurrent = false
+			}
+			for _, attempt := range privacy.Attempts {
+				if attempt.ChildTask == record.TaskID {
+					if _, deleted := privacy.Deletions[attempt.ParentTask]; deleted {
+						isCurrent = false
+						break
+					}
+				}
+			}
+		}
+		current[witness.AssertionID] = isCurrent
+	}
+	retiredOrSuperseded := map[string]bool{}
+	for _, record := range index.Records {
+		mutation := record.Mutation
+		witness := mutation.ConflictMetadata
+		if mutation.Action != "CORRECT" && mutation.Action != "RETIRE" {
+			continue
+		}
+		target, found := byID[witness.TargetID]
+		if !found || target.TaskID != record.TaskID || target.Mutation.EventDigest != witness.TargetDigest || target.Mutation.Action == "RETIRE" ||
+			target.Mutation.ConflictMetadata.ProjectDigest != witness.ProjectDigest {
+			return nil, &projectMemoryConflictIndexError{cause: c.Fail(c.StoreIntegrityError, "project memory conflict lineage is invalid")}
+		}
+		if current[witness.AssertionID] {
+			if retiredOrSuperseded[witness.TargetID] {
+				return nil, &projectMemoryConflictIndexError{cause: c.Fail(c.StoreIntegrityError, "project memory target has multiple current lineage changes")}
+			}
+			retiredOrSuperseded[witness.TargetID] = true
+		}
+	}
+	values := map[string]map[string]bool{}
+	for _, record := range index.Records {
+		mutation := record.Mutation
+		witness := mutation.ConflictMetadata
+		if mutation.Action != "ASSERT" && mutation.Action != "CORRECT" || !current[witness.AssertionID] || retiredOrSuperseded[witness.AssertionID] {
+			continue
+		}
+		key := witness.ProjectDigest + "\x00" + witness.Kind + "\x00" + witness.Key
+		if values[key] == nil {
+			values[key] = map[string]bool{}
+		}
+		values[key][witness.ContentDigest] = true
+	}
+	return values, nil
 }
 
 // SearchProjectMemory returns current-project assertions with explicit
@@ -1498,7 +1643,8 @@ func (s *Session) mutateProjectMemory(ctx context.Context, task, commandID, acti
 	generation := s.Journal.Generation()
 	mutation := &c.ProjectMemoryMutation{SourceDocumentDigest: source.DocumentDigest, EventDigest: ref.Digest,
 		CommandID: commandID, EventBytes: int64(len(raw)), SourceTaskSeq: source.TaskSeq, SpecVersion: state.SpecVersion,
-		PolicyEpoch: state.PolicyEpoch, KernelGeneration: generation, Action: action}
+		PolicyEpoch: state.PolicyEpoch, KernelGeneration: generation, Action: action,
+		ConflictMetadata: projectMemoryConflictMetadataForEvent(event)}
 	if err = mutation.Validate(); err != nil {
 		return receipt, err
 	}

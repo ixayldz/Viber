@@ -264,7 +264,9 @@ func (s *Session) copyProjectMemoryLocked(ctx context.Context, sourceTask, targe
 	generation := s.Journal.Generation()
 	mutation := &c.ProjectMemoryMutation{SourceDocumentDigest: target.DocumentDigest, EventDigest: ref.Digest,
 		CommandID: commandID, EventBytes: int64(len(raw)), SourceTaskSeq: target.TaskSeq, SpecVersion: targetState.SpecVersion,
-		PolicyEpoch: targetState.PolicyEpoch, KernelGeneration: generation, Action: "COPY"}
+		PolicyEpoch: targetState.PolicyEpoch, KernelGeneration: generation, Action: "COPY",
+		ConflictMetadata: &c.ProjectMemoryConflictMetadata{SchemaVersion: 1, ProjectDigest: target.ProjectDigest,
+			BaselineDigest: target.BaselineDigest, CandidateDigest: target.CandidateDigest, PolicyDigest: target.PolicyDigest}}
 	if err = mutation.Validate(); err != nil {
 		return empty, err
 	}
