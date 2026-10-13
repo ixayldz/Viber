@@ -1,5 +1,11 @@
 # Doğrulama kaydı
 
+## 13 Ekim cb889da macOS boundary-fixture düzeltmesi
+
+`cb889da9ff4302ea01eead2ae76036be5b1c9431` [core38425146250](https://github.com/ixayldz/Viber/actions/runs/38425146250) Docker/rootless, iki vault ve üç package işi SUCCESS; macOS full suite `TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary` içinde **FAIL**. Fixture `freshPrivate`/managed registration için macOS `/var` temp alias'ını kullanırken production `ExportSupport` intent ve root creation öncesinde `ResolveProspective` ile `/private/var` canonical hedefini bağlar. Fixture artık production sırasını takip eder. Runtime'ın exact directory, privacy suffix, inode ve stable-binding kontrolleri **gevşetilmedi**; alias'lı registry kaydı otomatik benimsenmez.
+
+Önceki `28e6fb3` koşusunun Linux/Docker hata logları korunarak, güncel kaynak için superseded başarısız koşunun kalan işleri iptal edildi. Hiçbir iptal edilen/skipped işi PASS olarak sayılmaz. Yeni paket ve izin verilen tek gerçek ChatGPT görevi yalnız yeni exact-source kapıları geçince yürütülür.
+
 ## 13 Ekim 28e6fb3 CI takip düzeltmesi
 
 `28e6fb34293c5d068fc1f5704d86e103224be396` [core38422926226](https://github.com/ixayldz/Viber/actions/runs/38422926226) Linux full suite ve Docker işi **FAIL**: mevcut `TestSupportAllowlistExcludesSourcePromptModelTextIdentifiersAndHashes`, ikinci aynı çağrıdaki başarıyı koşulsuz overwrite sayıyordu. Yeni exact retained retry kontratında mevcut byte'lar doğrulanıp aynı numeric rapor döndürülür; write yapılmaz. Test artık orijinal rapor/output byte'larının ve quota capacity'nin aynı kalmasını, ayrıca unrelated mevcut dizindeki canary'nin korunmasını ve reddin yeni quota tüketmemesini gerektirir. Mevcut bütün secrecy canary ve source/store overlap kontrolleri korunur.

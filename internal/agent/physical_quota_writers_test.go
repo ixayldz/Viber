@@ -286,7 +286,14 @@ func TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := filepath.Join(base, "interrupted")
+	// Follow ExportSupport's production ordering: resolve the prospective
+	// output before creating/registering its rooted directory. Darwin's temp
+	// path may use /var as an alias of /private/var; a raw alias is not the
+	// canonical path bound into a support intent.
+	output, err := fileguard.ResolveProspective(filepath.Join(base, "interrupted"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(originalRaw), TargetRoot: output, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
 	reservation, saved, err := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, bindingRaw, originalRaw)
 	if err != nil || !reservation.Created || !bytes.Equal(saved, originalRaw) {
