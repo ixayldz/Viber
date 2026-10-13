@@ -365,6 +365,9 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 		}
 		fmt.Fprintf(out, "Private demo source: %s\nPrivate task data: %s\nTask ID: %s\n", tui.Safe(demoSource), tui.Safe(store), taskID)
 		code := runTask([]string{"Update the greeting to say hello, Viber.", "--root", demoSource, "--store", store, "--task", taskID, "--offline", "--fixture", fixturePath, "--allow-unverified", "--autonomy", "auto"}, out, errout)
+		if code == 0 || code == 2 {
+			fmt.Fprintln(out, "Offline demo finished; its unverified result is ready for review.")
+		}
 		return finishOnboardingTask(taskID, store, code, out, errout)
 	}
 
@@ -435,12 +438,19 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 		}
 	}
 
-	args = []string{taskPrompt, "--root", source, "--store", store, "--task", taskID}
+	fmt.Fprintln(out, "Changes are prepared in a separate candidate and require your review. In the interface use /requests, /diff and /resume. An unverified final result also requires approval; it is never reported as verified.")
+	args = []string{taskPrompt, "--root", source, "--store", store, "--task", taskID, "--autonomy", "review"}
 	if mode == "1" {
 		args = append(args, "--provider", "chatgpt", "--allow-remote", "--auth-profile", profileID)
 	} else {
 		fmt.Fprintln(out, "Ollama is declared local; Viber limits the endpoint to a loopback address. The model receives your task and selected project context.")
 		args = append(args, "--provider", "ollama", "--model", modelID, "--endpoint", endpoint, "--local-model")
+	}
+	if interactiveOnboarding(out) {
+		// Attach the interface after durable task creation/admission instead
+		// of waiting for a potentially long model run to finish. The owner
+		// continues running when the interface detaches.
+		args = append(args, "--detach")
 	}
 	fmt.Fprintf(out, "Starting task %s\nPrivate task data: %s\n", taskID, tui.Safe(store))
 	code := runTask(args, out, errout)

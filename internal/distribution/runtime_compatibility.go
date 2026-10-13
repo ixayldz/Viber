@@ -14,19 +14,24 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
 const (
-	RuntimeCapabilityProjectMemoryCopyV1 = "project_memory_copy_v1"
-	RuntimeCapabilityProjectMemoryV1     = "project_memory_v1"
-	RuntimeCapabilityReadWorkersV1       = "read_workers_v1"
-	maxRuntimeCapabilityStates           = 1 << 16
-	maxRuntimeCapabilityDocuments        = 1 << 16
-	maxRuntimeCapabilityBytes            = 512 << 20
+	RuntimeCapabilityPhysicalQuotaHandoffV1 = "physical_quota_handoff_v1"
+	RuntimeCapabilityPhysicalQuotaIntentV1  = "physical_quota_retry_intent_v1"
+	RuntimeCapabilityProjectMemoryCopyV1    = "project_memory_copy_v1"
+	RuntimeCapabilityProjectMemoryV1        = "project_memory_v1"
+	RuntimeCapabilityReadWorkersV1          = "read_workers_v1"
+	maxRuntimeCapabilityStates              = 1 << 16
+	maxRuntimeCapabilityDocuments           = 1 << 16
+	maxRuntimeCapabilityBytes               = 512 << 20
 )
 
 var supportedRuntimeCapabilities = []string{
+	RuntimeCapabilityPhysicalQuotaHandoffV1,
+	RuntimeCapabilityPhysicalQuotaIntentV1,
 	RuntimeCapabilityProjectMemoryCopyV1,
 	RuntimeCapabilityProjectMemoryV1,
 	RuntimeCapabilityReadWorkersV1,
@@ -125,6 +130,9 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if err = known.ValidateCurrent(); err != nil {
 			return closeOnError(err)
 		}
+		if err = applyQuotaRuntimeCapabilities(ctx, owner, used); err != nil {
+			return closeOnError(err)
+		}
 		copyUsed, copyErr := agent.ProjectMemoryCopyCapabilityUsed(ctx, owner)
 		if copyErr != nil {
 			return closeOnError(copyErr)
@@ -181,6 +189,29 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 	}
 	sort.Strings(required)
 	return locked, required, nil
+}
+
+func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used map[string]bool) error {
+	pin, err := owner.PhysicalQuotaBinding(ctx)
+	if err != nil || pin == nil {
+		return err
+	}
+	ledger, err := resource.OpenPinned(resource.Authority{ID: pin.AuthorityID, Directory: pin.Directory, PhysicalRoot: pin.PhysicalRoot}, resource.DefaultLimits(), pin.LedgerID)
+	if err != nil {
+		return err
+	}
+	usage, observeErr := ledger.FeatureUsage(ctx)
+	closeErr := ledger.Close()
+	if err = errors.Join(observeErr, closeErr); err != nil {
+		return err
+	}
+	if usage.ReservationIntents {
+		used[RuntimeCapabilityPhysicalQuotaIntentV1] = true
+	}
+	if usage.StageHandoffs {
+		used[RuntimeCapabilityPhysicalQuotaHandoffV1] = true
+	}
+	return nil
 }
 
 func applyTaskRuntimeCapabilities(state c.TaskState, used map[string]bool) error {

@@ -44,6 +44,30 @@ GitHub OIDC build provenance, archive byte'larının bu workflow/commit'ten çı
 
 ## Native kurulum ve ilk görev
 
+### Terminalde viber komutu (yeni main)
+
+Bu takip özellikleri public `af70426` paketinde **yoktur**. Yeni source'un exact CI/paket kabulü tamamlanınca veya kaynaktan derlenen yeni binary ile kullanılabilir. Arşivin OIDC doğrulamasını yukarıdaki adımla tamamlayın; `FULL_SOURCE_SHA` yerine incelediğiniz tam commit SHA'sını yazın.
+
+Windows PowerShell, açtığınız doğrulanmış program klasöründe:
+
+```powershell
+$ghPath = (Get-Command gh -ErrorAction Stop).Source
+.\viber.exe package install --archive 'C:\Downloads\viber-windows-amd64.zip' --source-sha FULL_SOURCE_SHA --gh $ghPath --launcher
+```
+
+Varsayılan program konumu `%LOCALAPPDATA%\ViberApps\managed`; sahipliği izlenen `viber.cmd`, `%LOCALAPPDATA%\ViberApps\managed-bin` içine yazılır. Yalnız kullanıcı PATH'i güncellenir; yeni terminal açıp proje klasöründe `viber` yazın. Sistem PATH'i değişmez. Mevcut başka bir Viber komutu korunur ve çakışma bildirilir. Windows launcher içindeki binary yolu şu an ASCII olmalı; CMD genişletme karakterleri kabul edilmez. Non-ASCII kullanıcı/program yolunda portable binary'yi doğrudan çalıştırma desteklenir, bu launcher profili desteklenmez.
+
+Linux/macOS, doğrulanmış program klasöründe:
+
+```sh
+gh_path="$(command -v gh)"
+./viber package install --archive "$HOME/Downloads/viber-native.tar.gz" --source-sha FULL_SOURCE_SHA --gh "$gh_path" --launcher
+```
+
+Kurulumun verdiği `export PATH='…/viber/managed-bin':"$PATH"` satırını mevcut shell'de çalıştırın, ardından proje klasöründe `viber` yazın. Yeni terminallerde de kullanmak için bu satırı kendi shell başlangıç yapılandırmanıza ekleyin. Viber shell yapılandırmanızı otomatik değiştirmez. Varsayılan launcher `$XDG_DATA_HOME/viber/managed-bin`, değişken yoksa `$HOME/.local/share/viber/managed-bin` konumundadır. Yönetilen program dosyaları task store'dan ayrıdır.
+
+Launcher yeni seçilen revizyona install/rollback ile güncellenir. Deactivate/uninstall yalnız kendi receipt'ine bağlı, değişmemiş launcher'ı kaldırır; Windows PATH satırı yalnız Viber eklemişse ve özel bin'de yabancı dosya yoksa çıkarılır. Launcher/registry yerel kontrolleri OS signing veya gerçek hesap kabulü değildir.
+
 Doğrulanmış archive'ı sahip olduğunuz yeni bir sürüm dizinine açın. Örneğin Windows'ta `$env:LOCALAPPDATA\ViberApps\viber-SHA-windows-amd64`; Unix'te kendi private uygulama dizininizde `viber-SHA-linux-amd64` veya `viber-SHA-darwin-arm64`. Var olan uygulama/kullanıcı dosyasının üzerine açmayın. Go derleyicisi gerekmez. Binary ve offline fixture paketin içindedir. PATH'e eklemek isteğe bağlıdır; örnekler tam paket dizininde çalışır.
 
 Windows/PowerShell:

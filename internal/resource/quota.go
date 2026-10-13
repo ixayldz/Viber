@@ -193,6 +193,15 @@ type ReservationMatch struct {
 	Scope      ReservationScope
 	Status     string
 	Created    bool
+	// UpperBytes and UpperEntries are the immutable bounds admitted with the
+	// allocation. Intent-backed retry callers reuse these exact bounds only
+	// after validating their saved stable binding.
+	UpperBytes   uint64
+	UpperEntries uint64
+	// RequestDigest is the immutable digest admitted with the original exact
+	// allocation. Intent-backed retries may submit a newer observation while
+	// reusing the original payload digest.
+	RequestDigest string
 }
 
 func Open(authority Authority, limits Limits) (*Ledger, error) {
@@ -339,10 +348,19 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = ensureFreeIntentSchema(db); err != nil {
 		return nil, err
 	}
+	if err = ensureReservationIntentSchema(db); err != nil {
+		return nil, err
+	}
 	if err = ensureMutableReplacementSchema(db); err != nil {
 		return nil, err
 	}
 	if err = ensureControlReserveSchema(db); err != nil {
+		return nil, err
+	}
+	if err = ensureHandoffSchema(db); err != nil {
+		return nil, err
+	}
+	if err = validateHandoffRecordsOnOpen(db, root, authority, stored.LedgerID); err != nil {
 		return nil, err
 	}
 	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
@@ -543,6 +561,7 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 		"CREATE TABLE quota_allocations (id TEXT PRIMARY KEY,writer TEXT NOT NULL,family TEXT NOT NULL,request_digest TEXT NOT NULL,target_root TEXT NOT NULL,volume_identity TEXT NOT NULL,parent_path TEXT NOT NULL,parent_identity TEXT NOT NULL,target_identity TEXT NOT NULL,target_existed INTEGER NOT NULL,class TEXT NOT NULL,status TEXT NOT NULL,upper_bytes INTEGER NOT NULL,upper_entries INTEGER NOT NULL,retained_bytes INTEGER NOT NULL,retained_entries INTEGER NOT NULL,receipt BLOB,free_before INTEGER NOT NULL DEFAULT 0,free_after INTEGER NOT NULL DEFAULT 0)",
 		"CREATE INDEX quota_allocations_status ON quota_allocations(status)",
 		freeIntentsDDL,
+		quotaReservationIntentsDDL,
 		mutableReplacementDDL,
 		controlReserveDDL,
 		"PRAGMA user_version=1",
@@ -830,22 +849,36 @@ func (l *Ledger) ReserveOrMatch(ctx context.Context, request Request) (Reservati
 }
 
 func (l *Ledger) reserveOrMatch(ctx context.Context, request Request, matchExisting bool) (ReservationMatch, error) {
+	match, _, err := l.reserveOrMatchIntent(ctx, request, matchExisting, nil)
+	return match, err
+}
+
+func (l *Ledger) reserveOrMatchIntent(ctx context.Context, request Request, matchExisting bool, intent *reservationIntentInput) (ReservationMatch, []byte, error) {
 	if request.ID == "" {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
-			return ReservationMatch{}, err
+			return ReservationMatch{}, nil, err
 		}
 		request.ID = hex.EncodeToString(nonce[:])
 	}
 	if !validID(request.ID) || len(request.Writer) == 0 || len(request.Writer) > 64 || len(request.Family) > 128 || len(request.AncestorFamily) > 128 || !c.ValidDigest(request.RequestDigest) || request.UpperBytes > 1<<48 || request.UpperEntries == 0 || request.UpperEntries > 1<<40 || (request.Class != Payload && request.Class != Control) {
-		return ReservationMatch{}, c.Fail(c.InvalidArgument, "invalid physical quota allocation request")
+		return ReservationMatch{}, nil, c.Fail(c.InvalidArgument, "invalid physical quota allocation request")
+	}
+	if intent != nil && (len(intent.Binding) == 0 || len(intent.Binding) > maxQuotaIntentBindingBytes || len(intent.Payload) == 0 || len(intent.Payload) > maxQuotaIntentPayloadBytes || !c.ValidDigest(intent.BindingDigest) || intent.BindingDigest != c.HashBytes(intent.Binding) || !c.ValidDigest(intent.PayloadDigest) || intent.PayloadDigest != c.HashBytes(intent.Payload) || request.RequestDigest != intent.PayloadDigest) {
+		return ReservationMatch{}, nil, c.Fail(c.InvalidArgument, "invalid bounded physical quota reservation intent")
 	}
 	target, volume, parentPath, parentID, targetID, targetExisted, available, err := targetVolume(request.TargetRoot)
 	if err != nil {
-		return ReservationMatch{}, err
+		return ReservationMatch{}, nil, err
 	}
 	var match ReservationMatch
+	var matchedPayload []byte
 	err = l.withLock(ctx, func() error {
+		if intent != nil {
+			if err := admitMetadata(l.root, quotaIntentAdmissionBytes(len(intent.Binding), len(intent.Payload))); err != nil {
+				return err
+			}
+		}
 		if _, err := l.reconcileFreePendingLocked(ctx); err != nil {
 			return err
 		}
@@ -863,12 +896,13 @@ func (l *Ledger) reserveOrMatch(ctx context.Context, request Request, matchExist
 		}
 		defer tx.Rollback()
 		if matchExisting {
-			existing, found, findErr := matchReservationTx(ctx, tx, l, request, target)
+			existing, payload, found, findErr := matchReservationTx(ctx, tx, l, request, target, intent)
 			if findErr != nil {
 				return findErr
 			}
 			if found {
 				match = existing
+				matchedPayload = payload
 				return nil
 			}
 		}
@@ -926,13 +960,19 @@ func (l *Ledger) reserveOrMatch(ctx context.Context, request Request, matchExist
 		if err != nil {
 			return err
 		}
-		match = ReservationMatch{Allocation: Allocation{ledger: l, ID: request.ID, targetRoot: target}, Scope: ExactReservationScope, Status: "RESERVED", Created: true}
+		if intent != nil {
+			if err = insertReservationIntentTx(ctx, tx, request.ID, *intent); err != nil {
+				return err
+			}
+			matchedPayload = bytes.Clone(intent.Payload)
+		}
+		match = ReservationMatch{Allocation: Allocation{ledger: l, ID: request.ID, targetRoot: target}, Scope: ExactReservationScope, Status: "RESERVED", Created: true, UpperBytes: request.UpperBytes, UpperEntries: request.UpperEntries, RequestDigest: request.RequestDigest}
 		return tx.Commit()
 	})
 	if err != nil {
-		return ReservationMatch{}, err
+		return ReservationMatch{}, nil, err
 	}
-	return match, nil
+	return match, matchedPayload, nil
 }
 
 type reservationCandidate struct {
@@ -941,7 +981,7 @@ type reservationCandidate struct {
 	targetExisted                                                                                         int
 }
 
-func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request Request, target string) (ReservationMatch, bool, error) {
+func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request Request, target string, intent *reservationIntentInput) (ReservationMatch, []byte, bool, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id,writer,family,request_digest,target_root,volume_identity,parent_path,parent_identity,target_identity,target_existed,class,status,upper_bytes,upper_entries
 		FROM quota_allocations WHERE status IN ('RESERVED','WRITING','RETAINED','FREE_PENDING','RELEASED')
 		AND id NOT IN (
@@ -949,7 +989,7 @@ func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request
 			UNION SELECT base_id FROM quota_control_reserves UNION SELECT standby_id FROM quota_control_reserves
 		)`)
 	if err != nil {
-		return ReservationMatch{}, false, err
+		return ReservationMatch{}, nil, false, err
 	}
 	exact := []reservationCandidate{}
 	ancestors := []reservationCandidate{}
@@ -957,7 +997,7 @@ func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request
 		var candidate reservationCandidate
 		if err = rows.Scan(&candidate.id, &candidate.writer, &candidate.family, &candidate.digest, &candidate.target, &candidate.volume, &candidate.parentPath, &candidate.parentIdentity, &candidate.targetIdentity, &candidate.targetExisted, &candidate.class, &candidate.status, &candidate.upperBytes, &candidate.upperEntries); err != nil {
 			rows.Close()
-			return ReservationMatch{}, false, err
+			return ReservationMatch{}, nil, false, err
 		}
 		allocation := Allocation{ledger: ledger, targetRoot: candidate.target}
 		if !allocation.Covers(target) {
@@ -965,7 +1005,7 @@ func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request
 		}
 		if !validID(candidate.id) || !filepath.IsAbs(candidate.target) || !filepath.IsAbs(candidate.parentPath) || !c.ValidDigest(candidate.volume) || !c.ValidDigest(candidate.parentIdentity) || !c.ValidDigest(candidate.targetIdentity) || candidate.targetExisted < 0 || candidate.targetExisted > 1 || (candidate.class != string(Payload) && candidate.class != string(Control)) || candidate.upperBytes < 0 || candidate.upperEntries < 0 {
 			rows.Close()
-			return ReservationMatch{}, false, c.Fail(c.StoreIntegrityError, "physical quota reservation binding is corrupt")
+			return ReservationMatch{}, nil, false, c.Fail(c.StoreIntegrityError, "physical quota reservation binding is corrupt")
 		}
 		if filepath.Clean(candidate.target) == filepath.Clean(target) {
 			exact = append(exact, candidate)
@@ -974,41 +1014,48 @@ func matchReservationTx(ctx context.Context, tx *sql.Tx, ledger *Ledger, request
 		}
 	}
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-		return ReservationMatch{}, false, err
+		return ReservationMatch{}, nil, false, err
 	}
 	if len(exact)+len(ancestors) > 1 {
-		return ReservationMatch{}, false, c.Fail(c.StoreIntegrityError, "nested physical quota reservations overlap")
+		return ReservationMatch{}, nil, false, c.Fail(c.StoreIntegrityError, "nested physical quota reservations overlap")
 	}
 	if len(exact) == 1 {
 		candidate := exact[0]
-		if candidate.writer != request.Writer || candidate.family != request.Family || candidate.digest != request.RequestDigest || candidate.class != string(request.Class) || uint64(candidate.upperBytes) != request.UpperBytes || uint64(candidate.upperEntries) != request.UpperEntries {
-			return ReservationMatch{}, false, c.Fail(c.StaleAuthority, "physical quota retry envelope differs from its existing allocation")
+		if candidate.writer != request.Writer || candidate.family != request.Family || (intent == nil && candidate.digest != request.RequestDigest) || candidate.class != string(request.Class) || uint64(candidate.upperBytes) != request.UpperBytes || uint64(candidate.upperEntries) != request.UpperEntries {
+			return ReservationMatch{}, nil, false, c.Fail(c.StaleAuthority, "physical quota retry envelope differs from its existing allocation")
 		}
 		if err = verifyMatchedReservation(candidate, true); err != nil {
-			return ReservationMatch{}, false, err
+			return ReservationMatch{}, nil, false, err
 		}
-		return ReservationMatch{Allocation: Allocation{ledger: ledger, ID: candidate.id, targetRoot: candidate.target}, Scope: ExactReservationScope, Status: candidate.status}, true, nil
+		var payload []byte
+		if intent != nil {
+			payload, err = readMatchedReservationIntentTx(ctx, tx, candidate, *intent)
+			if err != nil {
+				return ReservationMatch{}, nil, false, err
+			}
+		}
+		return ReservationMatch{Allocation: Allocation{ledger: ledger, ID: candidate.id, targetRoot: candidate.target}, Scope: ExactReservationScope, Status: candidate.status, UpperBytes: uint64(candidate.upperBytes), UpperEntries: uint64(candidate.upperEntries), RequestDigest: candidate.digest}, payload, true, nil
 	}
 	if len(ancestors) == 1 {
 		candidate := ancestors[0]
 		if candidate.status != "WRITING" {
-			return ReservationMatch{}, false, c.Fail(c.StaleAuthority, "an enclosing physical quota allocation is not dispatched")
+			return ReservationMatch{}, nil, false, c.Fail(c.StaleAuthority, "an enclosing physical quota allocation is not dispatched")
 		}
 		if request.AncestorFamily == "" || candidate.family != request.AncestorFamily {
-			return ReservationMatch{}, false, c.Fail(c.StaleAuthority, "nested writer has no trusted enclosing family relationship")
+			return ReservationMatch{}, nil, false, c.Fail(c.StaleAuthority, "nested writer has no trusted enclosing family relationship")
 		}
 		if candidate.class != string(request.Class) {
-			return ReservationMatch{}, false, c.Fail(c.StaleAuthority, "nested writer class differs from its enclosing physical reservation")
+			return ReservationMatch{}, nil, false, c.Fail(c.StaleAuthority, "nested writer class differs from its enclosing physical reservation")
 		}
 		if uint64(candidate.upperBytes) < request.UpperBytes || uint64(candidate.upperEntries) < request.UpperEntries {
-			return ReservationMatch{}, false, c.Fail(c.StaleAuthority, "nested writer envelope exceeds its enclosing physical reservation")
+			return ReservationMatch{}, nil, false, c.Fail(c.StaleAuthority, "nested writer envelope exceeds its enclosing physical reservation")
 		}
 		if err = verifyMatchedReservation(candidate, false); err != nil {
-			return ReservationMatch{}, false, err
+			return ReservationMatch{}, nil, false, err
 		}
-		return ReservationMatch{Allocation: Allocation{ledger: ledger, ID: candidate.id, targetRoot: candidate.target}, Scope: AncestorReservationScope, Status: candidate.status}, true, nil
+		return ReservationMatch{Allocation: Allocation{ledger: ledger, ID: candidate.id, targetRoot: candidate.target}, Scope: AncestorReservationScope, Status: candidate.status, UpperBytes: uint64(candidate.upperBytes), UpperEntries: uint64(candidate.upperEntries), RequestDigest: candidate.digest}, nil, true, nil
 	}
-	return ReservationMatch{}, false, nil
+	return ReservationMatch{}, nil, false, nil
 }
 
 func verifyMatchedReservation(candidate reservationCandidate, exact bool) error {
@@ -1155,6 +1202,13 @@ func (a Allocation) Commit(ctx context.Context, inventory Inventory) error {
 			return err
 		}
 		defer tx.Rollback()
+		var pendingHandoff int
+		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM quota_handoffs WHERE allocation_id=? AND state IN ('PREPARED','STAGE_BOUND')", a.ID).Scan(&pendingHandoff); err != nil {
+			return err
+		}
+		if pendingHandoff != 0 {
+			return c.Fail(c.StaleAuthority, "pending physical quota handoff must settle at its final path")
+		}
 		var status, target, volume, parentPath, targetIdentity string
 		var targetExisted int
 		var upperBytes, upperEntries int64
@@ -1191,6 +1245,9 @@ func (a Allocation) Commit(ctx context.Context, inventory Inventory) error {
 		}
 		_, err = tx.ExecContext(ctx, "UPDATE quota_allocations SET status='RETAINED',retained_bytes=?,retained_entries=?,receipt=? WHERE id=? AND status='WRITING'", measured.ChargedBytes, measured.Entries, raw, a.ID)
 		if err != nil {
+			return err
+		}
+		if err = eraseReservationIntentPayloadTx(ctx, tx, a.ID); err != nil {
 			return err
 		}
 		if err = tx.Commit(); err != nil {

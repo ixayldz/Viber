@@ -25,6 +25,9 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 MAX_PHASE_SECONDS = 10.0
+# Task execution includes durable candidate/journal writes. Its bound is
+# separate from the ten-second interactive-command/connection checks.
+MAX_DEMO_SECONDS = 45.0
 TASK_ID_RE = re.compile(r"task-[0-9a-f]{32}\Z")
 PRIVACY_DIR_RE = re.compile(r"\.viber-privacy-[0-9a-f]{32}\Z")
 TASK_CAPTURE_RE = re.compile(rb"Task ID:\s*(task-[0-9a-f]{32})")
@@ -359,8 +362,18 @@ def _journey(binary: Path, revision: str) -> dict:
         confirmed_demo = True
         terminal.write(b"YES\r")
         terminal.wait_for(b"Task ID:", MAX_PHASE_SECONDS, "offline_task_created")
-        terminal.wait_for(b"Opening the Viber task interface", MAX_PHASE_SECONDS, "auto_ui_handoff")
-        terminal.wait_for(b"Connected.", MAX_PHASE_SECONDS, "auto_ui_connected")
+        demo_started = time.monotonic()
+        # ConPTY can coalesce/discard a transient console banner when the app
+        # immediately switches into the alternate screen. Observe the live
+        # UI's persistent connected frame, not an announcement printed before
+        # that screen switch. No `ui` command is sent by this harness.
+        terminal.wait_for(b"Connected.", MAX_DEMO_SECONDS, "offline_task_execution_and_auto_ui")
+        demo_seconds = time.monotonic() - demo_started
+        terminal.write(b"/")
+        terminal.wait_for(b"Commands | Up/Down select | Tab/Enter fill", MAX_PHASE_SECONDS, "auto_ui_command_palette")
+        # Escape dismisses the menu and preserves the slash draft. Remove
+        # that draft before the later /quit command.
+        terminal.write(b"\x1b\x7f")
         match = TASK_CAPTURE_RE.search(terminal.capture)
         if match is None:
             raise JourneyFailure("task_id")
@@ -399,6 +412,7 @@ def _journey(binary: Path, revision: str) -> dict:
             "platform": _platform_name(),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
             "terminal_backend": "conpty" if os.name == "nt" else "pty",
+            "offline_task_execution_seconds": round(demo_seconds, 3),
             "journey": {
                 "bare_launch": True,
                 "offline_demo_selected": True,

@@ -22,6 +22,67 @@ func projectInstructionTestPolicy() policy.Policy {
 		Effects: []string{"snapshot.read", "model.infer"}, Paths: []string{"**"}}
 }
 
+func TestCapturedClaudeInstructionsRespectFormatPrecedenceAndPolicy(t *testing.T) {
+	root := t.TempDir()
+	files := map[string][]byte{
+		"CLAUDE.md":     []byte("root Claude guidance\n"),
+		"src/AGENTS.md": []byte("preferred agent guidance\n"),
+		"src/CLAUDE.md": []byte("lower priority guidance\n"),
+		"src/main.go":   []byte("package main\n"),
+	}
+	for name, raw := range files {
+		full := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, raw, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture, err := workspace.CaptureDirectory(root, workspace.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers := []policy.Policy{projectInstructionTestPolicy()}
+	loads := []string{}
+	load := func(entry c.Entry) ([]byte, error) {
+		loads = append(loads, entry.Path)
+		return capture.Contents[entry.Path], nil
+	}
+	discovery, err := discoverProjectInstructionsFromSnapshot(capture.Snapshot, capture.Snapshot.Digest, layers, nil, load)
+	if err != nil || discovery.Coverage != "COMPLETE" || len(discovery.Documents) != 2 || strings.Join(loads, ",") != "CLAUDE.md,src/AGENTS.md" {
+		t.Fatalf("mixed-format discovery lost scope or precedence: loads=%v result=%+v err=%v", loads, discovery, err)
+	}
+	for _, document := range discovery.Documents {
+		if document.CandidateDigest != capture.Snapshot.Digest || document.FileDigest != c.HashBytes(files[document.Path]) || document.Content != string(files[document.Path]) || document.ByteEnd != int64(len(files[document.Path])) {
+			t.Fatal("Claude compatibility lost captured byte provenance", document)
+		}
+	}
+	layers[0].DeniedPaths = []string{"src/AGENTS.md"}
+	loads = nil
+	discovery, err = discoverProjectInstructionsFromSnapshot(capture.Snapshot, capture.Snapshot.Digest, layers, nil, load)
+	if err != nil || discovery.Coverage != "PARTIAL" || strings.Join(loads, ",") != "CLAUDE.md" || strings.Contains(renderInstructionsForTest(t, discovery), "lower priority guidance") {
+		t.Fatalf("denied AGENTS guidance fell back to CLAUDE.md: loads=%v result=%+v err=%v", loads, discovery, err)
+	}
+	// Even when excluded from capture, a higher-priority format must not be
+	// substituted with readable guidance from a lower-priority format.
+	exclusions := workspace.DefaultLimits()
+	exclusions.SensitivePaths = []string{"src/AGENTS.md"}
+	excludedCapture, err := workspace.CaptureDirectory(root, exclusions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers[0].DeniedPaths = nil
+	loads = nil
+	discovery, err = discoverProjectInstructionsFromSnapshot(excludedCapture.Snapshot, excludedCapture.Snapshot.Digest, layers, nil, func(entry c.Entry) ([]byte, error) {
+		loads = append(loads, entry.Path)
+		return excludedCapture.Contents[entry.Path], nil
+	})
+	if err != nil || discovery.Coverage != "PARTIAL" || strings.Join(loads, ",") != "CLAUDE.md" || strings.Contains(renderInstructionsForTest(t, discovery), "lower priority guidance") {
+		t.Fatalf("excluded AGENTS guidance fell back to CLAUDE.md: loads=%v result=%+v err=%v", loads, discovery, err)
+	}
+}
+
 func TestCapturedProjectInstructionsBindCompileAndReportLimits(t *testing.T) {
 	root := t.TempDir()
 	files := map[string][]byte{

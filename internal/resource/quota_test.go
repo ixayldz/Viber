@@ -287,6 +287,67 @@ func TestReserveOrMatchRequiresExactRetryEnvelopeAndSameClassAncestor(t *testing
 	}
 }
 
+func TestReserveOrMatchWithIntentReturnsOriginalAndErasesPayloadAfterCommit(t *testing.T) {
+	authority, base := testAuthority(t)
+	ledger := openTestLedger(t, authority, smallLimits(), "")
+	defer ledger.Close()
+	ctx := context.Background()
+	target := filepath.Join(base, "intent-root")
+	binding := []byte(`{"schema_version":1,"snapshot":"stable"}`)
+	original := []byte(`{"available_bytes":123,"tasks":[]}`)
+	observed := []byte(`{"available_bytes":999,"tasks":[]}`)
+	request := Request{Writer: "export", Family: "SUPPORT", RequestDigest: c.HashBytes(original), TargetRoot: target, UpperBytes: 128 << 10, UpperEntries: 8, Class: Payload}
+	first, saved, err := ledger.ReserveOrMatchWithIntent(ctx, request, binding, original)
+	if err != nil || !first.Created || first.Status != "RESERVED" || !bytes.Equal(saved, original) {
+		t.Fatalf("first intent did not atomically save its original payload: %+v saved=%q err=%v", first, saved, err)
+	}
+
+	retryRequest := request
+	retryRequest.RequestDigest = c.HashBytes(observed)
+	retry, saved, err := ledger.ReserveOrMatchWithIntent(ctx, retryRequest, binding, observed)
+	if err != nil || retry.Created || retry.Allocation.ID != first.Allocation.ID || !bytes.Equal(saved, original) || retry.RequestDigest != c.HashBytes(original) {
+		t.Fatalf("retry did not recover its originally reserved payload: %+v saved=%q err=%v", retry, saved, err)
+	}
+	changedBinding := []byte(`{"schema_version":1,"snapshot":"changed"}`)
+	if _, _, err = ledger.ReserveOrMatchWithIntent(ctx, retryRequest, changedBinding, observed); err == nil {
+		t.Fatal("changed stable binding inherited the saved support intent")
+	} else {
+		var typed *c.Error
+		if !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
+			t.Fatalf("changed stable binding returned the wrong error: %v", err)
+		}
+	}
+
+	if err = first.Allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(target, "support.json"), original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, measureErr := Measure(root, true)
+	closeErr := root.Close()
+	if err = errors.Join(measureErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Allocation.Commit(ctx, inventory); err != nil {
+		t.Fatal(err)
+	}
+	retained, saved, err := ledger.ReserveOrMatchWithIntent(ctx, retryRequest, binding, observed)
+	if err != nil || retained.Status != "RETAINED" || retained.RequestDigest != c.HashBytes(original) || len(saved) != 0 {
+		t.Fatalf("settled intent did not retain only its binding and original digest: %+v saved=%q err=%v", retained, saved, err)
+	}
+	if err = retained.Allocation.ValidateRetained(ctx, inventory); err != nil {
+		t.Fatal("retained inventory failed validation", err)
+	}
+}
+
 func mustMeasure(t *testing.T, root *os.Root) Inventory {
 	t.Helper()
 	inventory, err := Measure(root, true)

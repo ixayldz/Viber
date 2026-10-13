@@ -42,6 +42,11 @@ EXPECTED_TEST_PACKAGES = {
     "TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts": "github.com/ixayldz/Viber/internal/agent",
     "TestCollectGarbageFailsClosedOnExhaustedControlQuota": "github.com/ixayldz/Viber/internal/agent",
     "TestCollectGarbageSettlesCompletedWritingAllocationAfterReopen": "github.com/ixayldz/Viber/internal/agent",
+    "TestSupportRetryAfterReopenUsesSavedOriginalReport": "github.com/ixayldz/Viber/internal/agent",
+    "TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary": "github.com/ixayldz/Viber/internal/agent",
+    "TestReserveOrMatchWithIntentReturnsOriginalAndErasesPayloadAfterCommit": "github.com/ixayldz/Viber/internal/resource",
+    "TestHandoffCrashAfterRenameReopensChargedAndCommitsExactRetry": "github.com/ixayldz/Viber/internal/resource",
+    "TestInstallAndRollbackRespectPhysicalQuotaProtocols": "github.com/ixayldz/Viber/internal/distribution",
     "TestPrivacyPendingDeletionNamespaceCannotAuthorizeAnotherTask": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRejectsRehashedDeletionNamespaceCollision": "github.com/ixayldz/Viber/internal/agent",
     "TestPrivacyReplayRetainsEveryConsentRetryAndRefreshesAuthority": "github.com/ixayldz/Viber/internal/agent",
@@ -201,6 +206,11 @@ if args.delivery:
         "TestCollectGarbageReservesControlQuotaAndAdoptsCrashedAttempts",
         "TestCollectGarbageFailsClosedOnExhaustedControlQuota",
         "TestCollectGarbageSettlesCompletedWritingAllocationAfterReopen",
+        "TestSupportRetryAfterReopenUsesSavedOriginalReport",
+        "TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary",
+        "TestReserveOrMatchWithIntentReturnsOriginalAndErasesPayloadAfterCommit",
+        "TestHandoffCrashAfterRenameReopensChargedAndCommitsExactRetry",
+        "TestInstallAndRollbackRespectPhysicalQuotaProtocols",
         "TestMetadataOnlyProtectionValidationBindsOriginPlanAndSource",
     }
 if args.native_ntfs:

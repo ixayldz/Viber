@@ -362,11 +362,22 @@ func (s *Session) GCPreview(ctx context.Context) (GCPlan, error) {
 		return plan, err
 	}
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Path < objects[j].Path })
+	maxObjects := 2048
+	if s.PhysicalQuota != nil {
+		// The control receipt reserves a root, intent, completion and one
+		// temporary entry in addition to one record per collected object.
+		// Never offer a batch that cannot fit even an empty control ledger.
+		entries := s.PhysicalQuota.Limits.ControlEntries
+		if entries <= 4 {
+			return plan, c.Fail(c.BudgetLimitReached, "GC control entry budget cannot fit a maintenance batch")
+		}
+		maxObjects = int(min(uint64(maxObjects), entries-4))
+	}
 	for _, object := range objects {
 		if marked[object.Path] {
 			continue
 		}
-		if len(plan.Objects) == 2048 {
+		if len(plan.Objects) == maxObjects {
 			plan.HasMore = true
 			break
 		}

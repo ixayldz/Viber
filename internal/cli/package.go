@@ -38,19 +38,27 @@ func runPackage(args []string, out, errout io.Writer) int {
 		return report(out, errout, c.Fail(c.InvalidArgument, "unknown package action"), false)
 	}
 	f := flags("package "+action, errout)
-	prefix := f.String("prefix", "", "managed program directory, separate from task stores")
+	prefix := f.String("prefix", "", "managed program directory (defaults to a per-user location), separate from task stores")
 	archive := f.String("archive", "", "local portable archive")
 	sha := f.String("source-sha", "", "operator-selected full Git commit SHA")
 	gh := f.String("gh", "", "absolute operator-selected official GitHub CLI executable")
 	target := f.String("revision", "", "exact installed rollback revision")
+	launcher := f.Bool("launcher", false, "create an owned per-user `viber` launcher (Windows adds it to PATH; Unix prints a shell PATH command)")
 	jsonMode := f.Bool("json", false, "structured program version status")
 	var paths packageStores
 	f.Var(&paths, "store", "known task store; repeat to hold every used store owner lock during activation")
 	if err := f.Parse(args[1:]); err != nil {
 		return 4
 	}
-	if *prefix == "" || action != "run" && f.NArg() != 0 {
-		return report(out, errout, c.Fail(c.InvalidArgument, "managed prefix required; run arguments follow --"), *jsonMode)
+	if *prefix == "" {
+		var prefixErr error
+		*prefix, prefixErr = defaultManagedPrefix()
+		if prefixErr != nil {
+			return report(out, errout, prefixErr, *jsonMode)
+		}
+	}
+	if action != "run" && f.NArg() != 0 || *launcher && action != "install" {
+		return report(out, errout, c.Fail(c.InvalidArgument, "run arguments follow --; --launcher is supported only by install"), *jsonMode)
 	}
 	if action == "run" {
 		childStore := ""
@@ -109,6 +117,11 @@ func runPackage(args []string, out, errout io.Writer) int {
 		}
 		bundle, err = distribution.ParseArchive(raw, kind, *sha, runtime.GOOS+"/"+runtime.GOARCH)
 		if err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+	}
+	if action == "install" || action == "rollback" || action == "deactivate" || action == "uninstall" {
+		if err := checkManagedPathOperation(*prefix, action, *launcher); err != nil {
 			return report(out, errout, err, *jsonMode)
 		}
 	}
@@ -227,6 +240,20 @@ func runPackage(args []string, out, errout io.Writer) int {
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
+	pathInstruction := ""
+	switch action {
+	case "install", "rollback":
+		if err = syncManagedPath(*prefix, state.Binary, *launcher); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		if *launcher && !*jsonMode {
+			pathInstruction = managedPathInstruction()
+		}
+	case "deactivate", "uninstall":
+		if err = removeManagedPath(*prefix); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+	}
 	if *jsonMode {
 		if err = jsonWrite(out, state); err != nil {
 			return 4
@@ -235,6 +262,9 @@ func runPackage(args []string, out, errout io.Writer) int {
 		fmt.Fprintf(out, "Program selection %d · %s · %s\n", state.Active.Sequence, state.Active.Action, state.Active.Revision)
 		if state.Binary != "" {
 			fmt.Fprintf(out, "Executable: %q\n", state.Binary)
+		}
+		if pathInstruction != "" {
+			fmt.Fprintln(out, pathInstruction)
 		}
 	}
 	return 0

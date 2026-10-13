@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
 	"github.com/ixayldz/Viber/internal/resource"
-	"path/filepath"
-	"sort"
 )
 
 type SupportTask struct {
@@ -148,7 +153,7 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 	if err != nil {
 		return report, err
 	}
-	raw, err := c.CanonicalV1(report)
+	raw, upperBytes, upperEntries, err := supportExportEnvelope(report)
 	if err != nil {
 		return report, err
 	}
@@ -157,15 +162,32 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 	}
 	var allocation resource.Allocation
 	owned := false
+	var bindingRaw []byte
+	registeredCopy := false
 	if s.PhysicalQuota != nil {
-		// ReserveOrMatch distinguishes a retry of this exact support export
-		// from coverage by a compound writer. A path-only WRITING match would
-		// let changed output bytes inherit someone else's envelope.
-		upperBytes, upperEntries, estimateErr := exportPhysicalEstimate(nil, raw)
-		if estimateErr != nil {
-			return report, estimateErr
+		currentBinding, currentBindingRaw, bindingErr := buildSupportExportBinding(ctx, s, report)
+		if bindingErr != nil {
+			return report, bindingErr
 		}
-		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(raw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+		bindingRaw = currentBindingRaw
+		prior, found, findErr := s.PhysicalQuota.FindReservationIntent(ctx, target, "agent", "SUPPORT")
+		if findErr != nil {
+			return report, findErr
+		}
+		if found {
+			bindingRaw, registeredCopy, err = supportRetryBinding(ctx, s, target, report, currentBinding, prior.Binding)
+			if err != nil {
+				return report, err
+			}
+			// The stable binding was validated above, so retry with the exact
+			// envelope admitted alongside its original payload. The generic
+			// ledger matcher still enforces that envelope byte-for-byte.
+			upperBytes, upperEntries = prior.Match.UpperBytes, prior.Match.UpperEntries
+		}
+	}
+	if s.PhysicalQuota != nil {
+		request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(raw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
+		match, savedPayload, matchErr := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, bindingRaw, raw)
 		if matchErr != nil {
 			return report, matchErr
 		}
@@ -183,34 +205,88 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 			case "WRITING":
 				// Resume an interrupted writer under its original reservation.
 			case "RETAINED":
-				return report, c.Fail(c.StaleAuthority, "support output was already published")
+				if !registeredCopy {
+					return report, c.Fail(c.StaleAuthority, "retained support output has no verified self-registration")
+				}
+				retainedRoot, openErr := os.OpenRoot(target)
+				if openErr != nil {
+					return report, openErr
+				}
+				retainedReport, validateErr := validateRetainedSupport(ctx, match, retainedRoot, bindingRaw)
+				closeErr := retainedRoot.Close()
+				if err = errors.Join(validateErr, closeErr); err != nil {
+					return report, err
+				}
+				return retainedReport, nil
 			default:
 				return report, c.Fail(c.StaleAuthority, "support output reservation is not writable")
 			}
 		default:
 			return report, c.Fail(c.StoreIntegrityError, "support physical reservation scope is invalid")
 		}
+		if match.Scope == resource.ExactReservationScope {
+			if len(savedPayload) == 0 {
+				return report, c.Fail(c.StoreIntegrityError, "active support intent did not return its original payload")
+			}
+			raw = savedPayload
+			report, err = readSupportPayload(raw)
+			if err != nil {
+				return report, err
+			}
+		}
 	}
-	root, err := freshPrivate(target)
+	var root *os.Root
+	if registeredCopy {
+		root, err = os.OpenRoot(target)
+		if err == nil {
+			err = fileguard.Private(root)
+		}
+	} else if _, statErr := os.Lstat(target); statErr == nil {
+		err = c.Fail(c.StaleAuthority, "support retry found an output directory without its exact managed registration")
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		err = statErr
+	} else {
+		root, err = freshPrivate(target)
+	}
 	if err != nil {
+		if root != nil {
+			_ = root.Close()
+		}
 		return report, err
 	}
 	defer root.Close()
-	states, err := s.Journal.Replay(ctx, "")
+	tasks, err := supportTasks(ctx, s)
 	if err != nil {
 		return report, err
 	}
-	tasks := []string{}
-	for task, state := range states {
-		if state.Deletion == nil {
-			tasks = append(tasks, task)
+	if registeredCopy {
+		identity, identityErr := fileguard.DirectoryIdentity(root)
+		if identityErr != nil {
+			return report, identityErr
 		}
-	}
-	if err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks); err != nil {
+		if err = verifySupportManagedCopy(ctx, s, target, identity, tasks); err != nil {
+			return report, err
+		}
+	} else if err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks); err != nil {
 		return report, err
 	}
-	if err = fileguard.Publish(root, "support.json", raw); err != nil {
-		return report, err
+	if existing, readErr := fileguard.ReadRegular(root, "support.json", maxSupportReportBytes); readErr == nil {
+		if !bytes.Equal(existing, raw) {
+			return report, c.Fail(c.StaleAuthority, "interrupted support output contains a different report")
+		}
+	} else if errors.Is(readErr, os.ErrNotExist) {
+		entries, listErr := fs.ReadDir(root.FS(), ".")
+		if listErr != nil {
+			return report, listErr
+		}
+		if len(entries) != 0 {
+			return report, c.Fail(c.StaleAuthority, "interrupted support output contains an unrecognized partial file")
+		}
+		if err = fileguard.Publish(root, "support.json", raw); err != nil {
+			return report, err
+		}
+	} else {
+		return report, readErr
 	}
 	parent, err := root.OpenRoot(".")
 	if err != nil {
@@ -224,6 +300,9 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 		inventory, measureErr := resource.Measure(root, true)
 		if measureErr != nil {
 			return report, measureErr
+		}
+		if inventory.Entries != 2 || len(inventory.Files) != 1 || inventory.Files[0].Path != "support.json" || inventory.Files[0].Digest != c.HashBytes(raw) {
+			return report, c.Fail(c.StaleAuthority, "support output contains content outside its original intent")
 		}
 		if err = allocation.Commit(ctx, inventory); err != nil {
 			return report, err

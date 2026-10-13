@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -140,13 +142,17 @@ func TestSupportAndDeliveryPreviewFailClosedOnExhaustedPhysicalQuota(t *testing.
 	}
 }
 
-// A begun support reservation must not be silently reused when its report
-// snapshot changes across owner reopen. PrivacyMetadata.AvailableBytes is an
-// observation, so this test records whether it remains byte-stable and checks
-// that any changed report is rejected before an output root is created.
-func TestSupportRetryAfterReopenUsesExactOriginalReportEnvelope(t *testing.T) {
+// A begun support reservation keeps the original bounded report across owner
+// reopen even when its live free-space observation changes.
+func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	ctx := context.Background()
 	s, opts, _ := startFixture(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "done", UsageKnown: true}}, true)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = s.Close()
+		}
+	}()
 	if _, err := s.Run(ctx, opts.TaskID); err != nil {
 		t.Fatal(err)
 	}
@@ -154,27 +160,36 @@ func TestSupportRetryAfterReopenUsesExactOriginalReportEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalRaw, err := c.CanonicalV1(original)
+	originalRaw, upperBytes, upperEntries, err := supportExportEnvelope(original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upperBytes, upperEntries, err := exportPhysicalEstimate(nil, originalRaw)
+	_, bindingRaw, err := buildSupportExportBinding(ctx, s, original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	output := filepath.Join(t.TempDir(), "support-retry")
 	request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(originalRaw), TargetRoot: output, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
-	allocation, err := s.PhysicalQuota.Reserve(ctx, request)
+	reservation, saved, err := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, bindingRaw, originalRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = allocation.Begin(ctx); err != nil {
+	if !reservation.Created || !bytes.Equal(saved, originalRaw) {
+		t.Fatal("support reservation did not save its first payload")
+	}
+	if err = reservation.Allocation.Begin(ctx); err != nil {
 		t.Fatal(err)
 	}
+	spaceConsumer := filepath.Join(filepath.Dir(output), "support-space-consumer.bin")
+	if err = os.WriteFile(spaceConsumer, make([]byte, 4<<20), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(spaceConsumer)
 	directory := s.directory
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
+	closed = true
 	reopened, err := OpenExisting(ctx, directory)
 	if err != nil {
 		t.Fatal(err)
@@ -194,31 +209,157 @@ func TestSupportRetryAfterReopenUsesExactOriginalReportEnvelope(t *testing.T) {
 	} else {
 		t.Logf("reopened support report digest changed=%v", digestChanged)
 	}
+	originalStableDigest, stableErr := supportReportDigest(original)
+	if stableErr != nil {
+		t.Fatal(stableErr)
+	}
+	currentStableDigest, stableErr := supportReportDigest(current)
+	if stableErr != nil || currentStableDigest != originalStableDigest {
+		t.Fatalf("only the free-space observation should vary across reopen: original=%s current=%s err=%v", originalStableDigest, currentStableDigest, stableErr)
+	}
 	before, err := reopened.PhysicalQuota.Capacity(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = reopened.ExportSupport(ctx, output)
-	if digestChanged {
-		var typed *c.Error
-		if err == nil || !errors.As(err, &typed) || typed.Code != c.StaleAuthority {
-			t.Fatalf("changed support report did not fail closed against its original allocation: %v", err)
-		}
-		if _, statErr := os.Stat(output); !os.IsNotExist(statErr) {
-			t.Fatal("changed report created output before rejecting the retry")
-		}
-		after, capacityErr := reopened.PhysicalQuota.Capacity(ctx)
-		if capacityErr != nil || after.Allocations != before.Allocations || after.OutstandingItems != before.OutstandingItems {
-			t.Fatalf("changed retry replaced or released its original charge: before=%+v after=%+v err=%v", before, after, capacityErr)
-		}
-		return
-	}
+	exported, err := reopened.ExportSupport(ctx, output)
 	if err != nil {
-		t.Fatal("unchanged support report did not resume its exact WRITING allocation", err)
+		t.Fatal("support retry did not resume its saved WRITING intent", err)
 	}
 	stored, err := os.ReadFile(filepath.Join(output, "support.json"))
 	if err != nil || c.HashBytes(stored) != request.RequestDigest {
 		t.Fatal("resumed support output differs from its reserved original report", err)
+	}
+	exportedRaw, err := c.CanonicalV1(exported)
+	if err != nil || !bytes.Equal(exportedRaw, originalRaw) {
+		t.Fatal("resumed support call did not return the original reserved report", err)
+	}
+	after, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil || after.Allocations != before.Allocations || after.OutstandingItems >= before.OutstandingItems || after.RetainedEntries <= before.RetainedEntries {
+		t.Fatalf("support retry changed the original physical charge: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+// A self-registered copy is the sole privacy-history suffix that an exact
+// interrupted support export may adopt. The 9-to-10 transition also changes
+// the fresh report's byte estimate, so retry must carry the saved envelope.
+func TestSupportRetryOwnRegistrationAcrossSequenceWidthBoundary(t *testing.T) {
+	ctx := context.Background()
+	s, opts, _ := startFixture(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "done", UsageKnown: true}}, true)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = s.Close()
+		}
+	}()
+	if _, err := s.Run(ctx, opts.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	var report SupportReport
+	var binding supportExportBinding
+	for {
+		var err error
+		report, err = s.Support(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, _, err = buildSupportExportBinding(ctx, s, report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binding.RegistrySequence >= 9 {
+			break
+		}
+		warmup := filepath.Join(base, fmt.Sprintf("warmup-%02d", binding.RegistrySequence))
+		if _, err = s.ExportSupport(ctx, warmup); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if binding.RegistrySequence != 9 {
+		t.Fatalf("expected test to start on sequence 9, got %d", binding.RegistrySequence)
+	}
+	originalRaw, upperBytes, upperEntries, err := supportExportEnvelope(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bindingRaw, err := buildSupportExportBinding(ctx, s, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(base, "interrupted")
+	request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(originalRaw), TargetRoot: output, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
+	reservation, saved, err := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, bindingRaw, originalRaw)
+	if err != nil || !reservation.Created || !bytes.Equal(saved, originalRaw) {
+		t.Fatal("support reservation did not preserve its initial envelope", err)
+	}
+	if err = reservation.Allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	root, err := freshPrivate(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := supportTasks(ctx, s)
+	if err == nil {
+		err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks)
+	}
+	if err == nil {
+		err = fileguard.Publish(root, "support.json", originalRaw)
+	}
+	if err == nil {
+		err = fileguard.Publish(root, "foreign.txt", []byte("preserve foreign content"))
+	}
+	closeErr := root.Close()
+	if err = errors.Join(err, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	directory := s.directory
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	reopened, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	current, err := reopened.Support(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retryUpperBytes, retryUpperEntries, err := supportExportEnvelope(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryUpperBytes == upperBytes && retryUpperEntries == upperEntries {
+		t.Fatal("sequence-width boundary did not change the fresh report envelope")
+	}
+	before, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reopened.ExportSupport(ctx, output); err == nil {
+		t.Fatal("support retry adopted foreign content alongside its original report")
+	}
+	foreign := filepath.Join(output, "foreign.txt")
+	if raw, readErr := os.ReadFile(foreign); readErr != nil || string(raw) != "preserve foreign content" {
+		t.Fatal("refused retry changed foreign content", readErr)
+	}
+	after, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil || after.Allocations != before.Allocations || after.OutstandingBytes != before.OutstandingBytes {
+		t.Fatal("refused retry altered its original charge", before, after, err)
+	}
+	// The fixture's external writer removes its own foreign file. Viber never
+	// removes or adopts it as part of retry/recovery.
+	if err = os.Remove(foreign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reopened.ExportSupport(ctx, output); err != nil {
+		t.Fatal("support retry did not adopt its exact managed-copy suffix using the saved envelope", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(output, "support.json"))
+	if err != nil || c.HashBytes(stored) != c.HashBytes(originalRaw) {
+		t.Fatal("support retry did not publish the original intent payload", err)
 	}
 }
 

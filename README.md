@@ -25,6 +25,8 @@ Go yalnız kaynaktan derleme için gerekir. Docker yalnız izole check/extension
 
 Başlangıç ekranında **1: ChatGPT**, **2: yerel Ollama**, **3: internetsiz örnek** seçilir. ChatGPT/Ollama için proje klasörünü seçip görevi kendi sözlerinizle yazın. Görev kimliği ve proje dışındaki özel kayıt klasörü otomatik oluşturulur. ChatGPT'ye proje bağlamı gönderilmeden önce `YES` istenir; giriş gerekiyorsa `LOGIN` seçimi resmî tarayıcı akışını açar. Ollama için kurulu modelin adını girin. `CANCEL` veya `q` başlangıcı durdurur.
 
+Yeni main kaynağında ChatGPT/Ollama görevi oluşturulunca arayüz modelin bitmesini beklemeden açılır. Önerilen kod değişiklikleri incelemenizi bekler; `/requests` ve `/diff` ile bakıp `/respond REQUEST_ID approve` ve `/resume` ile devam edebilirsiniz. Bağımsız kontrolü olmayan sonucun teslimi ayrıca onay ister ve UNVERIFIED kalır. Bu takip değişikliği henüz public `af70426` paketinde değildir.
+
 Gerçek terminalde görev başladıktan sonra TUI otomatik açılır. `/` ile komutlara bakın, `/requests` ile bekleyen öneriyi inceleyin, onayladıktan sonra `/resume` kullanın. `/diff` değişiklikleri gösterir; `/exit` arayüzden ayrılır ve geçmişi korur. İnternetsiz örnek yalnız özel bir `hello.txt` projesinde sabit demo çalıştırır; kendi projenizi okumaz, gerçek model kullanmaz ve **UNVERIFIED / exit 2** kalır.
 
 `viber start` başlangıcı açıkça başlatır. Girdi/çıktı terminal değilse bare `viber` yardım gösterir; scriptler `run` komutunu kullanabilir. Elle kurulum ve gelişmiş komutlar aşağıdadır. Kaynak branch'indeki yeni eklemelerin paket kapsamı [destek tablosunda](docs/CAPABILITIES.md), son kod denetimi [13 Ekim raporunda](docs/REPOSITORY_AUDIT_2026_10_13.md) açıklanır.
@@ -58,6 +60,8 @@ Linux / macOS:
 `doctor` içinde `release_ready: false` mevcut ön sürüm için beklenen durumdur. İlk kurulumda Docker gerekmez. Projenin testlerini izole süreçte çalıştırmak için ayrıca desteklenen Docker ve kayıtlı check yapılandırması gerekir.
 
 Main branch, son public paketten daha yeni geliştirmeler içerebilir. **Releases'ten indirilen pakette bütün main komutları bulunduğunu varsaymayın.** Güncel kaynak kodunu kullanmak için aşağıdaki [kaynaktan kurulum](#kaynaktan-kurulum) yolunu izleyin.
+
+**Yeni main: terminalden `viber` ile açma.** Doğrulanmış yeni arşivi `package install --launcher` ile kurunca Windows kullanıcı PATH'ine sahipliği izlenen `viber.cmd` eklenir; yeni terminalde `viber` çalışır. Linux/macOS için kurulumun verdiği `export PATH=…` satırını çalıştırın. [Tam kurulum komutu ve sınırlar](docs/INSTALL.md#terminalde-viber-komutu-yeni-main). Public `af70426` bu seçeneği içermez.
 
 Bu exact-source paket için üç native platformda yönetilen kurulum, ilk offline görev, önceki public `90bc97` sürümünden yükseltme → geri dönüş → yeniden yükseltme ve yalnız yönetilen program dosyalarını kaldırma kabulü geçti. Mevcut görevin durumu ve dış store korundu. `package install`, `status`, `rollback` ve `uninstall` adımları [anahtarsız operasyonlar kılavuzunda](docs/KEYLESS_OPERATIONS.md#yönetilen-kurulum) anlatılır.
 

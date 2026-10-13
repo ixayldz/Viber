@@ -2,6 +2,8 @@
 
 Status: design only. The restore stage and independent evaluator owner are not yet bound to the shared physical quota ledger. This document proposes the missing ledger contract; it is not an implementation or acceptance result.
 
+13 October follow-up: `internal/resource/quota_handoff.go` now implements the narrow sibling stage-to-target primitive: durable prepare before mkdir, root identity binding before content, no-replace rename/sync, same-row final settlement and exact crash-boundary retry. OpenPinned validates its bounded schema/records; ordinary Commit cannot bypass a pending move. Resource regressions and registered-store downgrade/rollback protocol gates pass locally. This does **not** implement owner bootstrap/partition or bind `restoreBackup`/`OpenIndependentEvaluator`; those integrations below remain design/open. Exact-source native acceptance is still required.
+
 ## Scope and authority
 
 The managed-writer inventory identifies `restoreBackup` and `OpenIndependentEvaluator` as unbound writers. The required behavior is described in the [managed-writer inventory](MANAGED_WRITER_INVENTORY.md) and package 2 of the [keyless delivery plan](KEYLESS_DELIVERY_PLAN.md). This design implements the product requirements in [PRD §11](../prd.md), [§13.3](../prd.md), [§14](../prd.md), [§20](../prd.md), [§23](../prd.md), [§27](../prd.md), and [§28, scenario 34](../prd.md).
