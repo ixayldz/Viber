@@ -1,5 +1,15 @@
 # Doğrulama kaydı
 
+## 13 Ekim 821c23e hosted CI takip düzeltmesi
+
+Exact `821c23eaed838098a97a276990a7d351bac3de1f` [core38398865431](https://github.com/ixayldz/Viber/actions/runs/38398865431) **CANCELLED**. Dokuz ilk aşama işi SUCCESS; Windows full suite 45 dakikalık job sınırında iptal edildi, foundation FAILED ve dependent installation/attestation SKIPPED. Windows logunda ayrıca `TestLocalInferenceCannotExtendTaskActiveWorkDeadline` **FAIL**: 1 saniyelik allowance request admission öncesi disk işlemlerinde tükenmişti (HTTP calls=0). Bu source yayımlanmadı; önceki public engineering sürümü korunur.
+
+Takip düzeltmesi task deadline'ını yine provider timeout'undan kısa tutar (10s < 30s). Gerçek request dispatch/cancellation sunucudan gözlenir; disk flush/Load süresi cancellation interval'ine katılmaz. UNKNOWN pending effect ve token/resource reservations korunmalıdır. Ayrı deterministic exhausted-before-Run fixture sıfır dispatch/admission/reservation gerektirir. Pinned Go1.27.2 native focused iki parent **PASS**, 14.967s; hosted source kabulünün yerine geçmez.
+
+Windows logunda non-agent grup 13m47, ilk agent shard 13m17, ikinci 9m26 sürdü; son iki shard seri toplam sınırda tamamlanamadı. Non-agent/CLI/owner grubu ve her Go invocation `-p 1` kalır. Agent shard'ları en çok iki worker ile çalışır; ayrı dosyalara yazılan JSONL shard sırasıyla birleştirilir, bütün Test/Fuzz/Example isimleri tam bir kez dağıtılır ve herhangi bir child failure full suite'i başarısız yapar. Test, assertion, 15m invocation timeout veya 45m job sınırı kaldırılmadı/genişletilmedi. Yeni exact-source CI ayrıca gereklidir.
+
+Shard kontratları **3 PASS**: eksiksiz inventory dağıtımı; serial ilk grup + iki worker üst sınırı + failure sonrasında tüm shard çıktı ve return code koruması; gerçek subprocess stdout/stderr/exit-code aktarımı. Bunlar full native kabul değil, yeni scheduler'ın kanıt taşıma kontrolüdür.
+
 ## 13 Ekim handoff denetimi ve yerel regresyon düzeltmeleri
 
 Denetim kaynağı `1765582d9fbcefd338eb9a8acd69f60c549ace24`; önceki yerel commit `18188eab07ec25ad81a852d179cf8cb8f73b80b6`. [Kapsamlı repository raporu](REPOSITORY_AUDIT_2026_10_13.md) doğrulanmış hataları, düzeltilen dilimleri ve açık PRD işlerini ayırır. Aşağıdaki takip kontrolleri **yerel değişiklik overlay'i** içindir; önceki source'un veya henüz oluşmamış yeni commit'in hosted kabulü olarak gösterilmez.

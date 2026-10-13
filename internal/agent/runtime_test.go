@@ -227,10 +227,82 @@ func TestLocalRuntimeRejectsUnexpectedResponseModelWithoutRetry(t *testing.T) {
 
 func TestLocalInferenceCannotExtendTaskActiveWorkDeadline(t *testing.T) {
 	var calls atomic.Int64
+	dispatched := make(chan time.Time, 1)
+	cancelled := make(chan time.Duration, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		io.Copy(io.Discard, r.Body)
+		started := time.Now()
+		dispatched <- started
 		<-r.Context().Done()
+		cancelled <- time.Since(started)
+	}))
+	defer server.Close()
+	ctx := context.Background()
+	session, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	budget := DefaultBudget()
+	budget.MaxActiveMillis = 10000
+	profile := &LocalRuntime{SchemaVersion: 1, Provider: "ollama", Endpoint: server.URL, Model: "local-test:1", DeclaredLocal: true, ContextLimit: 32768, OutputLimit: 512, TimeoutMillis: 30000}
+	if _, err = session.Create(ctx, StartOptions{Runtime: profile, Root: t.TempDir(), Prompt: []byte("Inspect empty source"), TaskID: "deadline", Budget: budget, Autonomy: "guided", AllowUnverified: true}); err != nil {
+		t.Fatal(err)
+	}
+	type runResult struct {
+		state c.TaskState
+		err   error
+	}
+	runDone := make(chan runResult, 1)
+	go func() {
+		state, runErr := session.Run(ctx, "deadline")
+		runDone <- runResult{state: state, err: runErr}
+	}()
+	var result runResult
+	resultReady := false
+	var dispatchTime time.Time
+	select {
+	case dispatchTime = <-dispatched:
+	case result = <-runDone:
+		resultReady = true
+		t.Fatalf("run ended before the local inference request reached the server: state=%v err=%v calls=%d", result.state, result.err, calls.Load())
+	case <-time.After(15 * time.Second):
+		t.Fatal("local inference did not reach the server")
+	}
+	var cancellationDelay time.Duration
+	select {
+	case cancellationDelay = <-cancelled:
+	case result = <-runDone:
+		resultReady = true
+		select {
+		case cancellationDelay = <-cancelled:
+		case <-time.After(time.Second):
+			t.Fatalf("run returned without observing server cancellation: state=%v err=%v", result.state, result.err)
+		}
+	case <-time.After(time.Duration(budget.MaxActiveMillis+2000) * time.Millisecond):
+		t.Fatal("task active-work deadline did not cancel the dispatched request")
+	}
+	if cancellationDelay <= 0 || cancellationDelay > time.Duration(budget.MaxActiveMillis+2000)*time.Millisecond || cancellationDelay >= time.Duration(profile.TimeoutMillis)*time.Millisecond {
+		t.Fatalf("server request was not bounded by the shorter task deadline: dispatched=%v cancelled_after=%v active_budget=%dms profile_timeout=%dms", dispatchTime, cancellationDelay, budget.MaxActiveMillis, profile.TimeoutMillis)
+	}
+	if !resultReady {
+		result = <-runDone
+	}
+	_, doc, loadErr := session.Load(ctx, "deadline")
+	if result.err != nil || loadErr != nil || result.state.Execution != c.Blocked || !doc.UnknownEffect || doc.Pending == nil || doc.Pending.Status != "UNKNOWN" || calls.Load() != 1 || doc.Budget.ActiveMillis < budget.MaxActiveMillis || doc.Budget.ReservedInput == 0 || doc.Budget.ReservedOutput == 0 {
+		t.Fatal("model timeout extended work deadline or lost usage risk", result.state, doc.Budget, result.err, loadErr, calls.Load())
+	}
+	if len(result.state.Tokens.Reservations) != 1 || result.state.Tokens.Reservations[0].Status != "UNKNOWN" || len(result.state.Resources.Reservations) != 1 || result.state.Resources.Reservations[0].Status != "UNKNOWN" {
+		t.Fatal("dispatched inference lost its unresolved token or resource reservation", result.state.Tokens, result.state.Resources)
+	}
+}
+
+func TestLocalInferenceBudgetExhaustionBeforeAdmissionDoesNotDispatch(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		io.Copy(io.Discard, r.Body)
 	}))
 	defer server.Close()
 	ctx := context.Background()
@@ -242,13 +314,23 @@ func TestLocalInferenceCannotExtendTaskActiveWorkDeadline(t *testing.T) {
 	budget := DefaultBudget()
 	budget.MaxActiveMillis = 1000
 	profile := &LocalRuntime{SchemaVersion: 1, Provider: "ollama", Endpoint: server.URL, Model: "local-test:1", DeclaredLocal: true, ContextLimit: 32768, OutputLimit: 512, TimeoutMillis: 3000}
-	if _, err = session.Create(ctx, StartOptions{Runtime: profile, Root: t.TempDir(), Prompt: []byte("Inspect empty source"), TaskID: "deadline", Budget: budget, Autonomy: "guided", AllowUnverified: true}); err != nil {
+	if _, err = session.Create(ctx, StartOptions{Runtime: profile, Root: t.TempDir(), Prompt: []byte("Inspect empty source"), TaskID: "expired-before-run", Budget: budget, Autonomy: "guided", AllowUnverified: true}); err != nil {
 		t.Fatal(err)
 	}
-	started := time.Now()
-	state, err := session.Run(ctx, "deadline")
-	_, doc, loadErr := session.Load(ctx, "deadline")
-	if err != nil || loadErr != nil || state.Execution != c.Blocked || !doc.UnknownEffect || calls.Load() != 1 || doc.Budget.ActiveMillis < 1000 || time.Since(started) >= 2800*time.Millisecond || doc.Budget.ReservedInput == 0 {
-		t.Fatal("model timeout extended work deadline or lost usage risk", state, doc.Budget, err, loadErr, calls.Load())
+	state, doc, err := session.Load(ctx, "expired-before-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a durable checkpoint whose active-work allowance is already
+	// exhausted, avoiding timing-dependent setup and request compilation.
+	doc.Budget.ActiveMillis = budget.MaxActiveMillis
+	state, err = session.record(ctx, state, doc, "SessionRecorded", c.EventPayload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = session.Run(ctx, "expired-before-run")
+	_, doc, loadErr := session.Load(ctx, "expired-before-run")
+	if err != nil || loadErr != nil || state.Execution != c.Terminated || state.Outcome != c.BudgetExhausted || calls.Load() != 0 || doc.Pending != nil || doc.UnknownEffect || doc.Budget.ReservedInput != 0 || doc.Budget.ReservedOutput != 0 || len(state.Tokens.Reservations) != 0 || len(state.Resources.Reservations) != 0 {
+		t.Fatal("expired active-work budget admitted a model operation", state, doc.Budget, err, loadErr, calls.Load())
 	}
 }

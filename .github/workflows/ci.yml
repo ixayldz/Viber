@@ -52,6 +52,7 @@ jobs:
           python scripts/test-portable-package.py
           python scripts/test-engineering-release.py
           python scripts/test-native-onboarding-metadata.py
+          python scripts/test-native-test-shards.py
           python scripts/retrieval-evaluation.py --self-test
       - name: Full tests
         run: |
