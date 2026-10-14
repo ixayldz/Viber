@@ -18,13 +18,18 @@ import (
 )
 
 const (
-	SchemaVersion      = 1
-	MaxDefinitionBytes = 64 << 10
-	MaxSteps           = 32
-	MaxStepPaths       = 32
-	MaxSkillEvents     = 10000
-	MaxSkillEventBytes = 4096
-	MaxEvaluationBytes = 16 << 10
+	SchemaVersion                    = 1
+	MaxDefinitionBytes               = 64 << 10
+	MaxSkillMarkdownBytes            = 24 << 10
+	MaxSkillMarkdownPathBytes        = 512
+	MaxSkillMarkdownPaths            = 64
+	MaxSkillMarkdownFrontmatterBytes = 4 << 10
+	MaxSkillMarkdownBodyBytes        = MaxSkillMarkdownBytes
+	MaxSteps                         = 32
+	MaxStepPaths                     = 32
+	MaxSkillEvents                   = 10000
+	MaxSkillEventBytes               = 4096
+	MaxEvaluationBytes               = 16 << 10
 )
 
 var skillIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,95}$`)
@@ -56,18 +61,38 @@ type Step struct {
 	Paths       []string `json:"paths,omitempty"`
 }
 
+// MarkdownSource pins an imported standard SKILL.md file to one exact project
+// snapshot. Its metadata and body remain advice; it does not grant a skill
+// authority or bypass the existing evaluator and activation lifecycle.
+type MarkdownSource struct {
+	SchemaVersion        int               `json:"schema_version"`
+	SourceManifestDigest string            `json:"source_manifest_digest"`
+	Path                 string            `json:"path"`
+	FileDigest           string            `json:"file_digest"`
+	Name                 string            `json:"name"`
+	Description          string            `json:"description"`
+	BodyDigest           string            `json:"body_digest"`
+	ManifestDigest       string            `json:"manifest_digest"`
+	License              string            `json:"license,omitempty"`
+	Compatibility        string            `json:"compatibility,omitempty"`
+	AllowedTools         []string          `json:"allowed_tools,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+}
+
 type Definition struct {
-	SchemaVersion int      `json:"schema_version"`
-	ID            string   `json:"id"`
-	Version       uint64   `json:"version"`
-	Scope         Scope    `json:"scope"`
-	Trigger       string   `json:"trigger"`
-	Steps         []Step   `json:"steps"`
-	Verification  []string `json:"verification"`
-	Capabilities  []string `json:"capability_hints"`
-	License       string   `json:"license"`
-	ExpiresAtUTC  string   `json:"expires_at_utc,omitempty"`
-	Source        Source   `json:"source"`
+	SchemaVersion  int             `json:"schema_version"`
+	ID             string          `json:"id"`
+	Version        uint64          `json:"version"`
+	Scope          Scope           `json:"scope"`
+	Trigger        string          `json:"trigger"`
+	Steps          []Step          `json:"steps"`
+	Verification   []string        `json:"verification"`
+	Capabilities   []string        `json:"capability_hints"`
+	License        string          `json:"license"`
+	ExpiresAtUTC   string          `json:"expires_at_utc,omitempty"`
+	Source         Source          `json:"source"`
+	Advice         string          `json:"untrusted_advice,omitempty"`
+	MarkdownSource *MarkdownSource `json:"imported_markdown,omitempty"`
 }
 
 type EvaluationReceipt struct {
@@ -230,6 +255,15 @@ func (d Definition) Validate() error {
 	}
 	if d.Scope.Kind == "TASK" && d.Scope.Key != d.Source.TaskID || d.Scope.Kind == "PROJECT" && d.Source.ProjectDigest != d.Scope.Key {
 		return c.Fail(c.StaleAuthority, "skill scope does not match its retained source")
+	}
+	if d.MarkdownSource == nil {
+		if d.Advice != "" {
+			return c.Fail(c.InvalidArgument, "untrusted skill advice requires a source-pinned SKILL.md record")
+		}
+	} else if d.MarkdownSource.Validate() != nil || !validSkillAdvice(d.Advice) || c.HashBytes([]byte(d.Advice)) != d.MarkdownSource.BodyDigest ||
+		d.MarkdownSource.SourceManifestDigest != d.Source.Candidate || d.MarkdownSource.Description != d.Trigger ||
+		d.MarkdownSource.License != "" && d.MarkdownSource.License != d.License {
+		return c.Fail(c.StaleAuthority, "imported SKILL.md advice no longer matches its pinned source")
 	}
 	for _, step := range d.Steps {
 		if !validText(step.Instruction, 1, 2048) || len(step.Paths) > MaxStepPaths {
