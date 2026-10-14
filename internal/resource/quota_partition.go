@@ -470,6 +470,9 @@ func (l *Ledger) ValidateOwnerPartition(ctx context.Context, ownerPath string) e
 	}
 	return l.withReadLock(ctx, func() error {
 		if err := validateQuotaPartitionRecords(l.db, l.LedgerID); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return c.Fail(c.StaleAuthority, "a committed physical quota partition directory is missing")
+			}
 			return err
 		}
 		partition, found, err := loadQuotaPartitionByOwner(l.db, owner)
@@ -811,6 +814,9 @@ func validatePartitionMemberRow(db *sql.DB, partition quotaPartition, member quo
 	}
 	if member.Kind == "ARCHIVE" {
 		if err := verifyPartitionDirectory(member.MemberRoot, member.RootIdentity, member.Volume); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return c.Fail(c.StaleAuthority, "committed physical quota archive member is missing")
+			}
 			return err
 		}
 	}
@@ -965,9 +971,6 @@ func verifyPartitionDirectory(path, expectedIdentity, expectedVolume string) err
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return c.Fail(c.StaleAuthority, "bound physical quota partition directory is missing")
-		}
 		return err
 	}
 	identity, identityErr := fileguard.DirectoryIdentity(root)
