@@ -16,6 +16,29 @@ spec.loader.exec_module(module)
 
 
 class ShardContracts(unittest.TestCase):
+    def test_windows_profile_keeps_every_parent_once_and_same_deadline(self):
+        package = "github.com/ixayldz/Viber/internal/agent"
+        names = [f"TestCase{index}" for index in range(24)] + ["FuzzInput", "ExampleRun"]
+        with patch.object(module, "checked", side_effect=[["other", package], names]), patch.object(module, "execute") as execute:
+            module.main(agent_shards=8, workers=4)
+        commands = execute.call_args.args[0]
+        self.assertEqual(len(commands), 9)
+        self.assertEqual(execute.call_args.kwargs, {"workers": 4})
+        observed = []
+        for command in commands[1:]:
+            observed.extend(command[command.index("-run") + 1][4:-2].split("|"))
+        self.assertEqual(sorted(observed), sorted(names))
+        for command in commands:
+            self.assertEqual(command[command.index("-timeout") + 1], "15m")
+
+    def test_invalid_profiles_fail_before_discovery_or_execution(self):
+        for shards, workers in [(0, 2), (17, 2), (8, 5), (2, 4)]:
+            with self.subTest(shards=shards, workers=workers), patch.object(module, "checked") as checked, patch.object(module, "execute") as execute:
+                with self.assertRaisesRegex(RuntimeError, "bounded native shard profile"):
+                    module.main(agent_shards=shards, workers=workers)
+                checked.assert_not_called()
+                execute.assert_not_called()
+
     def test_race_keeps_owner_first_and_instruments_every_shard(self):
         package = "github.com/ixayldz/Viber/internal/agent"
         owner = "github.com/ixayldz/Viber/internal/owner"

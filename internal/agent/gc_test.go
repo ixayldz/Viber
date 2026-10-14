@@ -405,12 +405,44 @@ func TestCollectGarbageCompactionRetryUnderCommittedOwnerPartition(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	match, err := owner.PhysicalQuota.ReserveOrMatch(ctx, resource.Request{
+	request := resource.Request{
 		Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(commandRaw), TargetRoot: gcRoot,
 		UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control,
-	})
-	if err != nil || match.Status != "FREE_PENDING" {
-		t.Fatalf("GC receipt unlink did not retain its exact pending-free charge: status=%q err=%v", match.Status, err)
+	}
+	match, err := owner.PhysicalQuota.ReserveOrMatch(ctx, request)
+	if err != nil || match.Status != "FREE_PENDING" || match.RequestDigest != request.RequestDigest || match.UpperBytes != request.UpperBytes || match.UpperEntries != request.UpperEntries {
+		t.Fatalf("GC receipt unlink did not retain its exact pending-free charge: %+v err=%v", match, err)
+	}
+	verifyCurrentAllocation := func() (resource.Inventory, error) {
+		current, matchErr := owner.PhysicalQuota.ReserveOrMatch(ctx, request)
+		if matchErr != nil {
+			return resource.Inventory{}, matchErr
+		}
+		if (current.Status != "FREE_PENDING" && current.Status != "RETAINED") || current.Allocation.ID != match.Allocation.ID || current.RequestDigest != request.RequestDigest || current.UpperBytes != request.UpperBytes || current.UpperEntries != request.UpperEntries {
+			return resource.Inventory{}, errors.New("partitioned-owner GC retry changed its exact allocation binding")
+		}
+		gcDirectory, openErr := os.OpenRoot(gcRoot)
+		if openErr != nil {
+			return resource.Inventory{}, openErr
+		}
+		inventory, measureErr := resource.Measure(gcDirectory, true)
+		closeErr := gcDirectory.Close()
+		if measureErr = errors.Join(measureErr, closeErr); measureErr != nil {
+			return resource.Inventory{}, measureErr
+		}
+		if current.Status == "FREE_PENDING" {
+			measureErr = current.Allocation.ValidateFreePending(ctx, inventory)
+		} else {
+			measureErr = current.Allocation.ValidateRetained(ctx, inventory)
+		}
+		if measureErr != nil {
+			return resource.Inventory{}, measureErr
+		}
+		return inventory, nil
+	}
+	currentInventory, err := verifyCurrentAllocation()
+	if err != nil {
+		t.Fatal("partitioned-owner GC current files differ from their exact retained or pending-free receipt:", err)
 	}
 	retained, err := owner.PhysicalQuota.Capacity(ctx)
 	if err != nil {
@@ -420,9 +452,16 @@ func TestCollectGarbageCompactionRetryUnderCommittedOwnerPartition(t *testing.T)
 	if err != nil || !reflect.DeepEqual(result, retried) {
 		t.Fatal("partitioned-owner FREE_PENDING retry changed the exact result:", retried, err, result)
 	}
+	retryInventory, err := verifyCurrentAllocation()
+	if err != nil {
+		t.Fatal("partitioned-owner GC retry changed its exact retained or pending-free receipt:", err)
+	}
+	if !reflect.DeepEqual(currentInventory, retryInventory) {
+		t.Fatal("partitioned-owner exact retry changed the current GC inventory:", currentInventory, retryInventory)
+	}
 	afterRetry, err := owner.PhysicalQuota.Capacity(ctx)
-	if err != nil || afterRetry != retained {
-		t.Fatal("partitioned-owner FREE_PENDING retry changed retained quota:", retained, afterRetry, err)
+	if err != nil || afterRetry.Allocations != retained.Allocations {
+		t.Fatal("partitioned-owner exact retry created a physical allocation:", retained, afterRetry, err)
 	}
 
 	completePath := filepath.Join(gcRoot, "complete.json")

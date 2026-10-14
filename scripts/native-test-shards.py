@@ -1,8 +1,10 @@
-"""Run every native Go test, bounding the large agent package in four shards.
+"""Run every native Go test, bounding the large agent package in complete shards.
 
 No test is filtered out: discover Test/Fuzz/Example names and distribute all of
 them. Other packages run first and serially, preserving owner/CLI isolation.
-Agent shards then run with at most two workers. Each worker has a separate
+Agent shards default to two workers; Windows CI explicitly uses eight shards
+and four workers to keep whole-shard duration within the unchanged timeout.
+Each worker has a separate
 output file; complete JSONL is merged in shard order without interleaving.
 With --race every discovered package and shard uses the race detector, and the
 owner package runs first in the serial package batch.
@@ -42,7 +44,9 @@ def emit_result(result):
     return returncode
 
 
-def execute(commands):
+def execute(commands, workers=2):
+    if not 1 <= workers <= 4:
+        raise RuntimeError("native worker bound exceeded")
     failures = []
     with tempfile.TemporaryDirectory(prefix="viber-native-shards-") as temporary:
         directory = Path(temporary)
@@ -50,7 +54,7 @@ def execute(commands):
         # any agent shard starts. Never emit concurrent writers into JSONL.
         if emit_result(run_shard(0, len(commands), commands[0], directory)):
             failures.append(1)
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(run_shard, index, len(commands), argv, directory)
                        for index, argv in enumerate(commands[1:], 1)]
             for index, future in enumerate(futures, 2):
@@ -60,7 +64,9 @@ def execute(commands):
         raise RuntimeError(f"native acceptance failed in shards {failures}")
 
 
-def main(race=False):
+def main(race=False, agent_shards=4, workers=2):
+    if not 1 <= agent_shards <= 16 or not 1 <= workers <= min(4, agent_shards):
+        raise RuntimeError("invalid bounded native shard profile")
     package = "github.com/ixayldz/Viber/internal/agent"
     packages = checked(["go", "list", "./..."])
     if packages.count(package) != 1 or len(packages) < 2:
@@ -71,7 +77,7 @@ def main(race=False):
     if not names or len(names) != len(set(names)):
         raise RuntimeError("complete agent test inventory unavailable")
     names.sort()
-    shards = [names[index::4] for index in range(4)]
+    shards = [names[index::agent_shards] for index in range(agent_shards)]
     if sorted(name for shard in shards for name in shard) != names:
         raise RuntimeError("native shard coverage mismatch")
     other_packages = [name for name in packages if name != package]
@@ -85,14 +91,17 @@ def main(race=False):
     commands += [["go", "test"] + race_flags + ["-p", "1", "-json", "-count=1", "-timeout", "15m",
                   "-run", "^(?:" + "|".join(shard) + ")$", package]
                  for shard in shards if shard]
-    execute(commands)
+    execute(commands, workers=workers)
 
 
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--race", action="store_true", help="run every package with the race detector")
-        main(race=parser.parse_args().race)
+        parser.add_argument("--agent-shards", type=int, default=4, help="complete agent shards, 1..16")
+        parser.add_argument("--workers", type=int, default=2, help="bounded concurrent agent processes, 1..4")
+        options = parser.parse_args()
+        main(race=options.race, agent_shards=options.agent_shards, workers=options.workers)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
