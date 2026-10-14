@@ -2,6 +2,13 @@
 
 ## 14 Ekim restore ve kullanıcı akışı takibi
 
+`96fe0b8` hosted kaynak kabulünde üç OS test, gerçek Docker/rootless, vault, foundation
+ve portable package işleri geçti. Linux managed installer işi baseline asset
+`632488379` indirmesinde GitHub HTTP 500 ile durdu; test davranışı hatası değildi.
+Yalnız başarısız installer/bağımlı işlerin tekrar çalıştırılması istendi. Baseline
+indirme artık en fazla üç deneme ve 2/4 saniye bekleme kullanır; indirilen arşiv için
+mevcut revision/hash/attestation kontrolleri korunur. Tam run sonucu ayrıca izlenir.
+
 `07929c12416ec7b27761cd87dba7a02728c35777` restore edilmiş archive için dar
 task/candidate/immutable manifest admission ekledi. `9136d3817225cea470315aac421019e3c5a52822`
 kalıcı source/target intent'iyle üst restore reconciliation'ı ekledi. Bu ikinci

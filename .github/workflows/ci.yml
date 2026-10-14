@@ -369,8 +369,13 @@ jobs:
             $native=if($IsWindows){'windows-amd64.zip'}elseif($IsMacOS){'darwin-arm64.tar.gz'}else{'linux-amd64.tar.gz'}
             $asset='viber-'+$baselineRevision.Substring(0,12)+'-'+$native
             $baselineDirectory=Join-Path (Get-Location) '.cache/installer-baseline'
-            gh release download ('engineering-'+$baselineRevision) --repo ixayldz/Viber --pattern $asset --dir $baselineDirectory
-            if($LASTEXITCODE-ne 0){throw 'Exact public upgrade baseline download failed'}
+            $taskBaselineFetched=$false
+            for($taskBaselineAttempt=1; $taskBaselineAttempt-le 3; $taskBaselineAttempt++){
+              gh release download ('engineering-'+$baselineRevision) --repo ixayldz/Viber --pattern $asset --dir $baselineDirectory --clobber
+              if($LASTEXITCODE-eq 0){$taskBaselineFetched=$true; break}
+              if($taskBaselineAttempt-lt 3){Start-Sleep -Seconds (2*$taskBaselineAttempt)}
+            }
+            if(-not $taskBaselineFetched){throw 'Exact public upgrade baseline download failed after bounded retries'}
             $baselineArgs=@('--baseline-archive',(Join-Path $baselineDirectory $asset),'--baseline-revision',$baselineRevision)
           }
           python scripts/installed-package-acceptance.py --bootstrap $bootstrap --archive $archives[0].FullName --revision $env:GITHUB_SHA --output evidence/installation @baselineArgs
