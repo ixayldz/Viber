@@ -485,7 +485,10 @@ func (l *Ledger) ValidateOwnerPartition(ctx context.Context, ownerPath string) e
 		if err = verifyPartitionDirectory(partition.OwnerPath, partition.OwnerIdentity, partition.VolumeIdentity); err != nil {
 			return err
 		}
-		return validateCommittedPartition(ctx, l, partition)
+		if err = validateCommittedPartition(ctx, l, partition); errors.Is(err, os.ErrNotExist) {
+			return c.Fail(c.StaleAuthority, "committed independent evaluator owner partition is incomplete")
+		}
+		return err
 	})
 }
 
@@ -962,6 +965,9 @@ func verifyPartitionDirectory(path, expectedIdentity, expectedVolume string) err
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return c.Fail(c.StaleAuthority, "bound physical quota partition directory is missing")
+		}
 		return err
 	}
 	identity, identityErr := fileguard.DirectoryIdentity(root)
