@@ -2,7 +2,7 @@
 
 No test is filtered out: discover Test/Fuzz/Example names and distribute all of
 them. Other packages run first and serially, preserving owner/CLI isolation.
-Agent shards default to two workers; Windows CI explicitly uses eight shards
+Agent shards default to two workers; Windows CI explicitly uses sixteen shards
 and four workers to keep whole-shard duration within the unchanged timeout.
 Each worker has a separate
 output file; complete JSONL is merged in shard order without interleaving.

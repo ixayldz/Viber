@@ -59,7 +59,7 @@ jobs:
           mkdir -p evidence
           set -o pipefail
           if [[ "$RUNNER_OS" == Windows ]]; then
-            python scripts/native-test-shards.py --agent-shards 8 --workers 4 | tee evidence/tests.jsonl
+            python scripts/native-test-shards.py --agent-shards 16 --workers 4 | tee evidence/tests.jsonl
           elif [[ "$RUNNER_OS" == Linux ]]; then
             go test -coverprofile evidence/coverage.out -json -count=1 -timeout 15m ./... | tee evidence/tests.jsonl
           else
