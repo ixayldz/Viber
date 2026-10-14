@@ -207,6 +207,16 @@ func TestGCCompactsCompletedReceiptsAndPreservesExactRetryAfterRestore(t *testin
 		t.Fatal("unexpected GC preview", plan, err)
 	}
 	command := GCCommand{CommandID: "gc-compact-receipts", Plan: plan}
+	commandRaw, err := c.CanonicalV1(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upperBytes, upperEntries, err := gcPhysicalEstimate(commandRaw, len(plan.Objects))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcRootPath := filepath.Join(s.directory, "maintenance", "gc", c.HashBytes([]byte(command.CommandID)))
+	gcRequest := resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(commandRaw), TargetRoot: gcRootPath, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control}
 	before, err := s.PhysicalQuota.Capacity(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +246,37 @@ func TestGCCompactsCompletedReceiptsAndPreservesExactRetryAfterRestore(t *testin
 	if err = s.visitGCMaintenance(ctx, func(string, []byte) error { return nil }); err != nil {
 		t.Fatal("live GC records failed cross-validation", err)
 	}
+	verifyReceipt := func() (resource.Inventory, resource.ReservationMatch, error) {
+		match, matchErr := s.PhysicalQuota.ReserveOrMatch(ctx, gcRequest)
+		if matchErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, matchErr
+		}
+		if match.Scope != resource.ExactReservationScope || (match.Status != "RETAINED" && match.Status != "FREE_PENDING") || match.RequestDigest != gcRequest.RequestDigest || match.UpperBytes != upperBytes || match.UpperEntries != upperEntries {
+			return resource.Inventory{}, resource.ReservationMatch{}, errors.New("compacted GC retry changed its exact allocation binding")
+		}
+		root, openErr := os.OpenRoot(gcRootPath)
+		if openErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, openErr
+		}
+		inventory, measureErr := resource.Measure(root, true)
+		closeErr := root.Close()
+		if measureErr = errors.Join(measureErr, closeErr); measureErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, measureErr
+		}
+		if match.Status == "FREE_PENDING" {
+			measureErr = match.Allocation.ValidateFreePending(ctx, inventory)
+		} else {
+			measureErr = match.Allocation.ValidateRetained(ctx, inventory)
+		}
+		if measureErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, measureErr
+		}
+		return inventory, match, nil
+	}
+	receiptInventory, receiptMatch, err := verifyReceipt()
+	if err != nil {
+		t.Fatal("compacted GC completion differs from its exact allocation receipt:", err)
+	}
 	after, err := s.PhysicalQuota.Capacity(ctx)
 	if err != nil || after.RetainedEntries <= before.RetainedEntries {
 		t.Fatal("GC control receipt was not retained", before, after, err)
@@ -244,9 +285,13 @@ func TestGCCompactsCompletedReceiptsAndPreservesExactRetryAfterRestore(t *testin
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatal("compacted GC retry did not return its exact completion", second, err, first)
 	}
+	afterInventory, afterMatch, verifyErr := verifyReceipt()
+	if verifyErr != nil || afterMatch.Allocation.ID != receiptMatch.Allocation.ID || !reflect.DeepEqual(afterInventory, receiptInventory) {
+		t.Fatal("exact GC retry changed its allocation receipt or files", receiptInventory, receiptMatch, afterInventory, afterMatch, verifyErr)
+	}
 	retried, err := s.PhysicalQuota.Capacity(ctx)
-	if err != nil || retried != after {
-		t.Fatal("exact retry changed physical quota accounting", after, retried, err)
+	if err != nil || retried.Allocations > after.Allocations {
+		t.Fatal("exact retry created a physical quota allocation", after, retried, err)
 	}
 
 	backup := filepath.Join(t.TempDir(), "backup")
