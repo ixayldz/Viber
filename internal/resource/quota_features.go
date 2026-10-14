@@ -9,12 +9,13 @@ type FeatureUsage struct {
 	ReservationIntents bool
 	StageHandoffs      bool
 	OwnerPartitions    bool
+	RestorePartitions  bool
 }
 
 func (l *Ledger) FeatureUsage(ctx context.Context) (FeatureUsage, error) {
 	var usage FeatureUsage
 	err := l.withReadLock(ctx, func() error {
-		return l.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM quota_reservation_intents), EXISTS(SELECT 1 FROM quota_handoffs), EXISTS(SELECT 1 FROM quota_partitions)").Scan(&usage.ReservationIntents, &usage.StageHandoffs, &usage.OwnerPartitions)
+		return l.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM quota_reservation_intents), EXISTS(SELECT 1 FROM quota_handoffs), EXISTS(SELECT 1 FROM quota_partitions), EXISTS(SELECT 1 FROM quota_partitions p JOIN quota_handoffs h ON h.allocation_id=p.allocation_id)").Scan(&usage.ReservationIntents, &usage.StageHandoffs, &usage.OwnerPartitions, &usage.RestorePartitions)
 	})
 	return usage, err
 }

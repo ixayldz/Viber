@@ -208,6 +208,13 @@ func renderProjectMemoryContext(value projectMemoryContextEnvelope) (string, err
 }
 
 func compileOfflineRequestWithProjectContext(doc Document, state c.TaskState, layers []policy.Policy, outputLimit int64, projectContext string) (model.Request, []byte, ctxpack.Manifest, error) {
+	if doc.Spec.PRD != nil {
+		// The specification includes advisory source headings. Current read
+		// restrictions must admit the PRD before even that metadata is sent.
+		if err := policy.Admit(layers, policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, InputBarrier: state.InputBarrier, Effect: "snapshot.read", Path: doc.Spec.PRD.Path}); err != nil {
+			return model.Request{}, nil, ctxpack.Manifest{}, err
+		}
+	}
 	if outputLimit > doc.Budget.MaxOutputTokens {
 		outputLimit = doc.Budget.MaxOutputTokens
 	}

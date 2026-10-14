@@ -94,6 +94,12 @@ func (s *Session) executeTool(ctx context.Context, state c.TaskState, doc *Docum
 		if taskKind(*doc) == "ANALYSIS" {
 			return model.Reply{}, nil, c.Fail(c.PolicyDenied, "analysis tasks cannot write candidates")
 		}
+		if doc.Spec.PRD != nil && doc.Plan == nil {
+			return model.Reply{}, nil, c.Fail(c.PolicyDenied, "PRD-bound candidate writes require an admitted plan")
+		}
+		if doc.Spec.PRD != nil && !prdReadComplete(*doc) {
+			return model.Reply{}, nil, c.Fail(c.PolicyDenied, "PRD source must be completely read through successful fs_read pages before candidate writes")
+		}
 		var args struct {
 			ReadSet []c.ReadCondition `json:"read_set"`
 			Changes []c.Change        `json:"changes"`

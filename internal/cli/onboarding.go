@@ -391,8 +391,22 @@ func writePrivateFixture(userDataRoot, taskID string, raw []byte) (string, error
 }
 
 func runOnboarding(args []string, out, errout io.Writer) int {
-	if len(args) != 0 {
-		return report(out, errout, c.Fail(c.InvalidArgument, "viber start takes no arguments"), false)
+	f := flags("start", errout)
+	prdFile := f.String("prd", "", "exact project-relative PRD file; otherwise offer root PRD discovery")
+	checkConfig := f.String("check-config", "", "explicit absolute operator check configuration outside project and task store")
+	if err := f.Parse(args); err != nil {
+		return 4
+	}
+	if f.NArg() != 0 {
+		return report(out, errout, c.Fail(c.InvalidArgument, "viber start accepts optional --prd and --check-config flags"), false)
+	}
+	if *prdFile != "" {
+		if err := validatePRDPath(*prdFile); err != nil {
+			return report(out, errout, err, false)
+		}
+	}
+	if *checkConfig != "" && !filepath.IsAbs(*checkConfig) {
+		return report(out, errout, c.Fail(c.InvalidArgument, "--check-config requires an absolute operator file path"), false)
 	}
 	p := newOnboardingPrompter(onboardingInput, out)
 	fmt.Fprintln(out, "Welcome to Viber. Choose how to start; no project scripts or browser pages are opened automatically.")
@@ -415,6 +429,9 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	}
 
 	if mode == "3" {
+		if *prdFile != "" || *checkConfig != "" {
+			return report(out, errout, c.Fail(c.InvalidArgument, "PRD and check configuration belong to project tasks, not the fixed offline demo"), false)
+		}
 		fmt.Fprintln(out, "The demo creates a private sample containing hello.txt, then proposes a greeting change in an isolated candidate.")
 		fmt.Fprintln(out, "It does not read or change your project, does not use a model, and always remains UNVERIFIED (exit code 2).")
 		confirm, promptErr := p.ask("Type YES to run the fixed demo: ", "", 16)
@@ -489,12 +506,33 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	if err != nil {
 		return report(out, errout, err, false)
 	}
-	taskPrompt, prdPath, err := onboardingTaskPrompt(p, source)
+	var taskPrompt, prdPath string
+	if *prdFile != "" {
+		label := fmt.Sprintf("Describe the task, or press Enter to implement %q: ", *prdFile)
+		taskPrompt, _, err = p.askWithDefault(label, onboardingPRDDefaultTask, onboardingMaxTask)
+		prdPath = *prdFile
+	} else {
+		taskPrompt, prdPath, err = onboardingTaskPrompt(p, source)
+	}
 	if err != nil {
 		return report(out, errout, err, false)
 	}
 	if taskPrompt == "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "a task description is required; no task was started"), false)
+	}
+	if *checkConfig != "" {
+		path, configErr := fileguard.ResolveProspective(*checkConfig)
+		if configErr != nil || !fileguard.Disjoint(source, path) {
+			return report(out, errout, c.Fail(c.PolicyDenied, "operator check configuration must be outside the selected project"), false)
+		}
+		checks, configErr := readOperatorChecks(path)
+		if configErr != nil {
+			return report(out, errout, configErr, false)
+		}
+		*checkConfig = path
+		fmt.Fprintf(out, "%d operator checks registered for an isolated offline environment. Viber uses their fixed IDs and commands.\n", len(checks.Plan.Checks))
+	} else {
+		fmt.Fprintln(out, "No build/test configuration selected. Viber can produce a review package; use viber start --check-config ABSOLUTE_FILE to enable registered isolated checks.")
 	}
 	if mode == "1" {
 		fmt.Fprintf(out, "ChatGPT will receive your task and project context captured from %s. Credentials use Viber's official ChatGPT sign-in; Viber does not reuse Codex login.\n", tui.Safe(source))
@@ -519,6 +557,9 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	if err != nil {
 		return report(out, errout, err, false)
 	}
+	if *checkConfig != "" && !fileguard.Disjoint(store, *checkConfig) {
+		return report(out, errout, c.Fail(c.PolicyDenied, "operator check configuration must be outside task data"), false)
+	}
 	if mode == "1" {
 		authDir, authErr := defaultAuthDirectory()
 		if authErr != nil || !fileguard.Disjoint(source, authDir) || !fileguard.Disjoint(store, authDir) {
@@ -530,9 +571,12 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(out, "Changes are prepared in a separate candidate and require your review. In the interface use /requests, /diff and /resume. An unverified final result also requires approval; it is never reported as verified.")
+	fmt.Fprintln(out, "Changes are prepared in a separate candidate and require your review. Use /plan, /requests, /approve, /resume and /diff. An unverified final result also requires approval; it is never reported as verified.")
 	args = []string{taskPrompt, "--root", source, "--store", store, "--task", taskID, "--autonomy", "review"}
 	args = appendOnboardingPRD(args, prdPath)
+	if *checkConfig != "" {
+		args = append(args, "--check-config", *checkConfig)
+	}
 	if mode == "1" {
 		args = append(args, "--provider", "chatgpt", "--allow-remote", "--auth-profile", profileID)
 	} else {

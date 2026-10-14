@@ -381,6 +381,106 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	return ledger, nil
 }
 
+// OpenPinnedExisting opens an already-created authority ledger using the
+// limits sealed in its own genesis metadata.  Owner snapshots only carry the
+// ledger identity; reconstructing Limits from DefaultLimits would reject a
+// valid custom authority (or, worse, make a caller guess the authority's
+// admission envelope).  The metadata read is performed under the authority
+// lock and OpenPinned then repeats the complete identity/anchor validation
+// before returning the live ledger.
+func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, error) {
+	if expectedLedgerID == "" || !validID(expectedLedgerID) {
+		return nil, c.Fail(c.InvalidArgument, "existing physical quota ledger ID required")
+	}
+	if err := validateAuthority(authority); err != nil {
+		return nil, err
+	}
+	canonical, err := filepath.EvalSymlinks(authority.Directory)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err = filepath.Abs(canonical)
+	if err != nil || filepath.Clean(canonical) != filepath.Clean(authority.Directory) {
+		return nil, c.Fail(c.StaleAuthority, "physical quota authority path changed")
+	}
+	root, err := os.OpenRoot(canonical)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if err = fileguard.Private(root); err != nil {
+		return nil, err
+	}
+	physical, err := fileguard.DirectoryIdentity(root)
+	if err != nil || physical != authority.PhysicalRoot {
+		return nil, c.Fail(c.StaleAuthority, "physical quota authority root was replaced")
+	}
+	if err = verifyAuthorityGenesis(root, authority); err != nil {
+		return nil, err
+	}
+	lock, err := acquireLock(root)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	for _, name := range []string{"physical-quota.anchor", "physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock"} {
+		if err = fileguard.RegularPath(root, name, true); err != nil {
+			return nil, err
+		}
+	}
+	anchorRaw, err := fileguard.ReadRegular(root, "physical-quota.anchor", 4096)
+	if err != nil {
+		return nil, err
+	}
+	var saved anchor
+	if strictJSON(anchorRaw, &saved) != nil || saved.SchemaVersion != ledgerSchema || saved.AuthorityID != authority.ID || saved.PhysicalRoot != authority.PhysicalRoot || saved.LedgerID != expectedLedgerID || !c.ValidDigest(saved.DatabaseIdentity) {
+		return nil, c.Fail(c.StaleAuthority, "physical quota anchor binding is invalid")
+	}
+	databaseIdentity, err := fileIdentity(root, "physical-quota.sqlite")
+	if err != nil || saved.DatabaseIdentity != databaseIdentity {
+		return nil, c.Fail(c.StaleAuthority, "physical quota database identity differs from its anchor")
+	}
+	db, err := openDatabase(root)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	closeDB := true
+	defer func() {
+		if closeDB {
+			_ = db.Close()
+		}
+	}()
+	if err = configureDatabase(db); err != nil {
+		return nil, err
+	}
+	stored, err := readMeta(db)
+	if err != nil {
+		return nil, err
+	}
+	if stored.AuthorityID != authority.ID || stored.PhysicalRoot != authority.PhysicalRoot || stored.LedgerID != expectedLedgerID {
+		return nil, c.Fail(c.StaleAuthority, "physical quota ledger genesis differs from its owner-store pin")
+	}
+	databaseIdentity, err = fileIdentity(root, "physical-quota.sqlite")
+	if err != nil {
+		return nil, err
+	}
+	if saved.DatabaseIdentity != databaseIdentity {
+		return nil, c.Fail(c.StaleAuthority, "physical quota database identity differs from its anchor")
+	}
+	if err = checkDatabaseFiles(root); err != nil {
+		return nil, err
+	}
+	if err = db.Close(); err != nil {
+		return nil, err
+	}
+	closeDB = false
+	if err = lock.Close(); err != nil {
+		return nil, err
+	}
+	return OpenPinned(authority, stored.Limits, expectedLedgerID)
+}
+
 func validateAuthority(authority Authority) error {
 	if len(authority.ID) != 32 || !c.ValidDigest(c.HashBytes([]byte(authority.ID))) || !c.ValidDigest(authority.PhysicalRoot) || !filepath.IsAbs(authority.Directory) || len(authority.Directory) > 2048 {
 		return c.Fail(c.InvalidArgument, "invalid physical quota authority descriptor")
@@ -2089,6 +2189,9 @@ func (l *Ledger) finishFreeIntent(ctx context.Context, allocation pendingAllocat
 		}
 	} else if !errors.Is(partitionErr, sql.ErrNoRows) {
 		return partitionErr
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE quota_partition_gc_members SET receipt_digest=? WHERE member_id=?", c.HashBytes(raw), allocation.ID); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

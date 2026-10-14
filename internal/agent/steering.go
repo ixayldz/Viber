@@ -189,10 +189,17 @@ func (s *Session) Revise(ctx context.Context, revision ScopeRevision) (c.TaskSta
 	}
 	doc.Context = nil
 	doc.Plan = nil // Historical document retains the superseded plan; a new spec must replan.
+	refreshPRDCoverage(&doc)
 	doc.FixtureDigest = fixtureDigest
 	doc.FixtureCursor = 0
 	doc.Messages = []model.Message{}
 	for _, input := range doc.Spec.Inputs {
+		if doc.Spec.PRD != nil && input.ID == doc.Spec.PRD.InputID {
+			// PRD bytes are captured source, not user-authored steering. Keep
+			// them behind fs_read policy instead of replaying the entire file
+			// as a trusted user message after a revision.
+			continue
+		}
 		content, readErr := s.Archive.GetBytes(doc.TaskID, input.Digest)
 		if readErr != nil {
 			return state, readErr

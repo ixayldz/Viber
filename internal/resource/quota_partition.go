@@ -499,7 +499,7 @@ func ensureQuotaPartitionSchema(db *sql.DB) error {
 	if db == nil {
 		return c.Fail(c.InvalidArgument, "physical quota database required")
 	}
-	for _, ddl := range []string{quotaPartitionsDDL, quotaPartitionMembersDDL} {
+	for _, ddl := range []string{quotaPartitionsDDL, quotaPartitionMembersDDL, quotaPartitionGCMembersDDL} {
 		if _, err := db.Exec(ddl); err != nil {
 			return err
 		}
@@ -514,6 +514,9 @@ func ensureQuotaPartitionSchema(db *sql.DB) error {
 		}, foreignKeys: []struct{ table, from, to string }{{"quota_allocations", "allocation_id", "id"}}},
 		{name: "quota_partition_members", ddl: quotaPartitionMembersDDL, columns: []struct{ name, kind string }{
 			{"allocation_id", "TEXT"}, {"kind", "TEXT"}, {"member_id", "TEXT"}, {"member_root", "TEXT"}, {"root_identity", "TEXT"}, {"volume_identity", "TEXT"}, {"receipt_digest", "TEXT"},
+		}, foreignKeys: []struct{ table, from, to string }{{"quota_partitions", "allocation_id", "allocation_id"}, {"quota_allocations", "member_id", "id"}}},
+		{name: "quota_partition_gc_members", ddl: quotaPartitionGCMembersDDL, columns: []struct{ name, kind string }{
+			{"allocation_id", "TEXT"}, {"command_id", "TEXT"}, {"member_id", "TEXT"}, {"member_root", "TEXT"}, {"root_identity", "TEXT"}, {"volume_identity", "TEXT"}, {"receipt_digest", "TEXT"},
 		}, foreignKeys: []struct{ table, from, to string }{{"quota_partitions", "allocation_id", "allocation_id"}, {"quota_allocations", "member_id", "id"}}},
 	} {
 		var schemaBytes int
@@ -672,6 +675,9 @@ func validateQuotaPartitionRecords(db *sql.DB, ledgerID string) error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	if err = validateQuotaPartitionGCRecords(db, ledgerID); err != nil {
+		return err
+	}
 	rows, err := db.Query(`SELECT allocation_id,schema_version,operation_digest,mode,root_path,owner_path,root_identity,owner_identity,volume_identity,state
 		FROM quota_partitions ORDER BY allocation_id LIMIT ?`, maxQuotaPartitions+1)
 	if err != nil {
@@ -731,7 +737,10 @@ func validateOneQuotaPartition(db *sql.DB, item quotaPartition, ledgerID string)
 		if allocation.Status != "RETAINED" {
 			return c.Fail(c.StoreIntegrityError, "committed physical quota partition has no retained parent")
 		}
-		return validatePartitionMembers(db, item)
+		if err = validatePartitionMembers(db, item); err != nil {
+			return err
+		}
+		return validateGCPartitionMembers(db, item)
 	}
 	if allocation.Status != "RESERVED" && allocation.Status != "WRITING" {
 		return c.Fail(c.StoreIntegrityError, "unfinished physical quota partition lost its outstanding allocation")
@@ -746,6 +755,13 @@ func validateOneQuotaPartition(db *sql.DB, item quotaPartition, ledgerID string)
 	}
 	if members != 0 {
 		return c.Fail(c.StoreIntegrityError, "unfinished physical quota partition already has member receipts")
+	}
+	var gcMembers int
+	if err = db.QueryRow("SELECT COUNT(*) FROM quota_partition_gc_members WHERE allocation_id=?", item.AllocationID).Scan(&gcMembers); err != nil {
+		return err
+	}
+	if gcMembers != 0 {
+		return c.Fail(c.StoreIntegrityError, "unfinished physical quota partition already has GC member receipts")
 	}
 	return nil
 }
@@ -1038,6 +1054,9 @@ func partitionClass(partition quotaPartition, name string) string {
 	if name == "artifacts" || strings.HasPrefix(name, "artifacts/") {
 		return "ARCHIVE"
 	}
+	if ownerStaticName(name) {
+		return "OWNER_STATIC"
+	}
 	switch name {
 	case "owner.lock", "state.sqlite", "state.sqlite-shm", "state.sqlite-wal":
 		return "MUTABLE_SQLITE"
@@ -1050,6 +1069,14 @@ func partitionClass(partition quotaPartition, name string) string {
 	}
 }
 
+func ownerStaticName(name string) bool {
+	switch filepath.ToSlash(name) {
+	case "native-engine.json", "runtime-instance.json", "maintenance", "maintenance/gc", ".migrations", ".migrations/v1-v2-intent.json", ".migrations/v1-v2-complete.json":
+		return true
+	}
+	return false
+}
+
 type partitionTreeItem struct {
 	name string
 	dir  bool
@@ -1057,14 +1084,23 @@ type partitionTreeItem struct {
 }
 
 func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, error) {
+	result, _, err := measurePartitionMembersWithGC(partition, nil)
+	return result, err
+}
+
+// measurePartitionMembersWithGC measures the fixed owner members and, for a
+// restore handoff, each explicitly admitted maintenance/gc/<command> root.
+// A nil spec list preserves the historical evaluator behavior and rejects any
+// unpartitioned GC command instead of silently charging it to OWNER_STATIC.
+func measurePartitionMembersWithGC(partition quotaPartition, specs []GCPartitionSpec) (map[string]Inventory, map[string]Inventory, error) {
 	root, err := os.OpenRoot(partition.RootPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer root.Close()
 	rootIdentity, err := fileguard.DirectoryIdentity(root)
 	if err != nil || rootIdentity != partition.RootIdentity {
-		return nil, c.Fail(c.StaleAuthority, "physical quota partition root changed")
+		return nil, nil, c.Fail(c.StaleAuthority, "physical quota partition root changed")
 	}
 	items := make([]partitionTreeItem, 0, 64)
 	counts := map[string]uint64{}
@@ -1073,8 +1109,14 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 			return walkErr
 		}
 		kind := partitionClass(partition, name)
+		if kind == "" && gcCommandID(name) != "" {
+			kind = "GC_COMMAND"
+		}
 		if kind == "" {
 			return c.Fail(c.UnsupportedCapability, "physical quota owner contains an unpartitioned entry")
+		}
+		if kind == "GC_COMMAND" && specs == nil {
+			return c.Fail(c.UnsupportedCapability, "physical quota owner contains an unadmitted GC command")
 		}
 		isDir := name == "." || entry.IsDir()
 		if name == "owner" && partition.Mode == EvaluationReportPartition {
@@ -1085,23 +1127,23 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if counts["MUTABLE_SQLITE"] == 0 || counts["CONTROL_RESERVE"] != 1 || (counts["OWNER_STATIC"] != 3 && counts["OWNER_STATIC"] != 4) || counts["ARCHIVE"] == 0 ||
+	if counts["MUTABLE_SQLITE"] == 0 || counts["CONTROL_RESERVE"] != 1 || counts["OWNER_STATIC"] < 3 || counts["OWNER_STATIC"] > 7 || counts["ARCHIVE"] == 0 ||
 		(partition.Mode == EvaluationReportPartition && counts["REPORT_REMAINDER"] == 0) {
-		return nil, c.Fail(c.StoreIntegrityError, "physical quota partition is missing an owned component")
+		return nil, nil, c.Fail(c.StoreIntegrityError, "physical quota partition is missing an owned component")
 	}
 	if counts["MUTABLE_SQLITE"] > maxQuotaPartitionMembers*100000 || len(items) > maxInventoryItems {
-		return nil, c.Fail(c.BudgetLimitReached, "physical quota partition exceeds its inventory bound")
+		return nil, nil, c.Fail(c.BudgetLimitReached, "physical quota partition exceeds its inventory bound")
 	}
 	ownerRoot, err := os.OpenRoot(partition.OwnerPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer ownerRoot.Close()
 	ownerIdentity, err := fileguard.DirectoryIdentity(ownerRoot)
 	if err != nil || ownerIdentity != partition.OwnerIdentity {
-		return nil, c.Fail(c.StaleAuthority, "physical quota partition owner identity changed")
+		return nil, nil, c.Fail(c.StaleAuthority, "physical quota partition owner identity changed")
 	}
 	actualNames := map[string][]string{}
 	for _, item := range items {
@@ -1113,6 +1155,9 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 				name = strings.TrimPrefix(name, "owner/")
 			}
 		}
+		if item.kind == "GC_COMMAND" {
+			continue
+		}
 		if item.kind == "MUTABLE_SQLITE" && name != "." || item.kind != "MUTABLE_SQLITE" {
 			actualNames[item.kind] = append(actualNames[item.kind], name)
 		}
@@ -1121,31 +1166,68 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 	if partition.Mode == EvaluationReportPartition {
 		result["REPORT_REMAINDER"], err = measurePartitionSubset(root, func(name string) bool { return partitionClass(partition, name) == "REPORT_REMAINDER" })
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	result["MUTABLE_SQLITE"], err = MeasureMutableSQLite(ownerRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result["CONTROL_RESERVE"], err = MeasureControlReserve(ownerRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result["OWNER_STATIC"], err = measurePartitionSubset(ownerRoot, func(name string) bool {
-		return name == "native-engine.json" || name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
+		return ownerStaticName(name)
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	archiveRoot, err := os.OpenRoot(filepath.Join(partition.OwnerPath, "artifacts"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result["ARCHIVE"], err = Measure(archiveRoot, true)
 	closeErr := archiveRoot.Close()
 	if err = errors.Join(err, closeErr); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	gcMembers := map[string]Inventory{}
+	if specs != nil {
+		seen := map[string]bool{}
+		for _, spec := range specs {
+			if !c.ValidDigest(spec.CommandID) || !c.ValidDigest(spec.RequestDigest) || spec.UpperBytes == 0 || spec.UpperEntries == 0 || seen[spec.CommandID] {
+				return nil, nil, c.Fail(c.InvalidArgument, "invalid restore GC partition component")
+			}
+			seen[spec.CommandID] = true
+			gcRootPath := filepath.Join(partition.OwnerPath, "maintenance", "gc", spec.CommandID)
+			gcRoot, openErr := os.OpenRoot(gcRootPath)
+			if openErr != nil {
+				return nil, nil, openErr
+			}
+			inventory, measureErr := Measure(gcRoot, true)
+			identity, identityErr := fileguard.DirectoryIdentity(gcRoot)
+			volume, volumeErr := fileguard.VolumeIdentity(gcRoot)
+			closeErr := gcRoot.Close()
+			if err = errors.Join(measureErr, identityErr, volumeErr, closeErr); err != nil {
+				return nil, nil, err
+			}
+			if inventory.RootPath != filepath.Clean(gcRootPath) || inventory.RootIdentity != identity || inventory.VolumeIdentity != volume || volume != partition.VolumeIdentity {
+				return nil, nil, c.Fail(c.StaleAuthority, "restore GC partition component root changed")
+			}
+			if err = validateInventoryBound(inventory, "GC_COMMAND", partition); err != nil {
+				return nil, nil, err
+			}
+			gcMembers[spec.CommandID] = inventory
+		}
+		for _, item := range items {
+			if item.kind == "GC_COMMAND" {
+				id := gcCommandID(item.name)
+				if id != "" && !seen[id] {
+					return nil, nil, c.Fail(c.StoreIntegrityError, "restore GC command is missing its admitted component")
+				}
+			}
+		}
 	}
 	for _, kind := range []string{"REPORT_REMAINDER", "MUTABLE_SQLITE", "CONTROL_RESERVE", "OWNER_STATIC", "ARCHIVE"} {
 		inventory, ok := result[kind]
@@ -1170,19 +1252,11 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 			expectedEntries++ // MeasureMutableSQLite owns the owner root directory.
 		}
 		if inventory.Entries != expectedEntries {
-			return nil, c.Fail(c.StoreIntegrityError, "physical quota partition member inventory is incomplete")
+			return nil, nil, c.Fail(c.StoreIntegrityError, "physical quota partition member inventory is incomplete")
 		}
 		if kind == "OWNER_STATIC" {
-			validNames := len(actual) == 3 && len(measuredNames) == 1 &&
-				actual[0] == "maintenance" && actual[1] == "maintenance/gc" && actual[2] == "runtime-instance.json" &&
-				measuredNames[0] == "runtime-instance.json"
-			if len(actual) == 4 && len(measuredNames) == 2 {
-				validNames = actual[0] == "maintenance" && actual[1] == "maintenance/gc" &&
-					actual[2] == "native-engine.json" && actual[3] == "runtime-instance.json" &&
-					measuredNames[0] == "native-engine.json" && measuredNames[1] == "runtime-instance.json"
-			}
-			if !validNames {
-				return nil, c.Fail(c.StoreIntegrityError, "physical quota owner static member changed")
+			if err = validateInventoryBound(inventory, kind, partition); err != nil {
+				return nil, nil, err
 			}
 		}
 	}
@@ -1190,17 +1264,23 @@ func measurePartitionMembers(partition quotaPartition) (map[string]Inventory, er
 	for _, inventory := range result {
 		totalEntries, err = add(totalEntries, inventory.Entries)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+	}
+	for _, inventory := range gcMembers {
+		totalEntries, err = add(totalEntries, inventory.Entries)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	full, err := Measure(root, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if totalEntries != full.Entries {
-		return nil, c.Fail(c.StoreIntegrityError, "physical quota partition does not cover every file and directory exactly once")
+		return nil, nil, c.Fail(c.StoreIntegrityError, "physical quota partition does not cover every file and directory exactly once")
 	}
-	return result, nil
+	return result, gcMembers, nil
 }
 
 func measurePartitionSubset(root *os.Root, include func(string) bool) (Inventory, error) {
@@ -1383,20 +1463,38 @@ func validateInventoryBound(inventory Inventory, kind string, partition quotaPar
 	if _, err := validateInventory(inventory); err != nil {
 		return err
 	}
+	gcRelative, gcWithin := partitionRelativePath(partition.OwnerPath, inventory.RootPath)
+	validGCRoot := kind == "GC_COMMAND" && gcWithin && gcCommandID(gcRelative) != "" && len(strings.Split(filepath.ToSlash(gcRelative), "/")) == 3
 	if inventory.VolumeIdentity != partition.VolumeIdentity || (kind == "REPORT_REMAINDER" && inventory.RootPath != partition.RootPath) ||
-		(kind != "REPORT_REMAINDER" && inventory.RootPath != partition.OwnerPath && !(kind == "ARCHIVE" && inventory.RootPath == filepath.Join(partition.OwnerPath, "artifacts"))) ||
+		(kind != "REPORT_REMAINDER" && inventory.RootPath != partition.OwnerPath && !(kind == "ARCHIVE" && inventory.RootPath == filepath.Join(partition.OwnerPath, "artifacts")) && !validGCRoot) ||
 		inventory.RootIdentity == "" {
 		return c.Fail(c.StaleAuthority, "physical quota partition member root is outside its bound path")
 	}
 	if kind == "OWNER_STATIC" {
-		baseline := len(inventory.Files) == 1 && inventory.Files[0].Path == "runtime-instance.json" && inventory.Entries == 3
-		withNativeEngine := len(inventory.Files) == 2 && inventory.Files[0].Path == "native-engine.json" &&
-			inventory.Files[1].Path == "runtime-instance.json" && inventory.Entries == 4
-		if !baseline && !withNativeEngine {
-			return c.Fail(c.StoreIntegrityError, "physical quota owner static receipt is not the fixed runtime and maintenance namespace")
+		runtimeCount, migrationCount := 0, 0
+		for _, file := range inventory.Files {
+			switch file.Path {
+			case "runtime-instance.json":
+				runtimeCount++
+			case "native-engine.json":
+				if file.LogicalBytes > 1024 {
+					return c.Fail(c.UnsupportedCapability, "native engine receipt exceeds its bounded reader size")
+				}
+			case ".migrations/v1-v2-intent.json", ".migrations/v1-v2-complete.json":
+				migrationCount++
+				if file.LogicalBytes > 1<<20 {
+					return c.Fail(c.UnsupportedCapability, "migration receipt exceeds its bounded reader size")
+				}
+			default:
+				return c.Fail(c.StoreIntegrityError, "unknown immutable owner component")
+			}
 		}
-		if withNativeEngine && inventory.Files[0].LogicalBytes > 1024 {
-			return c.Fail(c.UnsupportedCapability, "native engine receipt exceeds its bounded reader size")
+		wantEntries := uint64(len(inventory.Files) + 2)
+		if migrationCount == 2 {
+			wantEntries++
+		}
+		if runtimeCount != 1 || migrationCount != 0 && migrationCount != 2 || inventory.Entries != wantEntries {
+			return c.Fail(c.StoreIntegrityError, "physical quota owner static receipt is not the fixed runtime and maintenance namespace")
 		}
 	}
 	return nil
@@ -1670,7 +1768,7 @@ func validateCommittedPartition(ctx context.Context, ledger *Ledger, partition q
 		return err
 	}
 	static, staticErr := measurePartitionSubset(owner, func(name string) bool {
-		return name == "native-engine.json" || name == "runtime-instance.json" || name == "maintenance" || name == "maintenance/gc"
+		return ownerStaticName(name)
 	})
 	ownerCloseErr := owner.Close()
 	if err = errors.Join(staticErr, ownerCloseErr); err != nil {

@@ -278,20 +278,33 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 	case "/quit", "/detach", "/exit":
 		return "UI detached; background task continues.", true, nil
 	case "/", "/help":
-		return tui.CommandHelp() + "\nPlain text records steering and pauses. @file selects captured source. /resume starts background work. /quit detaches without cancellation. Retention defaults to KEEP; expiry requires explicit deletion consent and the current revision. Backups shared with other tasks can also be removed by consented expiry. Cancel does not undo source files. Review/diff/export remains the default delivery path.", false, nil
+		return "Start here: /plan → /requests → /approve → /resume → /diff → /export\nReview each proposal before approving. /approve needs an ID if several proposals are pending.\n\n" + tui.CommandHelp() + "\nPlain text records steering and pauses; /revise applies that scope change. @file selects captured source. /resume starts background work. /quit detaches without cancellation. Retention defaults to KEEP; expiry requires explicit deletion consent and the current revision. Backups shared with other tasks can also be removed by consented expiry. Cancel does not undo source files.", false, nil
 	case "/pause", "/cancel":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "control takes no extra arguments")
 		}
 		raw, err := u.call(ctx, command[1:], nil)
-		return string(raw), false, err
+		if err != nil {
+			return "", false, err
+		}
+		var view owner.View
+		if err = c.DecodeStrict(raw, &view); err != nil {
+			return "", false, err
+		}
+		return renderTaskStatus(view), false, nil
 	case "/resume":
+		if arg != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/resume takes no arguments")
+		}
 		raw, err := u.call(ctx, "detach", nil)
-		return string(raw), false, err
+		var view owner.View
+		if err == nil {
+			err = c.DecodeStrict(raw, &view)
+		}
+		return "Work admitted in the background.\n" + renderTaskStatus(view), false, err
 	case "/status":
 		view, err := u.status(ctx)
-		raw, _ := json.MarshalIndent(view, "", "  ")
-		return string(raw), false, err
+		return renderTaskStatus(view), false, err
 	case "/plan":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "/plan shows the current plan; start a PRD task with run --prd FILE")
@@ -300,7 +313,11 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		return renderWorkPlan(view), false, err
 	case "/export", "/preview":
 		if arg == "" {
-			return "", false, c.Fail(c.InvalidArgument, command+" requires a new output directory")
+			var err error
+			arg, err = u.deliveryOutput(command[1:])
+			if err != nil {
+				return "", false, err
+			}
 		}
 		if strings.HasPrefix(arg, "\"") {
 			unquoted, err := strconv.Unquote(arg)
@@ -331,9 +348,29 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 			return "", false, err
 		}
 		return fmt.Sprintf("Exported %d changes to %s\nchanges.patch, manifest.json and exact before/after files are ready.\nQuality: %s. Original project files are unchanged.", len(result.Changeset.Changes), arg, result.State.Quality), false, nil
-	case "/diff", "/requests":
-		raw, err := u.call(ctx, command[1:], nil)
-		return string(raw), false, err
+	case "/diff":
+		if arg != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/diff takes no arguments; use /export for the complete patch")
+		}
+		raw, err := u.call(ctx, "diff-text", nil)
+		var result owner.DiffText
+		if err == nil {
+			err = c.DecodeStrict(raw, &result)
+		}
+		return renderDiff(result), false, err
+	case "/requests":
+		if arg != "" && arg != "json" {
+			return "", false, c.Fail(c.InvalidArgument, "/requests accepts optional json")
+		}
+		raw, err := u.call(ctx, "requests", nil)
+		if err != nil || arg == "json" {
+			return string(raw), false, err
+		}
+		var requests []agent.UserRequest
+		if err = c.DecodeStrict(raw, &requests); err != nil {
+			return "", false, err
+		}
+		return renderRequests(requests), false, nil
 	case "/context", "/why", "/evidence", "/verification", "/runtime", "/budget", "/trace":
 		kind := map[string]string{"/context": "continuity-info", "/why": "context-why", "/evidence": "checks", "/verification": "verification", "/runtime": "runtime-info", "/budget": "resources", "/trace": "events"}[command]
 		var raw json.RawMessage
@@ -376,36 +413,17 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		next.Model = arg
 		result, err := u.call(ctx, "model-switch", agent.ModelSwitch{CommandID: id, TaskID: u.task, ExpectedTaskSeq: info.State.TaskSeq, ExpectedProfile: info.Profile, Runtime: next})
 		return string(result), false, err
+	case "/approve", "/reject":
+		if strings.ContainsAny(arg, " \t\r\n") {
+			return "", false, c.Fail(c.InvalidArgument, command+" accepts one optional request ID")
+		}
+		return u.respond(ctx, arg, command[1:])
 	case "/respond":
 		parts := strings.Fields(arg)
 		if len(parts) != 2 || parts[1] != "approve" && parts[1] != "reject" {
 			return "", false, c.Fail(c.InvalidArgument, "respond requires request ID and approve/reject")
 		}
-		raw, err := u.call(ctx, "requests", nil)
-		if err != nil {
-			return "", false, err
-		}
-		var requests []agent.UserRequest
-		if err = c.DecodeStrict(raw, &requests); err != nil {
-			return "", false, err
-		}
-		for _, request := range requests {
-			if request.ID != parts[0] {
-				continue
-			}
-			if request.Status != "PENDING" {
-				return "", false, c.Fail(c.StaleRequest, "request is no longer pending")
-			}
-			id, err := resolveCommandID("")
-			if err != nil {
-				return "", false, err
-			}
-			response := agent.UserResponse{CommandID: id, TaskID: u.task, RequestID: request.ID, Attempt: request.Attempt, ExpectedSpecVersion: request.SpecVersion, ExpectedPolicyDigest: request.PolicyDigest, ActionDigest: request.ActionDigest}
-			response.Response.Decision = parts[1]
-			result, err := u.call(ctx, "respond", response)
-			return string(result), false, err
-		}
-		return "", false, c.Fail(c.StaleRequest, "request ID unavailable")
+		return u.respond(ctx, parts[0], parts[1])
 	case "/revise":
 		view, err := u.status(ctx)
 		if err != nil {

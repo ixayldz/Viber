@@ -21,7 +21,7 @@ const Version = "0.9.0-dev"
 const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
-  viber [start]                                       interactive first-task wizard
+  viber [start] [--prd FILE --check-config ABSOLUTE_FILE]  interactive first-task wizard
   viber repo-blueprint --root SOURCE --blueprint SPEC_JSON [--git] [--json]
   viber repo-generate --root SOURCE --blueprint MANIFEST_JSON --blueprint-digest SHA --files JSON --output NEW_DIR [--git] [--check-config FILE --task ID --input-sha SHA] [--json]
   viber skills source|propose|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]

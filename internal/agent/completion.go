@@ -72,6 +72,12 @@ func (s *Session) finalBlocker(doc Document, state c.TaskState) (string, error) 
 	if !utf8.ValidString(doc.FinalSummary) || strings.TrimSpace(doc.FinalSummary) == "" || len(doc.FinalSummary) > 64<<10 {
 		return "BOUNDED_FINAL_ARTIFACT_REQUIRED", nil
 	}
+	if doc.Spec.PRD != nil && doc.Plan == nil {
+		return "PRD_PLAN_REQUIRED", nil
+	}
+	if doc.Spec.PRD != nil && !prdReadComplete(doc) {
+		return "PRD_SOURCE_READ_REQUIRED", nil
+	}
 	if !doc.Plan.Complete() {
 		return "PLAN_NODES_PENDING", nil
 	}

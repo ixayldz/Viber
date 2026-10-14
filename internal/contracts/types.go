@@ -1,7 +1,9 @@
 package contracts
 
 import (
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type Integrity string
@@ -81,6 +83,61 @@ type InputSource struct {
 	ByteLength int64     `json:"byte_length"`
 	Integrity  Integrity `json:"integrity"`
 }
+
+// PRDSource is an immutable binding to the exact PRD file that was present in
+// the captured project candidate.  It is part of the task specification so a
+// later model turn, resume, or export cannot silently switch to a live file or
+// to a different path with similar contents.
+type PRDSource struct {
+	SchemaVersion           int          `json:"schema_version"`
+	CandidateDigest         string       `json:"candidate_digest"`
+	Path                    string       `json:"path"`
+	InputID                 string       `json:"input_id"`
+	Digest                  string       `json:"digest"`
+	ByteLength              int64        `json:"byte_length"`
+	SectionExtraction       string       `json:"section_extraction"`
+	HeadingCount            int          `json:"heading_count"`
+	OmittedHeadingCount     int          `json:"omitted_heading_count"`
+	UnsupportedHeadingCount int          `json:"unsupported_heading_count"`
+	Sections                []PRDSection `json:"sections"`
+}
+
+// PRDSection is a deterministic byte interval for one extracted Markdown
+// heading. It identifies source material only; the heading text is never a
+// semantic interpretation of the requirement.
+type PRDSection struct {
+	ID      string `json:"id"`
+	Start   int64  `json:"start"`
+	End     int64  `json:"end"`
+	Level   int    `json:"level"`
+	Heading string `json:"heading"`
+}
+
+type PRDReadInterval struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+}
+
+// PRDCoverage is a durable, deliberately modest coverage signal.  It records
+// whether the source-bound requirements have an admitted plan; it never
+// claims implementation or verification merely because a plan exists.
+type PRDCoverage struct {
+	SchemaVersion          int               `json:"schema_version"`
+	PRDSourceDigest        string            `json:"prd_source_digest"`
+	Status                 string            `json:"status"`
+	SectionStatus          string            `json:"section_status"`
+	PlanDigest             string            `json:"plan_digest,omitempty"`
+	RequiredRequirementIDs []string          `json:"required_requirement_ids"`
+	CoveredRequirementIDs  []string          `json:"covered_requirement_ids"`
+	ReadCandidateDigest    string            `json:"read_candidate_digest,omitempty"`
+	ReadDigest             string            `json:"read_digest,omitempty"`
+	ReadTotalBytes         int64             `json:"read_total_bytes,omitempty"`
+	ReadBytes              int64             `json:"read_bytes,omitempty"`
+	ReadStatus             string            `json:"read_status"`
+	ReadIntervals          []PRDReadInterval `json:"read_intervals"`
+	CoveredSectionIDs      []string          `json:"covered_section_ids"`
+}
+
 type Requirement struct {
 	ID                 string     `json:"id"`
 	Source             SourceSpan `json:"source_span"`
@@ -95,6 +152,7 @@ type TaskSpec struct {
 	Goal            string        `json:"goal"`
 	Inputs          []InputSource `json:"inputs"`
 	Requirements    []Requirement `json:"requirements"`
+	PRD             *PRDSource    `json:"prd_source,omitempty"`
 	ProtectedOrigin string        `json:"protected_check_origin"`
 	DeliveryPolicy  string        `json:"delivery_policy"`
 }
@@ -119,7 +177,48 @@ func (s TaskSpec) Validate() error {
 	if len(inputs) == 0 {
 		return Fail(InvalidArgument, "raw intent is required")
 	}
+	if s.PRD != nil {
+		prd := s.PRD
+		if prd.SchemaVersion != SchemaVersion || !ValidDigest(prd.CandidateDigest) || !ValidDigest(prd.Digest) || prd.InputID == "" || prd.ByteLength <= 0 || len(prd.Path) == 0 || len(prd.Path) > 256 || !validRelativePath(prd.Path) || prd.HeadingCount < 0 || prd.OmittedHeadingCount < 0 || prd.UnsupportedHeadingCount < 0 || len(prd.Sections) > 128 {
+			return Fail(InvalidArgument, "invalid PRD source binding")
+		}
+		switch prd.SectionExtraction {
+		case "":
+			// PRD bindings written by the first durable-binding release had no
+			// section metadata. Keep them loadable, but treat their section
+			// coverage as requiring review rather than claiming no headings.
+			if len(prd.Sections) != 0 || prd.HeadingCount != 0 || prd.OmittedHeadingCount != 0 || prd.UnsupportedHeadingCount != 0 {
+				return Fail(InvalidArgument, "invalid legacy PRD section metadata")
+			}
+		case "NO_HEADINGS":
+			if prd.HeadingCount != 0 || prd.OmittedHeadingCount != 0 || prd.UnsupportedHeadingCount != 0 || len(prd.Sections) != 0 {
+				return Fail(InvalidArgument, "invalid empty PRD section extraction")
+			}
+		case "COMPLETE":
+			if prd.OmittedHeadingCount != 0 || prd.UnsupportedHeadingCount != 0 || prd.HeadingCount != len(prd.Sections) {
+				return Fail(InvalidArgument, "incomplete PRD section extraction marked complete")
+			}
+		case "REVIEW_REQUIRED":
+			if prd.OmittedHeadingCount == 0 && prd.UnsupportedHeadingCount == 0 && prd.HeadingCount == len(prd.Sections) {
+				return Fail(InvalidArgument, "PRD review state lacks an explicit omitted or unsupported heading")
+			}
+		default:
+			return Fail(InvalidArgument, "invalid PRD section extraction status")
+		}
+		input, ok := inputs[prd.InputID]
+		if !ok || input.Digest != prd.Digest || input.ByteLength != prd.ByteLength || input.Integrity != Intact {
+			return Fail(InvalidArgument, "PRD source input binding mismatch")
+		}
+		lastEnd := int64(-1)
+		for i, section := range prd.Sections {
+			if section.ID != "prd-section-"+formatOrdinal(i+1) || section.Start < 0 || section.End <= section.Start || section.End > prd.ByteLength || section.Start < lastEnd || section.Level < 1 || section.Level > 6 || len(section.Heading) > 2048 || !utf8.ValidString(section.Heading) {
+				return Fail(InvalidArgument, "invalid PRD section span")
+			}
+			lastEnd = section.End
+		}
+	}
 	ids := map[string]bool{}
+	requirements := map[string]Requirement{}
 	required := 0
 	for _, r := range s.Requirements {
 		input, ok := inputs[r.Source.InputID]
@@ -130,6 +229,7 @@ func (s TaskSpec) Validate() error {
 			return Fail(InvalidArgument, "invalid requirement risk")
 		}
 		ids[r.ID] = true
+		requirements[r.ID] = r
 		if r.Required {
 			required++
 		}
@@ -137,10 +237,48 @@ func (s TaskSpec) Validate() error {
 	if required == 0 {
 		return Fail(InvalidArgument, "at least one required criterion is mandatory")
 	}
+	if s.PRD != nil {
+		r, ok := requirements["prd-source"]
+		if !ok || !r.Required || r.Source.InputID != s.PRD.InputID || r.Source.Start != 0 || r.Source.End != s.PRD.ByteLength || r.VerificationMethod != "PRD_REQUIREMENT_COVERAGE" {
+			return Fail(InvalidArgument, "PRD source requirement is missing or unbound")
+		}
+		for _, section := range s.PRD.Sections {
+			r, ok := requirements[section.ID]
+			if !ok || !r.Required || r.Source.InputID != s.PRD.InputID || r.Source.Start != section.Start || r.Source.End != section.End || r.VerificationMethod != "PRD_SECTION_COVERAGE" {
+				return Fail(InvalidArgument, "PRD section criterion is missing or unbound")
+			}
+		}
+	}
 	if !ValidDigest(s.ProtectedOrigin) {
 		return Fail(InvalidArgument, "protected check origin required")
 	}
 	return nil
+}
+
+func validRelativePath(path string) bool {
+	if path == "." || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") || strings.Contains(path, "\\") || strings.ContainsRune(path, 0) {
+		return false
+	}
+	parts := strings.Split(path, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func formatOrdinal(value int) string {
+	if value < 10 {
+		return "000" + strconv.Itoa(value)
+	}
+	if value < 100 {
+		return "00" + strconv.Itoa(value)
+	}
+	if value < 1000 {
+		return "0" + strconv.Itoa(value)
+	}
+	return strconv.Itoa(value)
 }
 
 type PromptRef struct {

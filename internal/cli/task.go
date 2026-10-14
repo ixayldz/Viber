@@ -41,8 +41,9 @@ func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, js
 			Blocker       string                `json:"blocker"`
 			Summary       string                `json:"untrusted_model_summary"`
 			Candidate     artifact.Ref          `json:"candidate"`
+			PRDCoverage   *c.PRDCoverage        `json:"prd_coverage,omitempty"`
 			ReleaseReady  bool                  `json:"release_ready"`
-		}{checks, doc.Runtime, doc.Plan, protection, doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, false}); err != nil {
+		}{checks, doc.Runtime, doc.Plan, protection, doc.Context, 1, state, doc.Budget, doc.Blocker, doc.FinalSummary, doc.Candidate, doc.PRDCoverage, false}); err != nil {
 			return 4
 		}
 	} else {
@@ -55,6 +56,9 @@ func taskResult(out, errout io.Writer, state c.TaskState, doc agent.Document, js
 		}
 		if doc.FinalReady {
 			fmt.Fprintf(out, "Model summary %s\n", strconv.QuoteToASCII(doc.FinalSummary))
+		}
+		if doc.PRDCoverage != nil {
+			fmt.Fprintf(out, "PRD coverage %s · required %d · planned %d\n", doc.PRDCoverage.Status, len(doc.PRDCoverage.RequiredRequirementIDs), len(doc.PRDCoverage.CoveredRequirementIDs))
 		}
 		if protection != nil {
 			fmt.Fprintf(out, "Check protection %s · checks %d · scopes %d · strong verification unavailable\n", protection.ClosureCoverage, protection.CheckCount, protection.ProtectedScopes)
@@ -477,7 +481,11 @@ func runTask(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	createdState, err := session.Create(ctx, agent.StartOptions{GoGraphRuntime: goGraphRuntime, Extension: extension, SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	prdPath := ""
+	if prdRequested {
+		prdPath = *prdFile
+	}
+	createdState, err := session.Create(ctx, agent.StartOptions{GoGraphRuntime: goGraphRuntime, Extension: extension, SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, PRDPath: prdPath, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
@@ -491,6 +499,13 @@ func runTask(args []string, out, errout io.Writer) int {
 		}
 		if binding.Entry.Path != *prdFile || binding.Entry.Hash == "" {
 			return report(out, errout, c.Fail(c.StoreIntegrityError, "selected PRD path changed during capture"), *jsonMode)
+		}
+		_, createdDoc, loadErr := session.Load(ctx, *task)
+		if loadErr != nil || createdDoc.Spec.PRD == nil || createdDoc.Spec.PRD.CandidateDigest != createdState.CandidateDigest || createdDoc.Spec.PRD.Path != binding.Entry.Path || createdDoc.Spec.PRD.Digest != binding.Entry.Hash || createdDoc.Spec.PRD.ByteLength != binding.Entry.Size {
+			if loadErr != nil {
+				return report(out, errout, loadErr, *jsonMode)
+			}
+			return report(out, errout, c.Fail(c.StoreIntegrityError, "durable PRD source binding was not retained"), *jsonMode)
 		}
 	}
 	if *detached {

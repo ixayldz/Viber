@@ -141,7 +141,7 @@ func openDeletionStore(ctx context.Context, scope privacyScope, authority Privac
 		} else if binding == nil || binding.AuthorityID != authority.ID || binding.Directory != authority.Directory || binding.PhysicalRoot != authority.PhysicalRoot {
 			err = c.Fail(c.StaleAuthority, "managed restored store lost its physical quota authority pin")
 		} else {
-			ledger, err = resource.OpenPinned(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, resource.DefaultLimits(), binding.LedgerID)
+			ledger, err = resource.OpenPinnedExisting(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, binding.LedgerID)
 			if err == nil {
 				err = journal.AttachPhysicalQuota(ledger)
 			}

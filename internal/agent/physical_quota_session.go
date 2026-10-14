@@ -25,7 +25,12 @@ func (s *Session) attachPhysicalQuota(ctx context.Context, authority *PrivacyAut
 		}
 		expectedLedgerID = pin.LedgerID
 	}
-	ledger, err := resource.OpenPinned(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, resource.DefaultLimits(), expectedLedgerID)
+	var ledger *resource.Ledger
+	if expectedLedgerID == "" {
+		ledger, err = resource.OpenPinned(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, resource.DefaultLimits(), "")
+	} else {
+		ledger, err = resource.OpenPinnedExisting(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, expectedLedgerID)
+	}
 	if err != nil {
 		return err
 	}

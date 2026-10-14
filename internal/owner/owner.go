@@ -25,6 +25,7 @@ type View struct {
 	Checks       []agent.CheckSummary  `json:"checks,omitempty"`
 	Runtime      *agent.LocalRuntime   `json:"runtime,omitempty"`
 	Plan         *plan.State           `json:"plan,omitempty"`
+	PRDCoverage  *c.PRDCoverage        `json:"prd_coverage,omitempty"`
 	Protection   *agent.ProtectionInfo `json:"check_protection,omitempty"`
 	Context      *agent.ContextAudit   `json:"context,omitempty"`
 	State        c.TaskState           `json:"state"`
@@ -47,6 +48,17 @@ type DiffChange struct {
 	Before  string `json:"before_digest"`
 	After   string `json:"after_digest"`
 	Deleted bool   `json:"deleted"`
+}
+
+// DiffText is a bounded review surface. CLI diff keeps its stable metadata
+// contract; this surface also carries a textual patch from immutable artifacts.
+type DiffText struct {
+	Baseline      string       `json:"baseline"`
+	Candidate     string       `json:"candidate"`
+	Changes       []DiffChange `json:"changes"`
+	Patch         string       `json:"patch"`
+	PatchComplete bool         `json:"patch_complete"`
+	Truncated     bool         `json:"truncated"`
 }
 type activeRun struct {
 	id        string
@@ -142,7 +154,7 @@ func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, er
 	if err == nil {
 		err = checkErr
 	}
-	return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+	return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, PRDCoverage: doc.PRDCoverage, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
 func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, error) {
 	o.control.Lock()
@@ -612,7 +624,7 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.Session.Journal.History(ctx, request.TaskID, page.After, page.Limit)
-	case "diff":
+	case "diff", "diff-text":
 		if err := nullPayload(request.Payload); err != nil {
 			return nil, err
 		}
@@ -628,13 +640,21 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		changeset, _, err := delivery.Build(before, after)
+		changeset, patch, err := delivery.Build(before, after)
 		if err != nil {
 			return nil, err
 		}
 		result := []DiffChange{}
 		for _, change := range changeset.Changes {
 			result = append(result, DiffChange{Path: change.Path, Before: change.BeforeDigest, After: change.AfterDigest, Deleted: change.Kind == "DELETED"})
+		}
+		if request.Command == "diff-text" {
+			const limit = 16 << 10
+			truncated := len(patch) > limit
+			if truncated {
+				patch = patch[:limit]
+			}
+			return DiffText{Baseline: changeset.Baseline, Candidate: changeset.Candidate, Changes: result, Patch: string(patch), PatchComplete: changeset.PatchComplete, Truncated: truncated}, nil
 		}
 		return result, nil
 	case "queue-list":

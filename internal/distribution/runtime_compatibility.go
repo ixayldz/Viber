@@ -24,6 +24,8 @@ const (
 	RuntimeCapabilityNativeEnginePartitionV1         = "physical_quota_native_engine_partition_v1"
 	RuntimeCapabilityPhysicalQuotaPartitionV1        = "physical_quota_owner_partition_v1"
 	RuntimeCapabilityPhysicalQuotaIntentV1           = "physical_quota_retry_intent_v1"
+	RuntimeCapabilityPhysicalQuotaRestorePartitionV1 = "physical_quota_restore_partition_v1"
+	RuntimeCapabilityPRDTaskContractV1               = "prd_task_contract_v1"
 	RuntimeCapabilityProjectMemoryConflictMetadataV1 = "project_memory_conflict_metadata_v1"
 	RuntimeCapabilityProjectMemoryCopyV1             = "project_memory_copy_v1"
 	RuntimeCapabilityProjectMemoryV1                 = "project_memory_v1"
@@ -38,7 +40,9 @@ var supportedRuntimeCapabilities = []string{
 	RuntimeCapabilityPhysicalQuotaHandoffV1,
 	RuntimeCapabilityNativeEnginePartitionV1,
 	RuntimeCapabilityPhysicalQuotaPartitionV1,
+	RuntimeCapabilityPhysicalQuotaRestorePartitionV1,
 	RuntimeCapabilityPhysicalQuotaIntentV1,
+	RuntimeCapabilityPRDTaskContractV1,
 	RuntimeCapabilityProjectMemoryConflictMetadataV1,
 	RuntimeCapabilityProjectMemoryCopyV1,
 	RuntimeCapabilityProjectMemoryV1,
@@ -66,6 +70,9 @@ func validateRuntimeCapabilities(capabilities []string) error {
 	}
 	if declared[RuntimeCapabilityNativeEnginePartitionV1] && !declared[RuntimeCapabilityPhysicalQuotaPartitionV1] {
 		return c.Fail(c.InvalidArgument, "native engine partition support requires owner partition support")
+	}
+	if declared[RuntimeCapabilityPhysicalQuotaRestorePartitionV1] && (!declared[RuntimeCapabilityPhysicalQuotaPartitionV1] || !declared[RuntimeCapabilityPhysicalQuotaHandoffV1]) {
+		return c.Fail(c.InvalidArgument, "restore partitions require owner partition and handoff support")
 	}
 	return nil
 }
@@ -196,7 +203,7 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if len(refs) > maxRuntimeCapabilityDocuments {
 			return closeOnError(c.Fail(c.BudgetLimitReached, "registered store exceeds the bounded historical-document scan"))
 		}
-		found, copyFound, scannedBytes, scanErr := scanStoreProjectMemory(ctx, known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes)
+		found, copyFound, scannedBytes, scanErr := scanStoreProjectMemory(ctx, known.Path, states, refs, maxRuntimeCapabilityBytes-documentBytes, used)
 		if scanErr != nil {
 			return closeOnError(scanErr)
 		}
@@ -222,7 +229,7 @@ func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used
 	if err != nil || pin == nil {
 		return err
 	}
-	ledger, err := resource.OpenPinned(resource.Authority{ID: pin.AuthorityID, Directory: pin.Directory, PhysicalRoot: pin.PhysicalRoot}, resource.DefaultLimits(), pin.LedgerID)
+	ledger, err := resource.OpenPinnedExisting(resource.Authority{ID: pin.AuthorityID, Directory: pin.Directory, PhysicalRoot: pin.PhysicalRoot}, pin.LedgerID)
 	if err != nil {
 		return err
 	}
@@ -238,6 +245,9 @@ func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used
 	}
 	if usage.StageHandoffs {
 		used[RuntimeCapabilityPhysicalQuotaHandoffV1] = true
+	}
+	if usage.RestorePartitions {
+		used[RuntimeCapabilityPhysicalQuotaRestorePartitionV1] = true
 	}
 	if partitionUsed {
 		used[RuntimeCapabilityPhysicalQuotaPartitionV1] = true
@@ -275,7 +285,7 @@ func closeStoreLocks(locked []*store.Store) error {
 	return result
 }
 
-func scanStoreProjectMemory(ctx context.Context, directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64) (bool, bool, int64, error) {
+func scanStoreProjectMemory(ctx context.Context, directory string, states map[string]c.TaskState, refs []store.DocumentRef, byteLimit int64, featureMaps ...map[string]bool) (bool, bool, int64, error) {
 	if err := ctx.Err(); err != nil {
 		return false, false, 0, err
 	}
@@ -380,6 +390,11 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 		var document map[string]json.RawMessage
 		if err = c.DecodeStrict(raw, &document); err != nil || document == nil {
 			return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "registered store document cannot be inspected for runtime references")
+		}
+		if coverage, present := document["prd_coverage"]; present && !bytes.Equal(bytes.TrimSpace(coverage), []byte("null")) {
+			for _, features := range featureMaps {
+				features[RuntimeCapabilityPRDTaskContractV1] = true
+			}
 		}
 		refsRaw, exists := document["project_memory_refs"]
 		if !exists {

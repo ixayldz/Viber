@@ -172,6 +172,9 @@ func (s *Session) Respond(ctx context.Context, response UserResponse) (c.TaskSta
 // validateReviewCall prepares a pure preview before requesting approval. It
 // changes neither the archive candidate pointer nor any source bytes.
 func (s *Session) validateReviewCall(state c.TaskState, doc Document, call model.Call) error {
+	if doc.Spec.PRD != nil && (doc.Plan == nil || !prdReadComplete(doc)) {
+		return c.Fail(c.PolicyDenied, "read the complete PRD and admit a plan before proposing candidate writes")
+	}
 	var args struct {
 		ReadSet []c.ReadCondition `json:"read_set"`
 		Changes []c.Change        `json:"changes"`

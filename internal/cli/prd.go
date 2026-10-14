@@ -15,6 +15,8 @@ const prdInstruction = `
 --- Viber PRD workflow ---
 The user's task above is preserved verbatim and remains authoritative. Work from this task's immutable captured project candidate. First read the exact project-relative PRD path shown below using the admitted fs_read tool; do not infer its contents or read the live filesystem. If the file cannot be read from the captured candidate, stop and report that blocker.
 
+Read every byte of that exact file by following fs_read coverage cursors (the default page is bounded at 16 KiB). The kernel records only successful exact-byte pages bound to the captured candidate; saying that the PRD was read is not sufficient. The complete raw PRD input remains authoritative. Markdown section requirement IDs, when present, are deterministic source spans and are not semantic claims; a bounded or unsupported extraction is reported as review-required.
+
 Before proposing implementation changes, call plan_propose with a source-bound typed dependency plan that covers the PRD requirements, implementation steps, and applicable registered checks. Follow the native plan workflow before making candidate changes.
 
 Implement only within the authorized candidate and plan scope. Use only checks already registered for this task through the registered check tool. Never invent a build or test command, and never claim a check succeeded unless the registered tool reports that result. Report exactly what was verified and leave unsupported checks unknown.

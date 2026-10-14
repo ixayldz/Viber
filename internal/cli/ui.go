@@ -56,7 +56,7 @@ func runUI(args []string, out, errout io.Writer) int {
 	return runUILive(u, view, uiInput, out)
 }
 func runUILines(u uiSession, input io.Reader, out, errout io.Writer) int {
-	fmt.Fprintln(out, "Viber connected. /help lists commands. /quit detaches the UI.")
+	fmt.Fprintln(out, "Viber connected. / shows commands. /requests reviews proposals; /approve then /resume continues. /quit detaches the UI.")
 	scan := bufio.NewScanner(input)
 	scan.Buffer(make([]byte, 4096), 65537)
 	for scan.Scan() {
@@ -92,7 +92,10 @@ func screen(view owner.View, notice, details string) tui.Screen {
 			work = fmt.Sprintf("%d planned steps; /plan for details", len(view.Plan.Progress))
 		}
 	}
-	decision := view.Blocker
+	decision := taskNextAction(view.State, view.Detached)
+	if view.Blocker != "" {
+		decision = view.Blocker + " | " + decision
+	}
 	if view.State.InputBarrier {
 		decision = "raw steering awaits explicit scope revision"
 	}
@@ -104,10 +107,11 @@ func screen(view owner.View, notice, details string) tui.Screen {
 }
 
 type uiResult struct {
-	view *owner.View
-	text string
-	quit bool
-	err  error
+	view   *owner.View
+	stream *owner.StreamPage
+	text   string
+	quit   bool
+	err    error
 }
 
 func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int {
@@ -137,6 +141,10 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 	utf := []byte{}
 	notice := "Connected. Type / to browse commands; @file selects captured source."
 	details := ""
+	showStream := true
+	streamText, streamInvocation := "", ""
+	var streamCursor int64
+	var shownRequestSequence int64 = -1
 	scrollOffset := 0
 	clearedSummary := ""
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -162,6 +170,7 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 		fmt.Fprintf(out, "\x1b[%d;%dH\x1b[?25h", row, column)
 	}
 	dispatch := func(text string) {
+		showStream = strings.TrimSpace(text) == "/resume"
 		if strings.TrimSpace(text) == "/clear" {
 			details, clearedSummary, scrollOffset = "", view.Summary, 0
 			notice = "Display cleared. Task history and source files are retained."
@@ -254,7 +263,39 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 		case result := <-results:
 			if result.view != nil {
 				if result.err == nil {
+					if showStream && view.State.Execution != c.Terminated && result.view.State.Execution == c.Terminated {
+						details = renderTaskStatus(*result.view)
+						if result.view.Summary != "" {
+							details += "\n\nAssistant summary (untrusted):\n" + result.view.Summary
+						}
+						scrollOffset = 0
+					}
 					view = *result.view
+					if result.text != "" {
+						details, scrollOffset = result.text, 0
+						showStream = false
+						shownRequestSequence = view.State.TaskSeq
+					}
+					if result.stream != nil {
+						page := result.stream
+						if page.InvocationID != streamInvocation || page.ResyncRequired {
+							streamText = ""
+							streamInvocation = page.InvocationID
+							if page.ResyncRequired {
+								streamText = "[Earlier live output is unavailable; task history and saved state remain authoritative.]\n"
+							}
+						}
+						streamCursor = page.Next
+						for _, delta := range page.Deltas {
+							streamText += delta.Text
+						}
+						if len(streamText) > 16000 {
+							streamText = "[Earlier live output clipped.]\n" + streamText[len(streamText)-16000:]
+						}
+						if showStream && streamText != "" && view.State.Execution != c.Terminated {
+							details = "Assistant live output (untrusted; not check evidence):\n" + streamText
+						}
+					}
 				}
 				polling = false
 			} else {
@@ -283,12 +324,35 @@ func runUILive(u uiSession, view owner.View, input io.Reader, out io.Writer) int
 			editor.FlushEscape()
 			if !polling {
 				polling = true
+				previousRequestSequence := shownRequestSequence
+				previousStreamCursor := streamCursor
+				previousStreamInvocation := streamInvocation
 				go func() {
 					callCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 					defer stop()
 					v, err := u.status(callCtx)
+					var streamPage *owner.StreamPage
+					if err == nil && (v.State.Execution == c.Running || v.State.Execution == c.Verifying) {
+						if page, streamErr := u.liveStreamPage(callCtx, previousStreamInvocation, previousStreamCursor); streamErr == nil {
+							streamPage = &page
+						}
+					}
+					proposal := ""
+					if err == nil && v.State.Execution == c.WaitingUser && previousRequestSequence != v.State.TaskSeq {
+						// Show a newly pending proposal once. Polling must not
+						// continually replace a user's /plan or /diff view.
+						if raw, requestErr := u.call(callCtx, "requests", nil); requestErr == nil {
+							var requests []agent.UserRequest
+							if c.DecodeStrict(raw, &requests) == nil {
+								proposal = renderRequests(requests)
+								if len(proposal) > 32768 {
+									proposal = proposal[:32768] + "\n[Preview clipped; use /requests json or the CLI requests command.]"
+								}
+							}
+						}
+					}
 					select {
-					case results <- uiResult{view: &v, err: err}:
+					case results <- uiResult{view: &v, stream: streamPage, text: proposal, err: err}:
 					case <-ctx.Done():
 					}
 				}()

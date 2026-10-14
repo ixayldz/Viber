@@ -130,7 +130,7 @@ func (s *Store) preparePinnedQuotaForOpen(ctx context.Context) (*resource.Ledger
 	if c.DecodeStrict(rawAuthority, &authority) != nil || authority.SchemaVersion != 1 || authority.ID != binding.AuthorityID || authority.Directory != binding.Directory || authority.PhysicalRoot != binding.PhysicalRoot {
 		return nil, c.Fail(c.StaleAuthority, "owner physical quota and privacy authority pins differ")
 	}
-	ledger, err := resource.OpenPinned(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, resource.DefaultLimits(), binding.LedgerID)
+	ledger, err := resource.OpenPinnedExisting(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, binding.LedgerID)
 	if err != nil {
 		return nil, err
 	}

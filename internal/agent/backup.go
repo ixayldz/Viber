@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -582,6 +583,185 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 	return restoreBackup(ctx, backup, destination, false)
 }
 
+type restorePhysicalBinding struct {
+	SchemaVersion      int    `json:"schema_version"`
+	BackupRoot         string `json:"backup_root"`
+	BackupRootIdentity string `json:"backup_root_identity"`
+	ManifestDigest     string `json:"manifest_digest"`
+	AuthorityDigest    string `json:"authority_digest"`
+	TargetRoot         string `json:"target_root"`
+	StageRoot          string `json:"stage_root"`
+	AuthorityID        string `json:"authority_id"`
+	PhysicalRoot       string `json:"physical_root"`
+	DeletionWatermark  int64  `json:"deletion_watermark"`
+	LedgerID           string `json:"ledger_id"`
+}
+
+func restoreManifestName(name string) string {
+	switch name {
+	case "metadata/migrations/v1-v2-intent.json":
+		return store.MigrationIntentFile
+	case "metadata/migrations/v1-v2-complete.json":
+		return store.MigrationCompleteFile
+	case "database/state.sqlite":
+		return "state.sqlite"
+	default:
+		return filepath.FromSlash(name)
+	}
+}
+
+func restoreAdd(left, right uint64) (uint64, error) {
+	if right > math.MaxUint64-left {
+		return 0, c.Fail(c.BudgetLimitReached, "restore physical quota envelope overflow")
+	}
+	return left + right, nil
+}
+
+func restorePhysicalEstimate(m BackupManifest) (uint64, uint64, error) {
+	var payload, temporary uint64
+	directories := map[string]bool{}
+	for _, file := range m.Files {
+		if file.Size < 0 {
+			return 0, 0, c.Fail(c.StoreIntegrityError, "restore manifest contains a negative physical size")
+		}
+		size := uint64(file.Size)
+		var err error
+		payload, err = restoreAdd(payload, size)
+		if err != nil {
+			return 0, 0, err
+		}
+		if size > temporary {
+			temporary = size
+		}
+		name := filepath.Clean(restoreManifestName(file.Path))
+		for directory := filepath.Dir(name); directory != "." && directory != ""; directory = filepath.Dir(directory) {
+			directories[directory] = true
+		}
+	}
+	// fileguard.Publish uses a bounded temporary beside each final file. Keep
+	// one complete largest payload charged concurrently with the final tree,
+	// and retain the fixed owner bootstrap envelope for SQLite/control files.
+	if temporary < 64<<20 {
+		temporary = 64 << 20
+	}
+	startupBytes, startupEntries := resource.PartitionStartupEnvelope()
+	upperBytes, err := restoreAdd(payload, temporary)
+	if err == nil {
+		upperBytes, err = restoreAdd(upperBytes, startupBytes)
+	}
+	if err == nil {
+		upperBytes, err = restoreAdd(upperBytes, uint64(len(directories))*4096)
+	}
+	if err == nil {
+		upperBytes, err = restoreAdd(upperBytes, 64<<10)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	upperEntries, err := restoreAdd(uint64(len(m.Files)), uint64(len(directories)))
+	if err == nil {
+		upperEntries, err = restoreAdd(upperEntries, 1+startupEntries)
+	}
+	if err != nil || upperBytes == 0 || upperEntries == 0 {
+		if err == nil {
+			err = c.Fail(c.BudgetLimitReached, "restore physical quota envelope is empty")
+		}
+		return 0, 0, err
+	}
+	return upperBytes, upperEntries, nil
+}
+
+func prepareRestorePhysicalQuota(ctx context.Context, root *os.Root, m BackupManifest, manifestRaw []byte, backup, backupIdentity, stage, target string) (*resource.Ledger, resource.Allocation, error) {
+	if root == nil || m.SchemaVersion != 2 || m.PrivacyAuthority == nil {
+		return nil, resource.Allocation{}, c.Fail(c.InvalidArgument, "current restore physical quota binding required")
+	}
+	var database BackupFile
+	found := false
+	for _, file := range m.Files {
+		if file.Path == "database/state.sqlite" {
+			database, found = file, true
+			break
+		}
+	}
+	if !found {
+		return nil, resource.Allocation{}, c.Fail(c.StoreIntegrityError, "restore database manifest witness is missing")
+	}
+	pin, err := store.ReadPhysicalQuotaBindingFromBackup(ctx, root, backupIdentity, database.Digest, database.Size)
+	if err != nil {
+		return nil, resource.Allocation{}, err
+	}
+	if pin == nil {
+		return nil, resource.Allocation{}, c.Fail(c.StaleAuthority, "restore backup has no pinned physical quota ledger")
+	}
+	authority := m.PrivacyAuthority
+	if pin.AuthorityID != authority.ID || pin.Directory != authority.Directory || pin.PhysicalRoot != authority.PhysicalRoot {
+		return nil, resource.Allocation{}, c.Fail(c.StaleAuthority, "restore backup physical quota pin differs from its privacy authority")
+	}
+	ledger, err := resource.OpenPinnedExisting(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, pin.LedgerID)
+	if err != nil {
+		return nil, resource.Allocation{}, err
+	}
+	closeOnError := func(err error) (*resource.Ledger, resource.Allocation, error) {
+		return nil, resource.Allocation{}, errors.Join(err, ledger.Close())
+	}
+	upperBytes, upperEntries, err := restorePhysicalEstimate(m)
+	if err != nil {
+		return closeOnError(err)
+	}
+	canonicalBackup, err := filepath.EvalSymlinks(backup)
+	if err == nil {
+		canonicalBackup, err = filepath.Abs(canonicalBackup)
+	}
+	if err != nil {
+		return closeOnError(err)
+	}
+	authorityDigest, err := c.Digest(*authority)
+	if err != nil {
+		return closeOnError(err)
+	}
+	binding := restorePhysicalBinding{SchemaVersion: 1, BackupRoot: canonicalBackup, BackupRootIdentity: backupIdentity,
+		ManifestDigest: c.HashBytes(manifestRaw), TargetRoot: target, StageRoot: stage, AuthorityID: authority.ID,
+		AuthorityDigest: authorityDigest, PhysicalRoot: authority.PhysicalRoot, DeletionWatermark: m.DeletionWatermark, LedgerID: pin.LedgerID}
+	requestDigest, err := c.Digest(binding)
+	if err != nil {
+		return closeOnError(err)
+	}
+	allocation, err := ledger.Reserve(ctx, resource.Request{Writer: "agent", Family: "RESTORE_OWNER", RequestDigest: requestDigest,
+		TargetRoot: stage, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+	if err != nil {
+		return closeOnError(err)
+	}
+	if err = allocation.PreparePartitionHandoff(ctx, target); err != nil {
+		return closeOnError(err)
+	}
+	if err = allocation.Begin(ctx); err != nil {
+		return closeOnError(err)
+	}
+	return ledger, allocation, nil
+}
+
+func restoredGCPartitionSpecs(records map[string][]byte) ([]resource.GCPartitionSpec, error) {
+	// The caller has already validated every completion/receipt against its
+	// canonical command. Derive the exact same upper bounds used by GC retries.
+	var specs []resource.GCPartitionSpec
+	for name, raw := range records {
+		if !strings.HasSuffix(name, "/intent.json") {
+			continue
+		}
+		var command GCCommand
+		if err := c.DecodeStrict(raw, &command); err != nil {
+			return nil, err
+		}
+		upperBytes, upperEntries, err := gcPhysicalEstimate(raw, len(command.Plan.Objects))
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, resource.GCPartitionSpec{CommandID: c.HashBytes([]byte(command.CommandID)), RequestDigest: c.HashBytes(raw), UpperBytes: upperBytes, UpperEntries: upperEntries})
+	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].CommandID < specs[j].CommandID })
+	return specs, nil
+}
+
 // Legacy migration validation is confined to a disposable private destination;
 // it is never a public restore capability or an authorization to run its tasks.
 func restoreBackup(ctx context.Context, backup, destination string, legacyMigrationValidation bool) (manifest BackupManifest, resultErr error) {
@@ -661,6 +841,10 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if err = validateGCMaintenanceRecords(gcRecords); err != nil {
 		return m, err
 	}
+	gcSpecs, err := restoredGCPartitionSpecs(gcRecords)
+	if err != nil {
+		return m, err
+	}
 	parent, err := os.OpenRoot(filepath.Dir(target))
 	if err != nil {
 		return m, err
@@ -668,11 +852,33 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	defer parent.Close()
 	stageName := newID(".restore-")
 	stagePath := filepath.Join(parent.Name(), stageName)
+	stagePath, err = fileguard.ResolveProspective(stagePath)
+	if err != nil {
+		return m, err
+	}
+	var restoreQuota *resource.Ledger
+	var restoreAllocation resource.Allocation
+	if m.SchemaVersion == 2 {
+		backupIdentity, identityErr := fileguard.DirectoryIdentity(root)
+		if identityErr != nil {
+			return m, identityErr
+		}
+		restoreQuota, restoreAllocation, err = prepareRestorePhysicalQuota(ctx, root, m, manifestRaw, backup, backupIdentity, stagePath, target)
+		if err != nil {
+			return m, err
+		}
+		defer func() { resultErr = errors.Join(resultErr, restoreQuota.Close()) }()
+	}
 	stage, err := freshPrivate(stagePath)
 	if err != nil {
 		return m, err
 	}
 	defer stage.Close()
+	if restoreQuota != nil {
+		if err = restoreAllocation.BindPartitionHandoffStage(ctx); err != nil {
+			return m, err
+		}
+	}
 	if m.SchemaVersion == 2 {
 		registry, err := openPrivacyRoot(*m.PrivacyAuthority)
 		if err != nil {
@@ -752,6 +958,11 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	var closeRestored func() error
 	if legacyMigrationValidation && m.SchemaVersion == 1 {
 		restored, closeRestored, err = openLegacyRestoreValidationSession(ctx, stagePath, validationInstance)
+	} else if restoreQuota != nil {
+		restored, err = openPreparedRestoreStage(ctx, stagePath, *m.PrivacyAuthority, restoreQuota, restoreAllocation)
+		if err == nil {
+			closeRestored = restored.Close
+		}
 	} else {
 		restored, err = Open(ctx, stagePath)
 		if err == nil {
@@ -797,7 +1008,11 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if err = ctx.Err(); err != nil {
 		return m, err
 	}
-	if err = fileguard.RenameNoReplace(parent, stageName, filepath.Base(target)); err != nil {
+	if restoreQuota != nil {
+		if _, err = restoreAllocation.CommitPartitionHandoff(ctx, gcSpecs...); err != nil {
+			return m, err
+		}
+	} else if err = fileguard.RenameNoReplace(parent, stageName, filepath.Base(target)); err != nil {
 		return m, err
 	}
 	if m.SchemaVersion == 2 {
@@ -806,6 +1021,33 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 		}
 	}
 	return m, nil
+}
+
+// openPreparedRestoreStage opens a restored owner only while its exact outer
+// allocation is WRITING.  Store and archive attachment then observe that
+// enclosing reservation and contribute to the same pending receipt rather
+// than importing the copied SQLite/archive bytes a second time.  The check is
+// intentionally made before openSession: an unbound or already-settled stage
+// must fail closed instead of becoming an unadmitted regular session.
+func openPreparedRestoreStage(ctx context.Context, directory string, authority PrivacyAuthority, ledger *resource.Ledger, allocation resource.Allocation) (*Session, error) {
+	if ledger == nil || allocation.ID == "" || directory == "" {
+		return nil, c.Fail(c.InvalidArgument, "prepared restore physical allocation required")
+	}
+	enclosing, covered, err := ledger.EnclosingReservation(ctx, directory)
+	if err != nil {
+		return nil, err
+	}
+	if !covered || enclosing.ID != allocation.ID || !allocation.Covers(directory) {
+		return nil, c.Fail(c.StaleAuthority, "restore stage is not covered by its active physical reservation")
+	}
+	session, err := openSession(ctx, directory, &authority)
+	if err != nil {
+		return nil, err
+	}
+	if session.PhysicalQuota == nil || session.PhysicalQuota.Authority.ID != ledger.Authority.ID || session.PhysicalQuota.LedgerID != ledger.LedgerID {
+		return nil, errors.Join(c.Fail(c.StaleAuthority, "restore stage opened without its pinned physical quota ledger"), session.Close())
+	}
+	return session, nil
 }
 
 func openRestoreRuntimeInstance(directory string) (RuntimeInstance, error) {

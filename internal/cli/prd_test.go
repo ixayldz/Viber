@@ -11,6 +11,9 @@ import (
 
 	"github.com/ixayldz/Viber/internal/agent"
 	c "github.com/ixayldz/Viber/internal/contracts"
+	"github.com/ixayldz/Viber/internal/model"
+	"github.com/ixayldz/Viber/internal/plan"
+	"github.com/ixayldz/Viber/internal/workspace"
 )
 
 func writePRDTestFixture(t *testing.T, directory string) string {
@@ -58,6 +61,23 @@ func TestRunPRDUsesExactCapturedPathAndPreservesRawTask(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "PRD.md"), []byte(prdBody), 0600); err != nil {
 		t.Fatal(err)
 	}
+	capture, err := workspace.CaptureDirectory(source, workspace.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := plan.Definition{SchemaVersion: 1, ID: "prd-plan", SpecVersion: 1, PolicyEpoch: 1, BaseCandidate: capture.Snapshot.Digest, Nodes: []plan.Node{{ID: "read-plan", Goal: "Review the source-bound workflow", InputContract: "Captured PRD", OutputContract: "Unreviewed workflow plan", ReadScope: []string{"PRD.md"}, WriteScope: []string{}, RequirementIDs: []string{"user-goal", "prd-source"}, RequiredChecks: []string{}, Mutex: []string{}}}, Relations: []plan.Relation{}}
+	definitionRaw, _ := json.Marshal(definition)
+	finishRaw, _ := json.Marshal(map[string]string{"node_id": "read-plan", "candidate": capture.Snapshot.Digest, "output": "Bounded source review; no verification claimed."})
+	fixtureRaw, _ := json.Marshal(agent.Fixture{SchemaVersion: 1, Turns: []agent.Turn{
+		{Calls: []model.Call{{ID: "read-prd", Name: "fs_read", Arguments: json.RawMessage(`{"path":"PRD.md"}`)}}, UsageKnown: true},
+		{Calls: []model.Call{{ID: "plan-prd", Name: "plan_propose", Arguments: definitionRaw}}, UsageKnown: true},
+		{Calls: []model.Call{{ID: "next-prd", Name: "plan_next", Arguments: json.RawMessage(`{}`)}}, UsageKnown: true},
+		{Calls: []model.Call{{ID: "finish-prd", Name: "plan_finish", Arguments: finishRaw}}, UsageKnown: true},
+		{Text: "bounded offline response", UsageKnown: true},
+	}})
+	if err := os.WriteFile(fixture, fixtureRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	var out, stderr bytes.Buffer
 	args := []string{"run", rawTask, "--root", source, "--store", store, "--user-config", userConfig, "--task", "prd-positive", "--offline", "--fixture", fixture, "--allow-unverified", "--prd", "PRD.md", "--json"}
 	if exit := Execute(args, &out, &stderr); exit != 2 {
@@ -74,6 +94,9 @@ func TestRunPRDUsesExactCapturedPathAndPreservesRawTask(t *testing.T) {
 	}
 	if state.Execution != c.Terminated || !doc.FinalReady || len(doc.Messages) < 2 {
 		t.Fatalf("offline dispatcher did not complete: state=%#v final=%t messages=%d", state, doc.FinalReady, len(doc.Messages))
+	}
+	if doc.Spec.PRD == nil || doc.Spec.PRD.Digest != c.HashBytes([]byte(prdBody)) || doc.PRDCoverage == nil || doc.PRDCoverage.ReadStatus != "COMPLETE" || doc.PRDCoverage.Status != "PLAN_COMPLETE" {
+		t.Fatal("PRD read and plan were not durably bound", doc.PRDCoverage)
 	}
 	initial := doc.Messages[0].Text
 	if !strings.HasPrefix(initial, rawTask) || !strings.Contains(initial, `Exact captured project-relative PRD path: "PRD.md"`) ||
@@ -114,11 +137,7 @@ func TestRunPRDRejectsUnsafeAndExcludedFilesBeforeDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	state, doc, err := session.Load(context.Background(), "prd-excluded")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.Execution != c.Ready || doc.FinalReady || doc.Context != nil {
-		t.Fatalf("excluded PRD caused model dispatch: state=%#v final=%t context=%#v", state, doc.FinalReady, doc.Context)
+	if state, err := session.State(context.Background(), "prd-excluded"); err == nil {
+		t.Fatalf("excluded PRD unexpectedly admitted a task: %#v", state)
 	}
 }

@@ -8,14 +8,17 @@ import (
 )
 
 func renderWorkPlan(view owner.View) string {
+	var out strings.Builder
+	if view.PRDCoverage != nil {
+		fmt.Fprintf(&out, "PRD: %s · read %s (%d/%d bytes)\nSections: %s · %d/%d source criteria in the plan\n", view.PRDCoverage.Status, view.PRDCoverage.ReadStatus, view.PRDCoverage.ReadBytes, view.PRDCoverage.ReadTotalBytes, view.PRDCoverage.SectionStatus, len(view.PRDCoverage.CoveredRequirementIDs), len(view.PRDCoverage.RequiredRequirementIDs))
+	}
 	if view.Plan == nil {
-		return "No work plan has been proposed yet. Ask the model to read your PRD and propose an implementation plan, then use /resume.\nUse /requests to review proposed changes and /diff to inspect their contents."
+		return out.String() + "No work plan has been proposed yet. The model must read the PRD before proposing its plan. Use /resume to continue.\nUse /requests to review proposed changes and /diff to inspect their contents."
 	}
 	statuses := make(map[string]string, len(view.Plan.Progress))
 	for _, progress := range view.Plan.Progress {
 		statuses[progress.NodeID] = progress.Status
 	}
-	var out strings.Builder
 	fmt.Fprintf(&out, "Work plan: %s\n", view.Plan.Definition.ID)
 	for index, node := range view.Plan.Definition.Nodes {
 		status := statuses[node.ID]
@@ -27,6 +30,6 @@ func renderWorkPlan(view owner.View) string {
 			fmt.Fprintf(&out, "   Required checks: %s\n", strings.Join(node.RequiredChecks, ", "))
 		}
 	}
-	out.WriteString("\nIMPLEMENTED means a work product was recorded. See /verification for check results.")
+	out.WriteString("\nSource section coverage records reading and planning, not semantic completion. IMPLEMENTED means a work product was recorded. See /verification for check results.")
 	return out.String()
 }
