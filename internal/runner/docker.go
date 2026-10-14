@@ -124,11 +124,14 @@ func (d *Docker) command(ctx context.Context, args ...string) *exec.Cmd {
 	return command
 }
 func (d *Docker) control(ctx context.Context, args ...string) ([]byte, error) {
+	return d.controlWithOutputLimit(ctx, 1<<20, args...)
+}
+func (d *Docker) controlWithOutputLimit(ctx context.Context, outputLimit int64, args ...string) ([]byte, error) {
 	if d.controlHook != nil {
 		return d.controlHook(ctx, args...)
 	}
 	var out boundedOutput
-	out.limit = 1 << 20
+	out.limit = outputLimit
 	command := d.command(ctx, args...)
 	command.Stdout = &out
 	command.Stderr = &out
@@ -223,6 +226,44 @@ func (d *Docker) inspect(ctx context.Context, id string) (inspected, error) {
 		return inspected{}, c.Fail(c.UnsupportedCapability, "protected inspect binding mismatch")
 	}
 	return values[0], nil
+}
+func (d *Docker) inspectMany(ctx context.Context, ids []string) ([]inspected, error) {
+	const batchSize = 64
+	const responseLimit = 4 << 20
+	results := make([]inspected, 0, len(ids))
+	for begin := 0; begin < len(ids); begin += batchSize {
+		end := min(begin+batchSize, len(ids))
+		args := append([]string{"inspect", "--type", "container"}, ids[begin:end]...)
+		raw, err := d.controlWithOutputLimit(ctx, responseLimit, args...)
+		if err != nil {
+			return nil, err
+		}
+		var values []inspected
+		if err = json.Unmarshal(raw, &values); err != nil || len(values) != end-begin {
+			return nil, c.Fail(c.StoreIntegrityError, "capacity marker inspection batch was incomplete")
+		}
+		requested := make(map[string]bool, end-begin)
+		for _, id := range ids[begin:end] {
+			requested[id] = true
+		}
+		byID := make(map[string]inspected, end-begin)
+		for _, value := range values {
+			if !requested[value.ID] {
+				return nil, c.Fail(c.StoreIntegrityError, "capacity marker inspection batch identity mismatch")
+			}
+			if _, duplicate := byID[value.ID]; duplicate {
+				return nil, c.Fail(c.StoreIntegrityError, "capacity marker inspection batch identity mismatch")
+			}
+			byID[value.ID] = value
+		}
+		if len(byID) != len(requested) {
+			return nil, c.Fail(c.StoreIntegrityError, "capacity marker inspection batch omitted an identity")
+		}
+		for _, id := range ids[begin:end] {
+			results = append(results, byID[id])
+		}
+	}
+	return results, nil
 }
 func validateInspect(info inspected, p Profile, source string, inv Invocation) error {
 	if info.Config.OpenStdin != (inv.Stdin != nil) || info.Config.Image != p.Image || info.Config.WorkingDir != "/workspace" || len(info.Config.Entrypoint) != 1 || len(inv.Argv) == 0 || info.Config.Entrypoint[0] != inv.Argv[0] || len(info.Config.Cmd) != len(inv.Argv)-1 {
@@ -360,7 +401,7 @@ func (d *Docker) Run(ctx context.Context, source string, p Profile, inv Invocati
 		}
 	}
 	if owner != nil {
-		if err = d.admitCapacity(ctx, *owner); err != nil {
+		if err = d.admitCapacity(ctx, *capsule, p); err != nil {
 			return result, err
 		}
 	}

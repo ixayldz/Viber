@@ -54,6 +54,23 @@ aynı geniş test grubu her küçük UI düzenlemesinde tekrar çalıştırılma
 
 ## API anahtarı ayrımı
 
+### Engine kapsamındaki kapasite sınırı
+
+Docker admission artık yalnız bir runtime instance'ını saymaz. Aynı doğrulanmış
+engine'e bağlanan broker'lar, Docker'ın atomik container adı alanında 4.096 sabit
+slot paylaşır. Her slot exact owner/candidate/profile/invocation ve pinned image'e
+bağlı, hiç başlatılmayan kalıcı bir marker tutar. Workload yaratma ve cleanup
+mutasyonu önce slot edinir; dolu havuzda mevcut exact owner'ın cleanup'ı devam eder.
+Kaybolan create yanıtı yalnız exact slot adı ve tam inspect doğrulamasıyla çözülür.
+Yabancı veya değiştirilmiş marker admission'ı durdurur.
+
+Bu sınır **mantıksal process kimliği kapasitesidir**. Bir slot marker, workload ve
+cleanup fence olmak üzere en fazla üç kimlikle ilişkilidir; Docker image/layer disk
+baytları ölçülmüş sayılmaz (`physical_bytes_known=false`). Broker marker'ları silmez;
+engine reset veya operatör prune işlemi retention garantisinin dışındadır. Yerel
+hedefli fake-engine kapasite/fencing kontrolleri PASS; gerçek Docker/rootless/restart
+kabulü bu değişikliğin exact kaynak CI sonucunda ayrıca izlenir.
+
 OpenAI ve Anthropic anahtarları gerçek adapter/usage/maliyet/rate-limit/rotation ve
 provider kalite kabulü için gereklidir. ChatGPT plan girişi, Ollama model kurulumu,
 CI/release/kurulum, privacy/kota, PRD/TUI, pilot ve gerçek benchmark işlerindeki eksikler

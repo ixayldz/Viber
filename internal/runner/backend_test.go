@@ -74,6 +74,16 @@ func TestBackendRequiresActualRootlessResourceControllersAndStableEngine(t *test
 func TestPersistentFenceCapacityStopsWorkAndPreservesCleanupReserve(t *testing.T) {
 	broker, engine := newLeaseEngine(t, 1)
 	engine.add(0, false)
+	image := engine.targets[0].Profile.Image
+	for slot := 0; slot < MaxEngineCapacitySlots; slot++ {
+		owner := engine.targets[0].Owner
+		if slot > 0 {
+			owner.Lease.ID = fmt.Sprintf("%032x", slot+1000)
+		}
+		capsule := engine.capsules[0]
+		capsule.Owner = owner
+		engine.addCapacity(slot, capsule, image)
+	}
 	for i := 1; i < MaxInstanceSubjects; i++ {
 		capsule := engine.capsules[0]
 		capsule.Owner.Lease.ID = fmt.Sprintf("%032x", i+1000)
@@ -85,7 +95,11 @@ func TestPersistentFenceCapacityStopsWorkAndPreservesCleanupReserve(t *testing.T
 	if err != nil || view.Subjects != MaxInstanceSubjects || view.Available != 0 || view.PhysicalBytesKnown {
 		t.Fatal(view, err)
 	}
-	if err = broker.admitCapacity(context.Background(), engine.targets[0].Owner); err == nil {
+	newOwner := engine.targets[0].Owner
+	newOwner.Lease.ID = fmt.Sprintf("%032x", MaxEngineCapacitySlots+1000)
+	newCapsule := engine.capsules[0]
+	newCapsule.Owner = newOwner
+	if err = broker.admitCapacity(context.Background(), newCapsule, engine.targets[0].Profile); err == nil {
 		t.Fatal("full permanent fences admitted work")
 	}
 	receipt, err := broker.Reconcile(context.Background(), testLease(), 2, engine.targets)

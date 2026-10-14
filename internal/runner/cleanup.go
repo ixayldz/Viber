@@ -143,6 +143,16 @@ func (d *Docker) Reconcile(ctx context.Context, lease Lease, generation int64, t
 		}
 		item.initial = &info
 	}
+	// The durable owner identity must already have a shared engine slot before
+	// any process is removed or replaced with a permanent name fence. Existing
+	// slots are reused, including when the logical capacity is full.
+	capacityRequests := make([]capacityRequest, 0, len(ordered))
+	for _, item := range ordered {
+		capacityRequests = append(capacityRequests, capacityRequest{Capsule: item.capsule, Profile: item.target.Profile})
+	}
+	if err = d.admitCapacities(ctx, capacityRequests); err != nil {
+		return receipt, err
+	}
 	for _, item := range ordered {
 		digest, _ := c.Digest(item.capsule)
 		proof := CleanupItem{CapsuleDigest: digest, RemovedIDs: []string{}}

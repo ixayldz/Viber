@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,21 +60,30 @@ func testInspected(target Target, capsule Capsule, id string, fence bool) inspec
 }
 
 type leaseEngine struct {
-	targets  []Target
-	capsules []Capsule
-	entries  map[string]inspected
-	next     int
-	removals int
-	creates  int
-	race     bool
-	lostAck  bool
+	mu              sync.Mutex
+	engineID        string
+	targets         []Target
+	capsules        []Capsule
+	entries         map[string]inspected
+	capacityEntries map[string]inspected
+	next            int
+	removals        int
+	creates         int
+	capacityCreates int
+	race            bool
+	lostAck         bool
+	capacityLostAck bool
 }
 
 func newLeaseEngine(t *testing.T, count int) (*Docker, *leaseEngine) {
 	t.Helper()
-	engine := &leaseEngine{entries: map[string]inspected{}, next: 1}
+	source, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &leaseEngine{engineID: "fixture-engine", entries: map[string]inspected{}, capacityEntries: map[string]inspected{}, next: 1}
 	for i := 1; i <= count; i++ {
-		target, capsule, err := PrepareTarget(Target{Owner: Ownership{testLease(), "CHECK", i}, Source: t.TempDir(), Profile: DefaultProfile("golang@sha256:" + strings.Repeat("a", 64)), Invocation: Invocation{CandidateDigest: c.HashBytes([]byte("candidate")), Argv: []string{"/bin/subject"}}})
+		target, capsule, err := PrepareTarget(Target{Owner: Ownership{testLease(), "CHECK", i}, Source: source, Profile: DefaultProfile("golang@sha256:" + strings.Repeat("a", 64)), Invocation: Invocation{CandidateDigest: c.HashBytes([]byte("candidate")), Argv: []string{"/bin/subject"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,16 +98,56 @@ func (e *leaseEngine) add(position int, fence bool) string {
 	e.entries[id] = testInspected(e.targets[position], e.capsules[position], id, fence)
 	return id
 }
+func (e *leaseEngine) addCapacity(slot int, capsule Capsule, image string) string {
+	id := fmt.Sprintf("%064x", e.next)
+	e.next++
+	labels, _ := capacityMarkerLabels(e.engineID, slot, capsule, image)
+	info := inspected{ID: id, Name: "/" + capacityMarkerName(engineCapacityNamespace(e.engineID), slot)}
+	info.Config.Labels = labels
+	info.Config.User = "65532:65532"
+	info.Config.Image = image
+	info.Config.WorkingDir = "/"
+	info.Config.Entrypoint = []string{capacityMarkerEntrypoint}
+	info.Config.Cmd = []string{capacityMarkerCommand}
+	info.State.Status = "created"
+	info.HostConfig.ReadonlyRootfs = true
+	info.HostConfig.NetworkMode = "none"
+	info.HostConfig.CapDrop = []string{"ALL"}
+	info.HostConfig.SecurityOpt = []string{"no-new-privileges=true", "seccomp=builtin"}
+	info.HostConfig.Memory = capacityMarkerMemoryBytes
+	info.HostConfig.MemorySwap = capacityMarkerMemoryBytes
+	info.HostConfig.PidsLimit = capacityMarkerPids
+	info.HostConfig.NanoCpus = 1e9
+	init := true
+	info.HostConfig.Init = &init
+	info.HostConfig.IpcMode = "private"
+	e.capacityEntries[id] = info
+	return id
+}
 func (e *leaseEngine) control(ctx context.Context, args ...string) ([]byte, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	switch args[0] {
 	case "info":
-		return []byte(`{"ID":"fixture-engine","OSType":"linux","MemoryLimit":true,"SwapLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"PidsLimit":true,"SecurityOptions":["name=seccomp,profile=builtin"]}`), nil
+		return []byte(fmt.Sprintf(`{"ID":%q,"OSType":"linux","MemoryLimit":true,"SwapLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"PidsLimit":true,"SecurityOptions":["name=seccomp,profile=builtin"]}`, e.engineID)), nil
+	case "image":
+		return []byte("pinned image present"), nil
 	case "ps":
 		ids := []string{}
-		for id, entry := range e.entries {
+		capacityQuery := false
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "label="+capacityEngineLabel+"=") {
+				capacityQuery = true
+			}
+		}
+		entries := e.entries
+		if capacityQuery {
+			entries = e.capacityEntries
+		}
+		for id, entry := range entries {
 			matches := true
 			for _, arg := range args {
 				if strings.HasPrefix(arg, "label=") {
@@ -113,16 +165,29 @@ func (e *leaseEngine) control(ctx context.Context, args ...string) ([]byte, erro
 		sort.Strings(ids)
 		return []byte(strings.Join(ids, "\n")), nil
 	case "inspect":
-		identity := args[len(args)-1]
-		for id, entry := range e.entries {
-			if id == identity || entry.Name == "/"+identity {
-				if len(args) > 4 && args[3] == "--format" {
-					return []byte(id), nil
-				}
-				return json.Marshal([]inspected{entry})
+		formatIndex := -1
+		for i, arg := range args {
+			if arg == "--format" {
+				formatIndex = i
+				break
 			}
 		}
-		return nil, fmt.Errorf("container absent")
+		identities := args[3:]
+		if formatIndex >= 0 {
+			identities = args[formatIndex+2:]
+		}
+		values := make([]inspected, 0, len(identities))
+		for _, identity := range identities {
+			entry, id, ok := e.find(identity)
+			if !ok {
+				return nil, fmt.Errorf("container absent")
+			}
+			if formatIndex >= 0 {
+				return []byte(id), nil
+			}
+			values = append(values, entry)
+		}
+		return json.Marshal(values)
 	case "rm":
 		id := args[len(args)-1]
 		if _, ok := e.entries[id]; !ok {
@@ -132,13 +197,42 @@ func (e *leaseEngine) control(ctx context.Context, args ...string) ([]byte, erro
 		e.removals++
 		return []byte(id), nil
 	case "create":
-		e.creates++
 		name := ""
+		labels := map[string]string{}
 		for i, arg := range args {
 			if arg == "--name" {
 				name = args[i+1]
 			}
+			if arg == "--label" {
+				pair := strings.SplitN(args[i+1], "=", 2)
+				if len(pair) == 2 {
+					labels[pair[0]] = pair[1]
+				}
+			}
 		}
+		if labels[capacityMarkerLabel] == capacityMarkerVersion {
+			e.capacityCreates++
+			if slot, err := strconv.Atoi(labels[capacitySlotLabel]); err != nil {
+				return nil, fmt.Errorf("invalid capacity slot")
+			} else {
+				var capsule Capsule
+				if err = c.DecodeStrict([]byte(labels[capacityCapsuleLabel]), &capsule); err != nil {
+					return nil, err
+				}
+				for _, entry := range e.capacityEntries {
+					if entry.Name == "/"+name {
+						return nil, fmt.Errorf("name already held")
+					}
+				}
+				id := e.addCapacity(slot, capsule, labels[capacityImageLabel])
+				if e.capacityLostAck {
+					e.capacityLostAck = false
+					return nil, fmt.Errorf("capacity marker create response lost")
+				}
+				return []byte(id), nil
+			}
+		}
+		e.creates++
 		position := -1
 		for i, capsule := range e.capsules {
 			if capsule.name() == name {
@@ -166,6 +260,25 @@ func (e *leaseEngine) control(ctx context.Context, args ...string) ([]byte, erro
 		return []byte(id), nil
 	}
 	return nil, fmt.Errorf("unexpected engine operation %s", args[0])
+}
+func (e *leaseEngine) find(identity string) (inspected, string, bool) {
+	if entry, ok := e.entries[identity]; ok {
+		return entry, identity, true
+	}
+	if entry, ok := e.capacityEntries[identity]; ok {
+		return entry, identity, true
+	}
+	for id, entry := range e.entries {
+		if entry.Name == "/"+identity {
+			return entry, id, true
+		}
+	}
+	for id, entry := range e.capacityEntries {
+		if entry.Name == "/"+identity {
+			return entry, id, true
+		}
+	}
+	return inspected{}, "", false
 }
 func TestNativeLeaseFencesDelayedCreateAndLostFenceAck(t *testing.T) {
 	for _, mode := range []string{"normal", "delayed-create", "lost-ack"} {
@@ -238,7 +351,7 @@ func TestNativeLeaseExpiredOrCancelledNeverDispatches(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), ownerContextKey{}, ownershipContext{owner, time.Now().Add(-time.Second)})
 	d := &Docker{}
-	_, err := d.Run(ctx, t.TempDir(), DefaultProfile("golang@sha256:"+strings.Repeat("a", 64)), Invocation{CandidateDigest: c.HashBytes(nil), Argv: []string{"/bin/subject"}})
+	_, err := d.Run(ctx, ".", DefaultProfile("golang@sha256:"+strings.Repeat("a", 64)), Invocation{CandidateDigest: c.HashBytes(nil), Argv: []string{"/bin/subject"}})
 	failure, ok := err.(*DispatchFailure)
 	if !ok || failure.EffectPossible {
 		t.Fatal("expired lease possibly dispatched", err)
