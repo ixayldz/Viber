@@ -69,7 +69,23 @@ func TestCLIRequestBackupRestoreResponseAndHistoricalReplay(t *testing.T) {
 	if err := json.Unmarshal(raw, &page); err != nil || len(page.Records) != 2 || page.Next != 2 || !page.HasMore {
 		t.Fatal("event paging", err, string(raw))
 	}
-	run(4, "store-restore", "--backup", backup, "--store", restored, "--json")
+	// Repeating the exact persisted restore intent reconciles completion; it
+	// must not replay the old backup over work performed since publication.
+	var before, after struct {
+		State c.TaskState `json:"state"`
+	}
+	if err := json.Unmarshal(run(0, "status", "workflow", "--store", restored, "--json"), &before); err != nil {
+		t.Fatal(err)
+	}
+	run(0, "store-restore", "--backup", backup, "--store", restored, "--json")
+	if err := json.Unmarshal(run(0, "status", "workflow", "--store", restored, "--json"), &after); err != nil {
+		t.Fatal(err)
+	}
+	beforeDigest, beforeErr := c.Digest(before.State)
+	afterDigest, afterErr := c.Digest(after.State)
+	if beforeErr != nil || afterErr != nil || beforeDigest != afterDigest || after.State.Outcome != c.Finished {
+		t.Fatal("exact restore retry overwrote subsequent task progress", before.State, after.State, beforeErr, afterErr)
+	}
 	run(4, "inspect", "workflow", "--store", restored, "--until", "1", "--json")
 }
 
