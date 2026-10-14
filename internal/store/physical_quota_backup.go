@@ -143,13 +143,14 @@ func canonicalInspectionRoot(root *os.Root, expectedIdentity string) (string, er
 		return "", err
 	}
 	canonical, err := filepath.EvalSymlinks(absolute)
-	if err != nil || filepath.Clean(canonical) != filepath.Clean(absolute) {
+	if err != nil || !filepath.IsAbs(canonical) {
 		return "", c.Fail(c.StaleAuthority, "backup root path is not canonical")
 	}
-	if err = verifyInspectionRootPath(root, filepath.Clean(absolute), expectedIdentity); err != nil {
+	canonical = filepath.Clean(canonical)
+	if err = verifyInspectionRootPath(root, canonical, expectedIdentity); err != nil {
 		return "", err
 	}
-	return filepath.Clean(absolute), nil
+	return canonical, nil
 }
 
 func verifyInspectionRootPath(held *os.Root, path, expectedIdentity string) error {
