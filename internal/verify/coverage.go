@@ -6,6 +6,10 @@ import (
 
 const CoverageAcknowledgement = "RAW_GOALS_AND_EXECUTION_DEPENDENCIES_REVIEWED_V1"
 
+// One raw goal and the whole-PRD source requirement can accompany the parser's
+// maximum of 128 extracted PRD sections.
+const maxGoalMappings = 130
+
 type GoalMapping struct {
 	RequirementID string   `json:"requirement_id"`
 	CheckIDs      []string `json:"check_ids"`
@@ -41,7 +45,7 @@ func ReviewCoverage(spec c.TaskSpec, plan CheckPlan, checkSetDigest string, revi
 }
 func ValidateCoverage(record ReviewedCoverage, plan CheckPlan, checkSetDigest string) error {
 	spec, review := record.Spec, record.Review
-	if record.SchemaVersion != 1 || record.Actor != "USER" || spec.Validate() != nil || plan.Validate() != nil || !c.ValidDigest(checkSetDigest) || record.CheckSetDigest != checkSetDigest || review.SchemaVersion != 1 || review.Acknowledgement != CoverageAcknowledgement || len(review.InputDigests) != len(spec.Inputs) || len(review.Coverage) > 128 || len(review.DependencyChecks) != len(plan.Checks) {
+	if record.SchemaVersion != 1 || record.Actor != "USER" || spec.Validate() != nil || plan.Validate() != nil || !c.ValidDigest(checkSetDigest) || record.CheckSetDigest != checkSetDigest || review.SchemaVersion != 1 || review.Acknowledgement != CoverageAcknowledgement || len(review.InputDigests) != len(spec.Inputs) || len(review.Coverage) > maxGoalMappings || len(review.DependencyChecks) != len(plan.Checks) {
 		return c.Fail(c.PolicyDenied, "explicit source-bound goal and dependency review required")
 	}
 	for i, input := range spec.Inputs {

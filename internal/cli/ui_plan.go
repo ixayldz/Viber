@@ -9,27 +9,33 @@ import (
 
 func renderWorkPlan(view owner.View) string {
 	var out strings.Builder
-	if view.PRDCoverage != nil {
-		fmt.Fprintf(&out, "PRD: %s · read %s (%d/%d bytes)\nSections: %s · %d/%d source criteria in the plan\n", view.PRDCoverage.Status, view.PRDCoverage.ReadStatus, view.PRDCoverage.ReadBytes, view.PRDCoverage.ReadTotalBytes, view.PRDCoverage.SectionStatus, len(view.PRDCoverage.CoveredRequirementIDs), len(view.PRDCoverage.RequiredRequirementIDs))
-	}
+	out.WriteString(renderPRDCoverage(view.PRDCoverage))
 	if view.Plan == nil {
-		return out.String() + "No work plan has been proposed yet. The model must read the PRD before proposing its plan. Use /resume to continue.\nUse /requests to review proposed changes and /diff to inspect their contents."
+		return out.String() + "No work plan has been proposed yet. Use /resume to continue.\nUse /requests to review proposed changes and /diff to inspect the current candidate."
 	}
 	statuses := make(map[string]string, len(view.Plan.Progress))
 	for _, progress := range view.Plan.Progress {
 		statuses[progress.NodeID] = progress.Status
 	}
-	fmt.Fprintf(&out, "Work plan: %s\n", view.Plan.Definition.ID)
+	complete, total, currentID, currentGoal, currentStatus := planProgress(view)
+	fmt.Fprintf(&out, "Plan: %s · %d/%d work products recorded\n", safeDisplayText(view.Plan.Definition.ID, 128), complete, total)
+	if currentID != "" {
+		fmt.Fprintf(&out, "Current step: %s [%s] · %s\n", safeDisplayText(currentID, 128), safeDisplayText(currentStatus, 32), safeDisplayText(currentGoal, 240))
+	}
 	for index, node := range view.Plan.Definition.Nodes {
 		status := statuses[node.ID]
 		if status == "" {
 			status = "PENDING"
 		}
-		fmt.Fprintf(&out, "%d. [%s] %s\n   %s\n", index+1, status, node.ID, node.Goal)
+		fmt.Fprintf(&out, "%d. [%s] %s\n   %s\n", index+1, safeDisplayText(status, 32), safeDisplayText(node.ID, 128), safeDisplayText(node.Goal, 240))
 		if len(node.RequiredChecks) > 0 {
-			fmt.Fprintf(&out, "   Required checks: %s\n", strings.Join(node.RequiredChecks, ", "))
+			checks := make([]string, 0, len(node.RequiredChecks))
+			for _, id := range node.RequiredChecks {
+				checks = append(checks, safeDisplayText(id, 128))
+			}
+			fmt.Fprintf(&out, "   Required checks: %s\n", strings.Join(checks, ", "))
 		}
 	}
-	out.WriteString("\nSource section coverage records reading and planning, not semantic completion. IMPLEMENTED means a work product was recorded. See /verification for check results.")
+	out.WriteString("\nSource byte coverage, structural plan coverage, and check verification are separate signals. IMPLEMENTED records a work product; it does not mean PRD completion or passing checks. See /status and /verification for current verification.")
 	return out.String()
 }

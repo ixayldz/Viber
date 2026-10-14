@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,10 @@ type projectMemorySearchRequest struct {
 	Query  string `json:"query,omitempty"`
 	Offset int    `json:"offset"`
 	Limit  int    `json:"limit"`
+}
+
+type projectMemorySuggestionRequest struct {
+	Limit int `json:"limit"`
 }
 
 type projectMemoryMutationRequest struct {
@@ -44,13 +49,55 @@ func formatProjectMemoryCopyReceipt(receipt agent.ProjectMemoryCopyReceipt) stri
 		receipt.CopyID, receipt.CopyDigest, receipt.AdvisoryOnly)
 }
 
+func formatProjectMemorySuggestions(result agent.ProjectMemorySuggestionResult) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Project memory suggestions: %d matching entries · read-only proposal\n", result.Total)
+	fmt.Fprintf(&out, "Target: %s @ sequence %d · project %s · baseline %s · candidate %s\n", strconv.QuoteToASCII(result.TargetSource.TaskID), result.TargetSource.TaskSeq, result.TargetSource.ProjectDigest, result.TargetSource.BaselineDigest, result.TargetSource.CandidateDigest)
+	fmt.Fprintf(&out, "Retained policy: %s · current effective policy: %s\n", result.TargetSource.PolicyDigest, result.TargetEffectivePolicyDigest)
+	fmt.Fprintf(&out, "Not suggested: %d conflicted · %d stale/noncurrent · %d current-policy mismatch or unavailable\n", result.ExcludedConflicted, result.ExcludedNonCurrent, result.ExcludedPolicyMismatch)
+	if result.CopyPermitted {
+		out.WriteString("Current target policy permits a user-selected copy; copy rechecks source and target policy before recording.\n")
+	} else {
+		out.WriteString("Current target policy does not permit context edits; these recommendations are read-only and cannot be copied now.\n")
+	}
+	out.WriteString("Suggestions use retained goal/plan and untrusted model summary only for lexical relevance. CURRENT means the origin snapshots match the target; HISTORICAL means the assertion remains current at its origin task but its snapshots differ from the target. Both are advisory and do not establish target facts or verification. The model does not search cross-task memory during inference.\n")
+	if len(result.Suggestions) == 0 {
+		out.WriteString("No eligible, conflict-free cross-task assertions matched. No memory was copied.\n")
+		return out.String()
+	}
+	for index, suggestion := range result.Suggestions {
+		item := suggestion.Item
+		currentness := "HISTORICAL"
+		if suggestion.SourceCurrentness == "CURRENT_FOR_TARGET_SOURCE" {
+			currentness = "CURRENT"
+		}
+		fmt.Fprintf(&out, "%d. %s_%s_FOR_TARGET_SOURCE · USER_ASSERTED %s/%s · historical origin task %s @ sequence %d · source document %s\n", index+1, currentness, item.Kind, item.Kind, item.Key, strconv.QuoteToASCII(item.Source.TaskID), item.Source.TaskSeq, item.Source.DocumentDigest)
+		fmt.Fprintf(&out, "   Text: %s\n   Item ID: %s · digest: %s\n", strconv.QuoteToASCII(item.Text), item.ID, item.Digest)
+		fmt.Fprintf(&out, "   Source baseline/candidate: %s / %s · target baseline/candidate: %s / %s\n", item.Source.BaselineDigest, item.Source.CandidateDigest, result.TargetSource.BaselineDigest, result.TargetSource.CandidateDigest)
+		fmt.Fprintf(&out, "   Source retained policy: %s · source effective policy: %s\n", item.Source.PolicyDigest, suggestion.SourceEffectivePolicyDigest)
+		fmt.Fprintf(&out, "   Match signals: %s · terms: %s\n", strings.Join(suggestion.MatchedSignals, ", "), quotedTerms(suggestion.MatchedTerms))
+	}
+	if result.HasMore {
+		out.WriteString("More matches are available with a larger --limit.\n")
+	}
+	return out.String()
+}
+
+func quotedTerms(values []string) string {
+	quoted := make([]string, len(values))
+	for index, value := range values {
+		quoted[index] = strconv.QuoteToASCII(value)
+	}
+	return strings.Join(quoted, ", ")
+}
+
 func runProjectMemory(args []string, out, errout io.Writer) int {
 	if len(args) == 0 {
-		return report(out, errout, c.Fail(c.InvalidArgument, "project-memory search|record|correct|retire|copy required"), false)
+		return report(out, errout, c.Fail(c.InvalidArgument, "project-memory suggest|search|record|correct|retire|copy required"), false)
 	}
 	action, args := args[0], args[1:]
-	if action != "search" && action != "record" && action != "correct" && action != "retire" && action != "copy" {
-		return report(out, errout, c.Fail(c.InvalidArgument, "project-memory search|record|correct|retire|copy required"), false)
+	if action != "suggest" && action != "search" && action != "record" && action != "correct" && action != "retire" && action != "copy" {
+		return report(out, errout, c.Fail(c.InvalidArgument, "project-memory suggest|search|record|correct|retire|copy required"), false)
 	}
 	f := flags("project-memory", errout)
 	storePath := f.String("store", "", "existing private task store")
@@ -65,10 +112,19 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 	targetDigest := f.String("digest", "", "exact memory entry digest for correction, retirement or copy")
 	query := f.String("query", "", "case-insensitive substring filter")
 	offset := f.Int("offset", 0, "result offset")
-	limit := f.Int("limit", 50, "result page size, at most 200")
+	limit := f.Int("limit", 50, "result page size; suggestions are limited to 50")
 	jsonMode := f.Bool("json", false, "structured local output")
 	if err := f.Parse(args); err != nil {
 		return 4
+	}
+	limitProvided := false
+	f.Visit(func(value *flag.Flag) {
+		if value.Name == "limit" {
+			limitProvided = true
+		}
+	})
+	if action == "suggest" && !limitProvided {
+		*limit = 10
 	}
 	if f.NArg() != 0 || *storePath == "" || *offset < 0 || *limit < 0 || *limit > 200 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "existing store and bounded project-memory page required"), *jsonMode)
@@ -80,7 +136,11 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 	} else if *task == "" || *fromTask != "" || *toTask != "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "this operation needs --task and does not accept --from/--to"), *jsonMode)
 	}
-	if action == "search" {
+	if action == "suggest" {
+		if *limit > 50 || *commandID != "" || *kind != "" || *key != "" || *text != "" || *targetID != "" || *targetDigest != "" || *query != "" || *offset != 0 {
+			return report(out, errout, c.Fail(c.InvalidArgument, "suggest accepts only store, task, bounded limit and output format flags"), *jsonMode)
+		}
+	} else if action == "search" {
 		if *commandID != "" || *kind != "" || *key != "" || *text != "" || *targetID != "" || *targetDigest != "" {
 			return report(out, errout, c.Fail(c.InvalidArgument, "search accepts only store, task, query and page flags"), *jsonMode)
 		}
@@ -104,7 +164,9 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 	var payload any
 	ownerCommand := "project-memory-" + action
 	ownerTask := *task
-	if action == "search" {
+	if action == "suggest" {
+		payload = projectMemorySuggestionRequest{Limit: *limit}
+	} else if action == "search" {
 		payload = projectMemorySearchRequest{Query: *query, Offset: *offset, Limit: *limit}
 	} else if action == "copy" {
 		payload = projectMemoryCopyRequest{CommandID: *commandID, SourceTask: *fromTask, ItemID: *targetID, ItemDigest: *targetDigest}
@@ -118,7 +180,13 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 	}
 	var result any
 	if routed {
-		if action == "copy" {
+		if action == "suggest" {
+			var suggestions agent.ProjectMemorySuggestionResult
+			if err = c.DecodeStrict([]byte(raw), &suggestions); err != nil {
+				return report(out, errout, err, *jsonMode)
+			}
+			result = suggestions
+		} else if action == "copy" {
 			var receipt agent.ProjectMemoryCopyReceipt
 			if err = c.DecodeStrict([]byte(raw), &receipt); err != nil {
 				return report(out, errout, err, *jsonMode)
@@ -134,6 +202,8 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 		}
 		defer session.Close()
 		switch action {
+		case "suggest":
+			result, err = session.SuggestProjectMemory(ctx, *task, *limit)
 		case "search":
 			result, err = session.SearchProjectMemory(ctx, *task, *query, *offset, *limit)
 		case "record":
@@ -160,7 +230,7 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 		}
 		return 0
 	}
-	if routed && action != "copy" {
+	if routed && action != "copy" && action != "suggest" {
 		_, err = fmt.Fprintln(out, string(raw))
 		if err != nil {
 			return 4
@@ -174,12 +244,26 @@ func runProjectMemory(args []string, out, errout io.Writer) int {
 			if err != nil {
 				break
 			}
-			_, err = fmt.Fprintf(out, "%s %s/%s · %s · %s · %s\n", item.Status, item.Kind, item.Key, item.ID, item.Digest, strconv.Quote(item.Text))
+			_, err = fmt.Fprintf(out, "%s %s/%s · %s · %s · %s\n", item.Status, item.Kind, item.Key, item.ID, item.Digest, strconv.QuoteToASCII(item.Text))
 		}
 	case agent.ProjectMemoryMutationReceipt:
 		_, err = fmt.Fprintf(out, "Project memory %s · %s · %s · %s\n", strings.ToLower(value.Operation), value.Status, value.ItemID, value.EventDigest)
 	case agent.ProjectMemoryCopyReceipt:
 		_, err = fmt.Fprint(out, formatProjectMemoryCopyReceipt(value))
+	case agent.ProjectMemorySuggestionResult:
+		_, err = fmt.Fprint(out, formatProjectMemorySuggestions(value))
+		if err == nil {
+			for _, suggestion := range value.Suggestions {
+				if !value.CopyPermitted {
+					break
+				}
+				item := suggestion.Item
+				_, err = fmt.Fprintf(out, "Explicit copy: viber project-memory copy --store <PATH> --from %s --to %s --id %s --digest %s --command-id <new-id>\n", item.Source.TaskID, value.TargetSource.TaskID, item.ID, item.Digest)
+				if err != nil {
+					break
+				}
+			}
+		}
 	default:
 		err = fmt.Errorf("unexpected project memory response %T", result)
 	}

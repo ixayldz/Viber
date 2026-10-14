@@ -22,6 +22,7 @@ import (
 type View struct {
 	Detached     bool                  `json:"detached,omitempty"`
 	InvocationID string                `json:"invocation_id,omitempty"`
+	Goal         string                `json:"goal"`
 	Checks       []agent.CheckSummary  `json:"checks,omitempty"`
 	Runtime      *agent.LocalRuntime   `json:"runtime,omitempty"`
 	Plan         *plan.State           `json:"plan,omitempty"`
@@ -154,7 +155,7 @@ func (o *Owner) view(ctx context.Context, task string, sequence int64) (View, er
 	if err == nil {
 		err = checkErr
 	}
-	return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, PRDCoverage: doc.PRDCoverage, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+	return View{Goal: doc.Spec.Goal, Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, PRDCoverage: doc.PRDCoverage, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 }
 func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, error) {
 	o.control.Lock()
@@ -200,7 +201,7 @@ func (o *Owner) run(ctx context.Context, task, id string, detached bool) (View, 
 		if err == nil {
 			err = checkErr
 		}
-		return View{Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
+		return View{Goal: doc.Spec.Goal, Checks: checks, Runtime: doc.Runtime, Plan: doc.Plan, Protection: agent.CheckProtection(doc), Context: doc.Context, State: state, Budget: doc.Budget, Blocker: doc.Blocker, Summary: doc.FinalSummary, FinalReady: doc.FinalReady, Candidate: doc.Candidate}, err
 	}
 	admission, err := o.view(ctx, task, state.TaskSeq)
 	if err != nil {
@@ -438,6 +439,14 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, err
 		}
 		return o.Session.SearchProjectMemory(ctx, request.TaskID, query.Query, query.Offset, query.Limit)
+	case "project-memory-suggest":
+		var query struct {
+			Limit int `json:"limit"`
+		}
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		return o.Session.SuggestProjectMemory(ctx, request.TaskID, query.Limit)
 	case "project-memory-copy":
 		o.mu.Lock()
 		defer o.mu.Unlock()

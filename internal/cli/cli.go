@@ -21,10 +21,11 @@ const Version = "0.9.0-dev"
 const help = `Viber 0.9.0-dev — fixture/local/ChatGPT engineering agent (stable release gates closed)
 
 Usage:
-  viber [start] [--prd FILE --check-config ABSOLUTE_FILE]  interactive first-task wizard
+  viber [start] [--prd FILE] [--check-config ABSOLUTE_FILE] [--goal-review ABSOLUTE_FILE]  interactive first-task wizard
+    Long tasks: --max-steps N --max-tool-calls N --max-active-ms 1000..900000 (sealed task limits)
   viber repo-blueprint --root SOURCE --blueprint SPEC_JSON [--git] [--json]
   viber repo-generate --root SOURCE --blueprint MANIFEST_JSON --blueprint-digest SHA --files JSON --output NEW_DIR [--git] [--check-config FILE --task ID --input-sha SHA] [--json]
-  viber skills source|propose|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]
+  viber skills source|propose|import-md|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--skill-file PROJECT_PATH --license SPDX --id ID] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]
   viber rank-policy init|status|train|evaluate|select|disable --registry PATH [--id ID --version N --license LICENSE] [--definition FILE --dataset FILE --dataset-sha SHA] [--definition-sha SHA --evaluation-sha SHA --mode SHADOW|CANARY|ACTIVE --approve ACK] [--json]
   viber package install|status|rollback|deactivate|uninstall|run --prefix PATH [--archive FILE --source-sha FULL_SHA --gh ABSOLUTE_GH] [--revision SHA] [--store PATH] [--json] [-- ARGS...]
   viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--prd PROJECT_RELATIVE_FILE] [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
@@ -73,7 +74,7 @@ Usage:
   viber replay TASK --store PATH [--until TASK_SEQ] [--json]
   viber events TASK --store PATH [--after TASK_SEQ] [--limit N] [--json]
   viber ui TASK --store PATH
-  viber project-memory search|record|correct|retire --task TASK --store PATH [--kind FACT|DECISION|CONVENTION --key KEY --text TEXT] [--id ID --digest SHA --command-id ID] [--query QUERY --offset N --limit N] [--json]
+  viber project-memory suggest|search|record|correct|retire --task TASK --store PATH [--kind FACT|DECISION|CONVENTION --key KEY --text TEXT] [--id ID --digest SHA --command-id ID] [--query QUERY --offset N --limit N] [--json]
   viber project-memory copy --store PATH --from SOURCE_TASK --to TARGET_TASK --id ID --digest SHA --command-id ID [--json]
   viber retrieval-report TASK --store PATH --call-id ID [--json]
   viber read-workers TASK --store PATH --candidate SHA [--workers inventory,requirements --query TEXT --timeout-ms N] [--json]

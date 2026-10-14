@@ -1,5 +1,38 @@
 # Ayrıntılı CLI kullanım kılavuzu
 
+## 14 Ekim takip kaynağında ilk görev
+
+`viber` veya `viber start` açın. Proje seçildikten sonra PRD dosyasını ayrıca seçin;
+listede yoksa proje-relative yol yazın, bağlamamak için `NONE` seçin. Sonraki görev
+alanına kendi cümlenizi yazmanız seçilmiş PRD'yi kaldırmaz. `--prd FILE` açık dosya
+seçimini doğrudan verir. İlk bütçe 16 turn, 64 tool call ve 120.000 ms aktif zamandır.
+Yeni görev için `--max-steps`, `--max-tool-calls`, `--max-input-tokens`,
+`--max-output-tokens` ve `--max-active-ms` seçilebilir; aktif zaman 1.000–900.000 ms
+aralığındadır. Resume aynı kalan bütçeyi kullanır. `--check-config` ve `--goal-review`
+mutlak yollu, proje/store dışındaki operatör dosyalarını bağlar.
+
+`/status` görev, adım, dosya sayısı, actual check durumu ve sonraki işlemi gösterir.
+`/plan` kaynak byte okumasını, plan kriterlerini ve implementation kaydını ayırır.
+`/requests` onaylanan candidate etkisini gösterir; `/approve` veya `/reject` sonrası
+`/resume` ile ilerleyin. `/diff` görünür satır sayılarını, binary ve kırpılan bölümleri
+belirtir. `/preview` conflict incelemesi, `/export` tam review paketi içindir.
+
+`project-memory suggest --store STORE --task TASK --limit 10 --json` veya
+`/memory suggest` ilgili kaynak-bağlı kayıtları önerir. Değişmiş proje kaynakları
+`HISTORICAL_FOR_TARGET_SOURCE` olarak görünür. `/memory copy SOURCE_TASK ID DIGEST`
+explicit onayı mevcut privacy lineage protokolüyle kaydeder; öneri kendi başına
+context'e aktarılmaz ve geçmiş assertion güncel doğrulama kanıtı olmaz.
+
+`skills import-md --store STORE --task TASK --registry EXTERNAL_DIR --trust-policy FILE
+--skill-file .agents/skills/example/SKILL.md --id example --license MIT
+--acknowledge-external-copy I_REVIEWED_EXACT_SKILL_CONTENT_AND_LICENSE_FOR_EXTERNAL_REGISTRY`
+seçili dosyadan task-scoped skill önerisi oluşturur. Dosya en fazla 24 KiB, frontmatter
+4 KiB'dir; bounded YAML alt kümesi name/description ve bilinen advisory metadata'yı
+destekler. Script/resource dosyaları otomatik yüklenmez. `allowed-tools` izin vermez;
+mevcut bağımsız evaluator ve explicit activation adımları gereklidir.
+
+Bu kaynak komutlarının public paket kabulü aşağıdaki tarihsel kabulden ayrıdır.
+
 Yeni geliştirme komutları için [anahtarsız operasyonlar](KEYLESS_OPERATIONS.md) ve [goal queue/provider stream](SUPERVISOR_QUEUE_STREAM.md) kılavuzları: yönetilen kurulum/rollback/uninstall, metadata checkpoint, framework/history discovery, operatör kısıtlamaları ve preregistered eval. Bu çalışma ağacı değişiklikleri önceki public paketten ayrı kabul edilir.
 
 Viber, kodlama görevlerini kullanıcı dosyalarını koruyarak, izole candidate'lar ve kalıcı işlem kayıtları üzerinden yürütmek için geliştirilen yerel bir agent harness'ıdır. Hedef ürün; model önerilerini yetki, bütçe, kaynak bütünlüğü ve bağımsız doğrulama kontrollerinden geçirir.

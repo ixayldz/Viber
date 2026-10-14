@@ -63,7 +63,7 @@ func TestBareNoninteractiveCommandKeepsHelp(t *testing.T) {
 func TestOnboardingChatGPTConsentRefusalCreatesNothing(t *testing.T) {
 	configRoot := usePrivateConfigRoot(t)
 	project := onboardingTempDir(t)
-	useOnboardingInput(t, "1\n"+project+"\nSummarize this project\nNO\n")
+	useOnboardingInput(t, "1\n"+project+"\nNONE\nSummarize this project\nNO\n")
 	var stdout, stderr bytes.Buffer
 	if code := Execute([]string{"start"}, &stdout, &stderr); code != 4 {
 		t.Fatalf("start exit = %d, want typed policy denial; stdout=%s stderr=%s", code, stdout.String(), stderr.String())

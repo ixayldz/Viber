@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -11,14 +10,16 @@ import (
 )
 
 const (
-	maxPRDSections  = 128
-	maxPRDReadPages = 1024
+	maxPRDSections          = 128
+	maxPRDReadPages         = 1024
+	maxPRDHeadingLabelBytes = 2048
 )
 
 type markdownHeading struct {
-	Start   int64
-	Level   int
-	Heading string
+	Start          int64
+	Level          int
+	Heading        string
+	HeadingTooLong bool
 }
 
 // buildPRDSource extracts only deterministic byte spans. It does not infer
@@ -32,16 +33,16 @@ func buildPRDSource(raw []byte, candidate, path, inputID, digest string) (c.PRDS
 		source.UnsupportedHeadingCount = 1
 		return source, nil
 	}
-	headings := markdownHeadings(raw)
-	source.HeadingCount = len(headings)
-	if len(headings) == 0 {
+	headings, headingCount := markdownHeadings(raw)
+	source.HeadingCount = headingCount
+	if headingCount == 0 {
 		source.SectionExtraction = "NO_HEADINGS"
 		return source, nil
 	}
 	limit := len(headings)
-	if limit > maxPRDSections {
+	if headingCount > maxPRDSections {
 		limit = maxPRDSections
-		source.OmittedHeadingCount = len(headings) - limit
+		source.OmittedHeadingCount = headingCount - limit
 		source.SectionExtraction = "REVIEW_REQUIRED"
 	} else {
 		source.SectionExtraction = "COMPLETE"
@@ -58,16 +59,9 @@ func buildPRDSource(raw []byte, candidate, path, inputID, digest string) (c.PRDS
 			source.UnsupportedHeadingCount++
 			continue
 		}
-		if len(heading.Heading) > 2048 {
+		if heading.HeadingTooLong || len(heading.Heading) > maxPRDHeadingLabelBytes {
 			source.SectionExtraction = "REVIEW_REQUIRED"
 			source.UnsupportedHeadingCount++
-			// The source span is retained in full; only the advisory label is
-			// bounded so a long line cannot become control metadata.
-			end := 2048
-			for end > 0 && !utf8.ValidString(heading.Heading[:end]) {
-				end--
-			}
-			heading.Heading = heading.Heading[:end]
 		}
 		id := "prd-section-" + ordinal(i+1)
 		source.Sections = append(source.Sections, c.PRDSection{ID: id, Start: heading.Start, End: end, Level: heading.Level, Heading: heading.Heading})
@@ -80,84 +74,81 @@ func buildPRDSource(raw []byte, candidate, path, inputID, digest string) (c.PRDS
 	return source, requirements
 }
 
-func markdownHeadings(raw []byte) []markdownHeading {
-	type line struct {
-		start int64
-		text  []byte
+func markdownHeadings(raw []byte) ([]markdownHeading, int) {
+	type priorLine struct {
+		start    int64
+		text     []byte
+		eligible bool
 	}
-	lines := make([]line, 0, 256)
-	for offset := 0; offset < len(raw); {
-		end := bytes.IndexByte(raw[offset:], '\n')
-		lineEnd := len(raw)
-		advance := len(raw) - offset
-		if end >= 0 {
-			lineEnd = offset + end
-			advance = end + 1
+	// One look-ahead heading is enough to close the final retained section.
+	// Count the full document while retaining only this bounded prefix.
+	headings := make([]markdownHeading, 0, maxPRDSections+1)
+	headingCount := 0
+	appendHeading := func(heading markdownHeading) {
+		headingCount++
+		if len(headings) < maxPRDSections+1 {
+			headings = append(headings, heading)
 		}
-		text := raw[offset:lineEnd]
-		if len(text) > 0 && text[len(text)-1] == '\r' {
-			text = text[:len(text)-1]
-		}
-		lines = append(lines, line{start: int64(offset), text: append([]byte(nil), text...)})
-		offset += advance
 	}
-	if len(raw) == 0 || len(lines) == 0 {
-		return nil
-	}
-	headings := make([]markdownHeading, 0, 32)
-	seen := map[int64]bool{}
+	var previous priorLine
 	var fence byte
 	fenceLength := 0
-	previousFenced := false
-	for i, current := range lines {
-		trimmed := bytes.TrimLeft(current.text, " ")
-		indented := len(current.text)-len(trimmed) > 3
-		if !indented && len(trimmed) >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
-			marker, count := trimmed[0], 0
-			for count < len(trimmed) && trimmed[count] == marker {
-				count++
+	for offset := 0; offset < len(raw); {
+		lineStart := offset
+		lineEnd := len(raw)
+		next := len(raw)
+		if newline := bytes.IndexByte(raw[offset:], '\n'); newline >= 0 {
+			lineEnd = offset + newline
+			next = lineEnd + 1
+		}
+		if lineEnd > lineStart && raw[lineEnd-1] == '\r' {
+			lineEnd--
+		}
+		text := raw[lineStart:lineEnd]
+		trimmed := bytes.TrimLeft(text, " ")
+		indent := len(text) - len(trimmed)
+		marker, count := fenceLine(trimmed, indent)
+		if fence != 0 {
+			if marker == fence && count >= fenceLength && len(bytes.TrimSpace(trimmed[count:])) == 0 {
+				fence, fenceLength = 0, 0
 			}
-			if count >= 3 {
-				if fence == 0 {
-					fence, fenceLength, previousFenced = marker, count, true
-					continue
-				}
-				if marker == fence && count >= fenceLength && len(bytes.TrimSpace(trimmed[count:])) == 0 {
-					fence, fenceLength, previousFenced = 0, 0, true
-					continue
-				}
-			}
-		}
-		if fence != 0 || indented || len(current.text) > 0 && current.text[0] == '\t' {
-			previousFenced = true
+			previous = priorLine{}
+			offset = next
 			continue
 		}
-		wasFenced := previousFenced
-		previousFenced = false
-		if heading, ok := atxHeading(current.text); ok {
-			headings = append(headings, markdownHeading{Start: current.start, Level: heading.Level, Heading: heading.Heading})
-			seen[current.start] = true
+		if indent <= 3 && count >= 3 {
+			fence, fenceLength = marker, count
+			previous = priorLine{}
+			offset = next
 			continue
 		}
-		// Setext headings are bounded and unambiguous when the preceding line
-		// is non-empty. They share the same byte-span contract as ATX headings.
-		if i == 0 || wasFenced || len(bytes.TrimSpace(current.text)) == 0 {
+		if indent > 3 || len(text) > 0 && text[0] == '\t' {
+			previous = priorLine{}
+			offset = next
 			continue
 		}
-		underline := strings.TrimSpace(string(current.text))
-		level := 0
-		if allRunes(underline, '=') {
-			level = 1
-		} else if allRunes(underline, '-') {
-			level = 2
+		if heading, ok := atxHeading(text); ok {
+			heading.Start = int64(lineStart)
+			appendHeading(heading)
+			previous = priorLine{}
+			offset = next
+			continue
 		}
-		if level != 0 && !seen[lines[i-1].start] && len(bytes.TrimSpace(lines[i-1].text)) > 0 {
-			headings = append(headings, markdownHeading{Start: lines[i-1].start, Level: level, Heading: strings.TrimSpace(string(lines[i-1].text))})
-			seen[lines[i-1].start] = true
+		if level := setextHeadingLevel(text); level != 0 && previous.eligible {
+			label, tooLong := boundedHeading(previous.text)
+			appendHeading(markdownHeading{Start: previous.start, Level: level, Heading: label, HeadingTooLong: tooLong})
+			previous = priorLine{}
+			offset = next
+			continue
 		}
+		if len(bytes.TrimSpace(text)) > 0 {
+			previous = priorLine{start: int64(lineStart), text: text, eligible: true}
+		} else {
+			previous = priorLine{}
+		}
+		offset = next
 	}
-	sort.Slice(headings, func(i, j int) bool { return headings[i].Start < headings[j].Start })
-	return headings
+	return headings, headingCount
 }
 
 func atxHeading(raw []byte) (markdownHeading, bool) {
@@ -177,21 +168,53 @@ func atxHeading(raw []byte) (markdownHeading, bool) {
 	if level < 1 || level > 6 || level == len(trimmed) || (trimmed[level] != ' ' && trimmed[level] != '\t') {
 		return markdownHeading{}, false
 	}
-	text := strings.TrimSpace(string(trimmed[level:]))
-	text = strings.TrimRight(text, "# \t")
-	return markdownHeading{Level: level, Heading: text}, true
+	text := bytes.TrimSpace(trimmed[level:])
+	text = bytes.TrimRight(text, "# \t")
+	label, tooLong := boundedHeading(text)
+	return markdownHeading{Level: level, Heading: label, HeadingTooLong: tooLong}, true
 }
 
-func allRunes(value string, expected rune) bool {
-	if value == "" {
-		return false
+func fenceLine(trimmed []byte, indent int) (byte, int) {
+	if indent > 3 || len(trimmed) < 3 || trimmed[0] != '`' && trimmed[0] != '~' {
+		return 0, 0
 	}
-	for _, r := range value {
-		if r != expected {
-			return false
+	marker, count := trimmed[0], 0
+	for count < len(trimmed) && trimmed[count] == marker {
+		count++
+	}
+	return marker, count
+}
+
+func setextHeadingLevel(raw []byte) int {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return 0
+	}
+	marker := trimmed[0]
+	if marker != '=' && marker != '-' {
+		return 0
+	}
+	for _, b := range trimmed[1:] {
+		if b != marker {
+			return 0
 		}
 	}
-	return true
+	if marker == '=' {
+		return 1
+	}
+	return 2
+}
+
+func boundedHeading(raw []byte) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	tooLong := len(trimmed) > maxPRDHeadingLabelBytes
+	if tooLong {
+		trimmed = trimmed[:maxPRDHeadingLabelBytes]
+		for len(trimmed) > 0 && !utf8.Valid(trimmed) {
+			trimmed = trimmed[:len(trimmed)-1]
+		}
+	}
+	return string(trimmed), tooLong
 }
 
 func ordinal(value int) string {
@@ -231,14 +254,14 @@ func recordPRDRead(doc *Document, reply model.Reply) error {
 	if receipt.Path != prd.Path {
 		return nil // Ordinary successful reads do not contribute PRD coverage.
 	}
-	if receipt.SchemaVersion != 1 || receipt.Trust != "UNTRUSTED_SOURCE" || receipt.Candidate != prd.CandidateDigest || receipt.Path != prd.Path || receipt.Read.Path != prd.Path || receipt.Read.Kind != "FILE" || receipt.Read.Digest != prd.Digest || receipt.Coverage.Total != prd.ByteLength || receipt.Coverage.Start < 0 || receipt.Coverage.End <= receipt.Coverage.Start || receipt.Coverage.End > receipt.Coverage.Total || int64(len(receipt.Bytes)) != receipt.Coverage.End-receipt.Coverage.Start {
+	if receipt.SchemaVersion != 1 || receipt.Trust != "UNTRUSTED_SOURCE" || !c.ValidDigest(receipt.Candidate) || receipt.Candidate != doc.Candidate.SnapshotDigest || receipt.Path != prd.Path || receipt.Read.Path != prd.Path || receipt.Read.Kind != "FILE" || receipt.Read.Digest != prd.Digest || receipt.Coverage.Total != prd.ByteLength || receipt.Coverage.Start < 0 || receipt.Coverage.End <= receipt.Coverage.Start || receipt.Coverage.End > receipt.Coverage.Total || int64(len(receipt.Bytes)) != receipt.Coverage.End-receipt.Coverage.Start {
 		return c.Fail(c.StaleBase, "PRD read receipt is not bound to the exact source candidate")
 	}
 	if doc.PRDCoverage == nil {
 		refreshPRDCoverage(doc)
 	}
 	coverage := doc.PRDCoverage
-	if coverage.ReadCandidateDigest != "" && coverage.ReadCandidateDigest != receipt.Candidate || coverage.ReadDigest != "" && coverage.ReadDigest != receipt.Read.Digest {
+	if coverage.ReadCandidateDigest != "" && coverage.ReadCandidateDigest != prd.CandidateDigest || coverage.ReadDigest != "" && coverage.ReadDigest != receipt.Read.Digest {
 		return c.Fail(c.StaleBase, "PRD read coverage source changed")
 	}
 	intervals := append(append([]c.PRDReadInterval(nil), coverage.ReadIntervals...), c.PRDReadInterval{Start: receipt.Coverage.Start, End: receipt.Coverage.End})
@@ -246,7 +269,10 @@ func recordPRDRead(doc *Document, reply model.Reply) error {
 	if len(intervals) > maxPRDReadPages {
 		return c.Fail(c.BudgetLimitReached, "PRD read coverage page bound exceeded")
 	}
-	coverage.ReadCandidateDigest = receipt.Candidate
+	// The page was authorized against the current candidate above. Persist the
+	// original PRD candidate binding so unrelated candidate edits do not make
+	// otherwise exact PRD bytes stale across pages or restores.
+	coverage.ReadCandidateDigest = prd.CandidateDigest
 	coverage.ReadDigest = receipt.Read.Digest
 	coverage.ReadTotalBytes = receipt.Coverage.Total
 	coverage.ReadIntervals = intervals

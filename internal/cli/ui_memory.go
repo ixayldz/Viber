@@ -35,6 +35,12 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 	if len(words) > 0 {
 		action = words[0]
 	}
+	if action == "list" {
+		if rest != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/memory list takes no query; use /memory search QUERY to narrow results")
+		}
+		action = "search"
+	}
 	if action == "search" {
 		raw, err := u.call(ctx, "project-memory-search", projectMemorySearchRequest{Query: rest, Limit: 20})
 		if err != nil {
@@ -47,7 +53,7 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 		var text strings.Builder
 		fmt.Fprintf(&text, "Project memory: %d entries. Advisory user statements; independent verification is separate.\n", result.Total)
 		for _, item := range result.Items {
-			body := strconv.Quote(item.Text)
+			body := strconv.QuoteToASCII(item.Text)
 			if item.Redacted {
 				body = "[content hidden by current policy]"
 			}
@@ -57,6 +63,28 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 			text.WriteString("More entries: narrow /memory search QUERY, or use CLI page flags.\n")
 		}
 		text.WriteString("To pin one exact entry into the open task, use /memory copy SOURCE_TASK ITEM_ID DIGEST. Copy never searches or imports other entries.\n")
+		return text.String(), false, nil
+	}
+	if action == "suggest" {
+		if rest != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/memory suggest takes no query; it uses the open task's retained goal and plan")
+		}
+		raw, err := u.call(ctx, "project-memory-suggest", projectMemorySuggestionRequest{Limit: 10})
+		if err != nil {
+			return "", false, err
+		}
+		var result agent.ProjectMemorySuggestionResult
+		if err = c.DecodeStrict(raw, &result); err != nil {
+			return "", false, err
+		}
+		var text strings.Builder
+		text.WriteString(formatProjectMemorySuggestions(result))
+		if result.CopyPermitted {
+			for _, suggestion := range result.Suggestions {
+				item := suggestion.Item
+				fmt.Fprintf(&text, "Explicit copy: /memory copy %s %s %s\n", item.Source.TaskID, item.ID, item.Digest)
+			}
+		}
 		return text.String(), false, nil
 	}
 	id, err := resolveCommandID("")
@@ -100,7 +128,7 @@ func (u uiSession) memoryCommand(ctx context.Context, arg string) (string, bool,
 		}
 		request.TargetID, request.TargetDigest = parts[0], parts[1]
 	default:
-		return "", false, c.Fail(c.InvalidArgument, "/memory [search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST|copy SOURCE_TASK ITEM_ID DIGEST]")
+		return "", false, c.Fail(c.InvalidArgument, "/memory [suggest|list|search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST|copy SOURCE_TASK ITEM_ID DIGEST]")
 	}
 	raw, err := u.call(ctx, "project-memory-"+action, request)
 	if err != nil {

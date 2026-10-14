@@ -1,5 +1,23 @@
 # Doğrulama kaydı
 
+## 14 Ekim restore ve kullanıcı akışı takibi
+
+`07929c12416ec7b27761cd87dba7a02728c35777` restore edilmiş archive için dar
+task/candidate/immutable manifest admission ekledi. `9136d3817225cea470315aac421019e3c5a52822`
+kalıcı source/target intent'iyle üst restore reconciliation'ı ekledi. Bu ikinci
+kaynağın CI'ı yalnız mevcut CLI testinin tekrar restore için eski exit 4 beklentisiyle
+FAIL oldu; aynı exact intent artık exit 0 ile tamamlanıyor. `96fe0b8` beklentiyi
+günceller ve sonraki task ilerlemesinin geri sarılmadığını ayrıca karşılaştırır.
+Bu kontrol mevcut main kopyasında pinned Go 1.27.2 ve gerçek Windows ACL koşullarıyla
+PASS; yeni CI kendi source SHA'sına göre değerlendirilir.
+
+PRD/TUI/bellek/skills takip paketi, devam eden metadata çalışmasını dışlayan izole
+main kaynak kopyasında hedefli olarak doğrulandı: PRD parsing/current-candidate read,
+130/131 goal mapping, seçilen PRD'nin özel görevle korunması, terminal escape/binary
+diff, tarihsel kaynağın explicit memory copy'si ve SKILL.md scope/digest kontrolleri
+PASS. Yerel full/race/fuzz tekrarı yapılmadı; hosted kapılar korunur. Bu fixture ve
+yerel kontroller gerçek ChatGPT coding kabulü veya public binary kabulü değildir.
+
 ## 13 Ekim Linux race suite süre bölümlendirmesi
 
 `9a1edb6e34dac338c4da9ad8f3754b131d5f1d00` [core38427799190](https://github.com/ixayldz/Viber/actions/runs/38427799190) Linux race işi **FAIL**: `internal/agent` paketinin bütün testleri tek process'te çalışırken 900.036s package timeout doldu. Logdaki son test `TestResumeRejectsChangedLiveSourceAndPendingIntent` henüz yaklaşık üç saniye çalışmıştı; stack JSON parser içinde runnable gösterdi. Logda `WARNING: DATA RACE` bulunmadı; bu bulgu bütün race kabulü PASS demek değildir.

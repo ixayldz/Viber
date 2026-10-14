@@ -116,6 +116,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	maxOutputTokens := f.Int64("max-output-tokens", 0, "task output work limit; default 32768 local/fixture or 1048576 ChatGPT")
 	steps := f.Int64("max-steps", 16, "bounded model turns")
 	tools := f.Int64("max-tool-calls", 64, "bounded native tool calls")
+	activeMillis := f.Int64("max-active-ms", 120000, "sealed active task time budget, 1000..900000 ms; resume does not reset it")
 	detached := f.Bool("detach", false, "create task then run under a persistent background owner")
 	jsonMode := f.Bool("json", false, "structured result")
 	if err := f.Parse(args); err != nil {
@@ -428,6 +429,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	budget.MaxSteps = *steps
 	budget.MaxToolCalls = *tools
 	budget.MaxInputTokens = *maxInputTokens
+	budget.MaxActiveMillis = *activeMillis
 	if *maxOutputTokens != 0 {
 		budget.MaxOutputTokens = *maxOutputTokens
 	} else if runtime != nil && runtime.Provider == "chatgpt" {

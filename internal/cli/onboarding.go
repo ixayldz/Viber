@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -28,7 +31,7 @@ const (
 	onboardingMaxTask  = 4096
 )
 
-const onboardingPRDDefaultTask = "Read the PRD, propose a typed plan, implement it, and use registered checks."
+const onboardingPRDDefaultTask = "Read the selected PRD, propose a typed plan, implement it, and use registered checks."
 
 // onboardingInput is replaceable in CLI tests; ordinary invocations read the
 // process stdin directly.
@@ -111,53 +114,93 @@ func (p *onboardingPrompter) askWithDefault(label, defaultValue string, maxBytes
 	return value, usedDefault, nil
 }
 
-// discoverOnboardingPRD examines only bounded top-level metadata. It never
+// discoverOnboardingPRDs examines only bounded top-level metadata. It never
 // opens a candidate's body; runTask performs the authoritative captured-source
 // and current-policy check before dispatch.
-func discoverOnboardingPRD(source string) string {
+func discoverOnboardingPRDs(source string) []string {
 	root, err := os.OpenRoot(source)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer root.Close()
 	directory, err := root.Open(".")
 	if err != nil {
-		return ""
+		return nil
 	}
 	entries, readErr := directory.ReadDir(257)
 	_ = directory.Close()
 	if len(entries) > 256 || readErr != nil && !errors.Is(readErr, io.EOF) {
-		return ""
+		return nil
 	}
-	name := ""
+	paths := make([]string, 0, 2)
 	for _, entry := range entries {
-		if entry.Name() != "PRD.md" && entry.Name() != "prd.md" {
+		if !strings.EqualFold(entry.Name(), "prd.md") {
 			continue
-		}
-		if name != "" {
-			return ""
 		}
 		info, statErr := root.Lstat(entry.Name())
 		if statErr != nil || !info.Mode().IsRegular() {
-			return ""
+			continue
 		}
-		name = entry.Name()
+		paths = append(paths, entry.Name())
 	}
-	return name
+	sort.Strings(paths)
+	return paths
 }
 
-func onboardingTaskPrompt(p *onboardingPrompter, source string) (string, string, error) {
-	prdPath := discoverOnboardingPRD(source)
+func validateOnboardingPRDFile(source, prdPath string) error {
+	if err := validatePRDPath(prdPath); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(source)
+	if err != nil {
+		return c.Fail(c.InvalidArgument, "selected project folder is unavailable")
+	}
+	defer root.Close()
+	info, err := root.Lstat(filepath.FromSlash(prdPath))
+	if err != nil || !info.Mode().IsRegular() {
+		return c.Fail(c.InvalidArgument, "selected PRD must be an existing regular file inside the project")
+	}
+	return nil
+}
+
+func onboardingSelectPRD(p *onboardingPrompter, source string) (string, error) {
+	paths := discoverOnboardingPRDs(source)
+	if len(paths) == 0 {
+		fmt.Fprintln(p.out, "No project-root PRD.md file was found. You can enter a project-relative PRD path or type NONE.")
+	} else {
+		fmt.Fprintln(p.out, "Project-root PRD files (file contents are not opened during selection):")
+		for i, path := range paths {
+			fmt.Fprintf(p.out, "  %d) %s\n", i+1, tui.Safe(path))
+		}
+		fmt.Fprintln(p.out, "Choose a number, enter another project-relative PRD path, or type NONE.")
+	}
+	choice, err := p.ask("PRD selection: ", "", 256)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(choice, "none") {
+		return "", nil
+	}
+	if index, parseErr := strconv.Atoi(choice); parseErr == nil {
+		if index < 1 || index > len(paths) {
+			return "", c.Fail(c.InvalidArgument, "choose a listed PRD number, a project-relative path, or NONE")
+		}
+		return paths[index-1], nil
+	}
+	if err := validateOnboardingPRDFile(source, choice); err != nil {
+		return "", err
+	}
+	return choice, nil
+}
+
+func onboardingTaskPrompt(p *onboardingPrompter, prdPath string) (string, string, error) {
 	if prdPath == "" {
 		task, err := p.ask("Describe the task in your own words: ", "", onboardingMaxTask)
 		return task, "", err
 	}
-	label := fmt.Sprintf("Describe the task in your own words, or press Enter to use the PRD workflow for %q [%s]: ", prdPath, onboardingPRDDefaultTask)
-	task, usedDefault, err := p.askWithDefault(label, onboardingPRDDefaultTask, onboardingMaxTask)
-	if err != nil || !usedDefault {
-		return task, "", err
-	}
-	return task, prdPath, nil
+	label := fmt.Sprintf("Describe the task for selected PRD %q (Enter uses the standard PRD workflow): ", prdPath)
+	task, _, err := p.askWithDefault(label, onboardingPRDDefaultTask, onboardingMaxTask)
+	return task, prdPath, err
 }
 
 func appendOnboardingPRD(args []string, path string) []string {
@@ -165,6 +208,16 @@ func appendOnboardingPRD(args []string, path string) []string {
 		return args
 	}
 	return append(args, "--prd", path)
+}
+
+func onboardingActiveBudgetLabel(milliseconds int64) string {
+	if milliseconds%60000 == 0 {
+		return fmt.Sprintf("%d min", milliseconds/60000)
+	}
+	if milliseconds%1000 == 0 {
+		return fmt.Sprintf("%d sec", milliseconds/1000)
+	}
+	return fmt.Sprintf("%d ms", milliseconds)
 }
 
 func interactiveOnboarding(out io.Writer) bool {
@@ -392,13 +445,19 @@ func writePrivateFixture(userDataRoot, taskID string, raw []byte) (string, error
 
 func runOnboarding(args []string, out, errout io.Writer) int {
 	f := flags("start", errout)
-	prdFile := f.String("prd", "", "exact project-relative PRD file; otherwise offer root PRD discovery")
+	prdFile := f.String("prd", "", "explicit project-relative PRD; otherwise choose a discovered or manual path")
 	checkConfig := f.String("check-config", "", "explicit absolute operator check configuration outside project and task store")
+	goalReviewFile := f.String("goal-review", "", "absolute operator goal-review JSON outside project and task data")
+	maxSteps := f.Int64("max-steps", 16, "bounded model turns for this new task, 1..256")
+	maxToolCalls := f.Int64("max-tool-calls", 64, "bounded native tool calls for this new task, 1..1024")
+	maxInputTokens := f.Int64("max-input-tokens", 512<<10, "task input token limit, 4096..8388608")
+	maxOutputTokens := f.Int64("max-output-tokens", 0, "task output token limit, 512..1048576; 0 keeps the provider default")
+	maxActiveMillis := f.Int64("max-active-ms", 120000, "active work limit for this new task, 1000..900000")
 	if err := f.Parse(args); err != nil {
 		return 4
 	}
 	if f.NArg() != 0 {
-		return report(out, errout, c.Fail(c.InvalidArgument, "viber start accepts optional --prd and --check-config flags"), false)
+		return report(out, errout, c.Fail(c.InvalidArgument, "viber start accepts --prd, --check-config, --goal-review and bounded task budget flags"), false)
 	}
 	if *prdFile != "" {
 		if err := validatePRDPath(*prdFile); err != nil {
@@ -408,6 +467,22 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	if *checkConfig != "" && !filepath.IsAbs(*checkConfig) {
 		return report(out, errout, c.Fail(c.InvalidArgument, "--check-config requires an absolute operator file path"), false)
 	}
+	if *goalReviewFile != "" && !filepath.IsAbs(*goalReviewFile) {
+		return report(out, errout, c.Fail(c.InvalidArgument, "--goal-review requires an absolute operator file path"), false)
+	}
+	budget := agent.DefaultBudget()
+	budget.MaxSteps = *maxSteps
+	budget.MaxToolCalls = *maxToolCalls
+	budget.MaxInputTokens = *maxInputTokens
+	if *maxOutputTokens != 0 {
+		budget.MaxOutputTokens = *maxOutputTokens
+	}
+	budget.MaxActiveMillis = *maxActiveMillis
+	if err := budget.Validate(); err != nil {
+		return report(out, errout, err, false)
+	}
+	explicitFlags := make(map[string]bool)
+	f.Visit(func(value *flag.Flag) { explicitFlags[value.Name] = true })
 	p := newOnboardingPrompter(onboardingInput, out)
 	fmt.Fprintln(out, "Welcome to Viber. Choose how to start; no project scripts or browser pages are opened automatically.")
 	fmt.Fprintln(out, "  1) ChatGPT — online; asks before sending your task and project context.")
@@ -429,8 +504,8 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	}
 
 	if mode == "3" {
-		if *prdFile != "" || *checkConfig != "" {
-			return report(out, errout, c.Fail(c.InvalidArgument, "PRD and check configuration belong to project tasks, not the fixed offline demo"), false)
+		if *prdFile != "" || *checkConfig != "" || *goalReviewFile != "" || explicitFlags["max-steps"] || explicitFlags["max-tool-calls"] || explicitFlags["max-input-tokens"] || explicitFlags["max-output-tokens"] || explicitFlags["max-active-ms"] {
+			return report(out, errout, c.Fail(c.InvalidArgument, "PRD, check, goal-review and budget options belong to project tasks, not the fixed offline demo"), false)
 		}
 		fmt.Fprintln(out, "The demo creates a private sample containing hello.txt, then proposes a greeting change in an isolated candidate.")
 		fmt.Fprintln(out, "It does not read or change your project, does not use a model, and always remains UNVERIFIED (exit code 2).")
@@ -508,12 +583,15 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	}
 	var taskPrompt, prdPath string
 	if *prdFile != "" {
-		label := fmt.Sprintf("Describe the task, or press Enter to implement %q: ", *prdFile)
-		taskPrompt, _, err = p.askWithDefault(label, onboardingPRDDefaultTask, onboardingMaxTask)
 		prdPath = *prdFile
+		err = validateOnboardingPRDFile(source, prdPath)
 	} else {
-		taskPrompt, prdPath, err = onboardingTaskPrompt(p, source)
+		prdPath, err = onboardingSelectPRD(p, source)
 	}
+	if err != nil {
+		return report(out, errout, err, false)
+	}
+	taskPrompt, prdPath, err = onboardingTaskPrompt(p, prdPath)
 	if err != nil {
 		return report(out, errout, err, false)
 	}
@@ -533,6 +611,13 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 		fmt.Fprintf(out, "%d operator checks registered for an isolated offline environment. Viber uses their fixed IDs and commands.\n", len(checks.Plan.Checks))
 	} else {
 		fmt.Fprintln(out, "No build/test configuration selected. Viber can produce a review package; use viber start --check-config ABSOLUTE_FILE to enable registered isolated checks.")
+	}
+	if *goalReviewFile != "" {
+		path, configErr := fileguard.ResolveProspective(*goalReviewFile)
+		if configErr != nil || !fileguard.Disjoint(source, path) {
+			return report(out, errout, c.Fail(c.PolicyDenied, "operator goal-review file must be outside the selected project"), false)
+		}
+		*goalReviewFile = path
 	}
 	if mode == "1" {
 		fmt.Fprintf(out, "ChatGPT will receive your task and project context captured from %s. Credentials use Viber's official ChatGPT sign-in; Viber does not reuse Codex login.\n", tui.Safe(source))
@@ -560,6 +645,9 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	if *checkConfig != "" && !fileguard.Disjoint(store, *checkConfig) {
 		return report(out, errout, c.Fail(c.PolicyDenied, "operator check configuration must be outside task data"), false)
 	}
+	if *goalReviewFile != "" && !fileguard.Disjoint(store, *goalReviewFile) {
+		return report(out, errout, c.Fail(c.PolicyDenied, "operator goal-review file must be outside task data"), false)
+	}
 	if mode == "1" {
 		authDir, authErr := defaultAuthDirectory()
 		if authErr != nil || !fileguard.Disjoint(source, authDir) || !fileguard.Disjoint(store, authDir) {
@@ -571,11 +659,30 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 		}
 	}
 
+	fmt.Fprintf(out, "Task budget: %d model turns, %d tool calls and %s of active work. Large PRDs may need a narrower task; inspect /budget while working.\n", *maxSteps, *maxToolCalls, onboardingActiveBudgetLabel(*maxActiveMillis))
 	fmt.Fprintln(out, "Changes are prepared in a separate candidate and require your review. Use /plan, /requests, /approve, /resume and /diff. An unverified final result also requires approval; it is never reported as verified.")
 	args = []string{taskPrompt, "--root", source, "--store", store, "--task", taskID, "--autonomy", "review"}
 	args = appendOnboardingPRD(args, prdPath)
+	if explicitFlags["max-steps"] {
+		args = append(args, "--max-steps", fmt.Sprint(*maxSteps))
+	}
+	if explicitFlags["max-tool-calls"] {
+		args = append(args, "--max-tool-calls", fmt.Sprint(*maxToolCalls))
+	}
+	if explicitFlags["max-input-tokens"] {
+		args = append(args, "--max-input-tokens", fmt.Sprint(*maxInputTokens))
+	}
+	if explicitFlags["max-output-tokens"] {
+		args = append(args, "--max-output-tokens", fmt.Sprint(*maxOutputTokens))
+	}
+	if explicitFlags["max-active-ms"] {
+		args = append(args, "--max-active-ms", fmt.Sprint(*maxActiveMillis))
+	}
 	if *checkConfig != "" {
 		args = append(args, "--check-config", *checkConfig)
+	}
+	if *goalReviewFile != "" {
+		args = append(args, "--goal-review", *goalReviewFile)
 	}
 	if mode == "1" {
 		args = append(args, "--provider", "chatgpt", "--allow-remote", "--auth-profile", profileID)

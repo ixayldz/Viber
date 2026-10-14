@@ -304,7 +304,10 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		return "Work admitted in the background.\n" + renderTaskStatus(view), false, err
 	case "/status":
 		view, err := u.status(ctx)
-		return renderTaskStatus(view), false, err
+		if err != nil {
+			return "", false, err
+		}
+		return u.renderStatus(ctx, view), false, nil
 	case "/plan":
 		if arg != "" {
 			return "", false, c.Fail(c.InvalidArgument, "/plan shows the current plan; start a PRD task with run --prd FILE")
@@ -370,7 +373,11 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		if err = c.DecodeStrict(raw, &requests); err != nil {
 			return "", false, err
 		}
-		return renderRequests(requests), false, nil
+		view, statusErr := u.status(ctx)
+		if statusErr != nil {
+			return renderRequests(requests) + "\nCurrent task status is unavailable; do not treat this proposal as verified.", false, nil
+		}
+		return renderRequests(requests, view), false, nil
 	case "/context", "/why", "/evidence", "/verification", "/runtime", "/budget", "/trace":
 		kind := map[string]string{"/context": "continuity-info", "/why": "context-why", "/evidence": "checks", "/verification": "verification", "/runtime": "runtime-info", "/budget": "resources", "/trace": "events"}[command]
 		var raw json.RawMessage

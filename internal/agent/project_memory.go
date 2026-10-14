@@ -1025,14 +1025,14 @@ func (s *Session) projectMemoryInventoryScoped(ctx context.Context, projectDiges
 	return stored, current, nil
 }
 
-func projectMemoryBuildItems(stored []projectMemoryStored, current map[string]projectMemoryCurrent, querySource ProjectMemorySource) ([]ProjectMemoryItem, error) {
+func projectMemoryEventLineage(stored []projectMemoryStored) (map[string]projectMemoryStored, map[string]string, map[string]string, error) {
 	events := make(map[string]projectMemoryStored, len(stored))
 	for _, item := range stored {
 		if item.Copy != nil || item.CopyPin != nil {
 			continue
 		}
 		if _, exists := events[item.Event.ID]; exists {
-			return nil, c.Fail(c.StoreIntegrityError, "duplicate project memory identity")
+			return nil, nil, nil, c.Fail(c.StoreIntegrityError, "duplicate project memory identity")
 		}
 		events[item.Event.ID] = item
 	}
@@ -1048,25 +1048,33 @@ func projectMemoryBuildItems(stored []projectMemoryStored, current map[string]pr
 		}
 		target, exists := events[event.TargetID]
 		if !exists {
-			return nil, c.Fail(c.StoreIntegrityError, "project memory lineage target is missing")
+			return nil, nil, nil, c.Fail(c.StoreIntegrityError, "project memory lineage target is missing")
 		}
 		if target.Digest != event.TargetDigest || target.TaskID != item.TaskID || target.Event.Action == "RETIRE" {
-			return nil, c.Fail(c.StoreIntegrityError, "project memory lineage target digest mismatch")
+			return nil, nil, nil, c.Fail(c.StoreIntegrityError, "project memory lineage target digest mismatch")
 		}
 		if target.Event.Source.ProjectDigest != event.Source.ProjectDigest {
-			return nil, c.Fail(c.StoreIntegrityError, "project memory lineage crosses project scope")
+			return nil, nil, nil, c.Fail(c.StoreIntegrityError, "project memory lineage crosses project scope")
 		}
 		if event.Action == "RETIRE" {
 			if prior := retiredBy[event.TargetID]; prior != "" && prior != event.ID {
-				return nil, c.Fail(c.StoreIntegrityError, "project memory fact retired more than once")
+				return nil, nil, nil, c.Fail(c.StoreIntegrityError, "project memory fact retired more than once")
 			}
 			retiredBy[event.TargetID] = event.ID
 		} else {
 			if prior := supersededBy[event.TargetID]; prior != "" && prior != event.ID {
-				return nil, c.Fail(c.StoreIntegrityError, "project memory fact corrected more than once")
+				return nil, nil, nil, c.Fail(c.StoreIntegrityError, "project memory fact corrected more than once")
 			}
 			supersededBy[event.TargetID] = event.ID
 		}
+	}
+	return events, retiredBy, supersededBy, nil
+}
+
+func projectMemoryBuildItems(stored []projectMemoryStored, current map[string]projectMemoryCurrent, querySource ProjectMemorySource) ([]ProjectMemoryItem, error) {
+	events, retiredBy, supersededBy, err := projectMemoryEventLineage(stored)
+	if err != nil {
+		return nil, err
 	}
 	items := make([]ProjectMemoryItem, 0, len(stored))
 	for _, item := range stored {

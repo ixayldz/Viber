@@ -26,7 +26,7 @@ var slashCommands = []Command{
 	{"/context", "", "See retained context and source pins"},
 	{"/compact", "[KEEP_RECENT]", "Compact conversation while retaining task obligations"},
 	{"/clear", "", "Clear displayed output; retain task history"},
-	{"/memory", "[search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST|copy SOURCE_TASK ITEM_ID DIGEST]", "Search or maintain source-bound project memory; copy only an explicitly selected entry"},
+	{"/memory", "[suggest|list|search QUERY|record KIND KEY TEXT|correct ID DIGEST KIND KEY TEXT|retire ID DIGEST|copy SOURCE_TASK ITEM_ID DIGEST]", "Suggest current source-bound project memory; copy only an explicitly selected entry"},
 	{"/workers", "[inventory,requirements|inventory,search QUERY]", "Run 2–4 budgeted read-only source analyzers"},
 	{"/why", "", "Explain what was included in model context"},
 	{"/evidence", "", "Inspect independent check evidence"},
