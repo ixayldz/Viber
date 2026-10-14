@@ -1562,6 +1562,7 @@ func checkPartitionAdmissionTx(ctx context.Context, tx *sql.Tx, request Request,
 		}
 		rel = filepath.ToSlash(rel)
 		archiveRootWrite := false
+		materializeWrite := false
 		for _, protected := range []string{"runtime-instance.json", "owner.lock", "state.sqlite", "state.sqlite-wal", "state.sqlite-shm", "control.reserve", "artifacts"} {
 			if partitionNameAtOrBelow(rel, protected) {
 				if protected == "artifacts" && strings.EqualFold(rel, protected) {
@@ -1576,8 +1577,18 @@ func checkPartitionAdmissionTx(ctx context.Context, tx *sql.Tx, request Request,
 					continue
 				}
 				if protected == "artifacts" && !strings.EqualFold(rel, protected) {
-					if request.Writer != "artifact" || request.Family != "IMMUTABLE" || request.Class != Payload || targetExisted != 0 {
+					if request.Writer != "artifact" || (request.Family != "IMMUTABLE" && request.Family != "MATERIALIZE") || request.Class != Payload || targetExisted != 0 {
 						return c.Fail(c.StaleAuthority, "archive partition bytes require a new exact immutable artifact reservation")
+					}
+					archiveRoot := filepath.Join(item.owner, "artifacts")
+					if err = verifyPartitionArchiveAdmission(ctx, tx, item.allocationID, archiveRoot); err != nil {
+						return err
+					}
+					if request.Family == "MATERIALIZE" {
+						if err = verifyPartitionMaterialization(archiveRoot, target, request); err != nil {
+							return err
+						}
+						materializeWrite = true
 					}
 					break
 				}
@@ -1594,7 +1605,7 @@ func checkPartitionAdmissionTx(ctx context.Context, tx *sql.Tx, request Request,
 		if targetExisted != 0 && !archiveRootWrite {
 			return c.Fail(c.StaleAuthority, "new owner reservation must bind an absent disjoint output path")
 		}
-		if archiveRootWrite {
+		if archiveRootWrite || materializeWrite {
 			continue
 		}
 		parentInfo, parentErr := os.Stat(filepath.Dir(target))
