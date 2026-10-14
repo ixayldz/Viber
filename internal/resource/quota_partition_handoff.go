@@ -9,6 +9,97 @@ import (
 	c "github.com/ixayldz/Viber/internal/contracts"
 )
 
+// FindPartitionHandoff locates the durable restore owner operation for its
+// final path. The caller supplies the digest of the complete source, manifest,
+// authority, and destination binding. A path match with another digest is a
+// conflict, never a new reservation opportunity.
+func (l *Ledger) FindPartitionHandoff(ctx context.Context, finalRoot, requestDigest string) (ReservationMatch, HandoffState, bool, error) {
+	if l == nil || !c.ValidDigest(requestDigest) {
+		return ReservationMatch{}, "", false, c.Fail(c.InvalidArgument, "physical quota handoff binding required")
+	}
+	final, err := canonicalHandoffPath(finalRoot)
+	if err != nil {
+		return ReservationMatch{}, "", false, err
+	}
+	var match ReservationMatch
+	var state HandoffState
+	found := false
+	err = l.withLock(ctx, func() error {
+		if err := ensureHandoffSchema(l.db); err != nil {
+			return err
+		}
+		if err := ensureQuotaPartitionSchema(l.db); err != nil {
+			return err
+		}
+		if err := validateHandoffRecordsOnOpen(l.db, l.root, l.Authority, l.LedgerID); err != nil {
+			return err
+		}
+		if err := validateQuotaPartitionRecords(l.db, l.LedgerID); err != nil {
+			return err
+		}
+		rows, err := l.db.QueryContext(ctx, "SELECT allocation_id FROM quota_handoffs WHERE final_root=? ORDER BY allocation_id LIMIT 2", final)
+		if err != nil {
+			return err
+		}
+		ids := make([]string, 0, 2)
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if len(ids) != 1 || !validID(ids[0]) {
+			return c.Fail(c.StoreIntegrityError, "physical quota handoff target is ambiguous")
+		}
+		intent, exists, err := loadHandoffIntent(l.db, ids[0])
+		if err != nil {
+			return err
+		}
+		if !exists || intent.FinalRoot != final {
+			return c.Fail(c.StoreIntegrityError, "physical quota handoff target index is detached")
+		}
+		binding, err := loadHandoffAllocation(l.db, ids[0])
+		if err != nil {
+			return err
+		}
+		if err = validateHandoffBinding(intent, binding, l.LedgerID); err != nil {
+			return err
+		}
+		var writer, family string
+		if err = l.db.QueryRowContext(ctx, "SELECT writer,family FROM quota_allocations WHERE id=?", ids[0]).Scan(&writer, &family); err != nil {
+			return err
+		}
+		if writer != "agent" || family != "RESTORE_OWNER" || binding.RequestDigest != requestDigest {
+			return c.Fail(c.StaleAuthority, "restore destination is bound to another persisted source intent")
+		}
+		partition, exists, err := loadQuotaPartition(l.db, ids[0])
+		if err != nil {
+			return err
+		}
+		if !exists || partition.Mode != IndependentOwnerPartition || partition.State == "PREPARED" && intent.State != HandoffPrepared || partition.State == "OWNER_BOUND" && intent.State != HandoffStageBound || partition.State == "COMMITTED" && intent.State != HandoffCommitted {
+			return c.Fail(c.StoreIntegrityError, "restore owner partition differs from its persisted handoff")
+		}
+		match = ReservationMatch{Allocation: Allocation{ledger: l, ID: ids[0], targetRoot: binding.TargetRoot},
+			Scope: ExactReservationScope, Status: binding.Status, UpperBytes: uint64(binding.UpperBytes),
+			UpperEntries: uint64(binding.UpperEntries), RequestDigest: binding.RequestDigest}
+		state = intent.State
+		found = true
+		return nil
+	})
+	if err != nil {
+		return ReservationMatch{}, "", false, err
+	}
+	return match, state, found, nil
+}
+
 // PreparePartitionHandoff joins the stage move and owner partition intents in
 // one durable admission record.  The allocation must still be RESERVED and
 // its target is the stage path.  Keeping both records in one transaction is
@@ -304,6 +395,13 @@ func (a Allocation) CommitPartitionHandoff(ctx context.Context, gcSpecs ...GCPar
 			return err
 		}
 		if err = settleGCPartitionTx(ctx, tx, a.ledger, finalPartition, gcSpecs, gcMembers); err != nil {
+			return err
+		}
+		// Keep the immutable binding row for exact post-commit retries, but
+		// clear its payload now that the allocation has a retained receipt.
+		// Reservation-intent validation requires this lifecycle transition to
+		// happen atomically with settling the owner partition.
+		if err = eraseReservationIntentPayloadTx(ctx, tx, a.ID); err != nil {
 			return err
 		}
 		if err = checkPartitionCapacity(ctx, tx, a.ledger.Limits); err != nil {

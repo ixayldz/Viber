@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -583,6 +584,10 @@ func RestoreBackup(ctx context.Context, backup, destination string) (BackupManif
 	return restoreBackup(ctx, backup, destination, false)
 }
 
+func restoreBackup(ctx context.Context, backup, destination string, legacyMigrationValidation bool) (BackupManifest, error) {
+	return restoreBackupWithFault(ctx, backup, destination, legacyMigrationValidation, nil)
+}
+
 type restorePhysicalBinding struct {
 	SchemaVersion      int    `json:"schema_version"`
 	BackupRoot         string `json:"backup_root"`
@@ -595,6 +600,43 @@ type restorePhysicalBinding struct {
 	PhysicalRoot       string `json:"physical_root"`
 	DeletionWatermark  int64  `json:"deletion_watermark"`
 	LedgerID           string `json:"ledger_id"`
+}
+
+type restoreStageBinding struct {
+	SchemaVersion      int    `json:"schema_version"`
+	BackupRoot         string `json:"backup_root"`
+	BackupRootIdentity string `json:"backup_root_identity"`
+	ManifestDigest     string `json:"manifest_digest"`
+	AuthorityDigest    string `json:"authority_digest"`
+	TargetRoot         string `json:"target_root"`
+}
+
+func restoreStagePath(backup string, backupIdentity string, manifestRaw []byte, authority PrivacyAuthority, target string) (string, string, error) {
+	canonicalBackup, err := filepath.EvalSymlinks(backup)
+	if err == nil {
+		canonicalBackup, err = filepath.Abs(canonicalBackup)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	authorityDigest, err := c.Digest(authority)
+	if err != nil {
+		return "", "", err
+	}
+	key, err := c.Digest(restoreStageBinding{SchemaVersion: 1, BackupRoot: canonicalBackup, BackupRootIdentity: backupIdentity,
+		ManifestDigest: c.HashBytes(manifestRaw), AuthorityDigest: authorityDigest, TargetRoot: target})
+	if err != nil {
+		return "", "", err
+	}
+	name := ".viber-restore-" + key[:32]
+	path, err := fileguard.ResolveProspective(filepath.Join(filepath.Dir(target), name))
+	if err != nil {
+		return "", "", err
+	}
+	if filepath.Clean(path) == filepath.Clean(target) {
+		return "", "", c.Fail(c.StaleAuthority, "restore stage collides with its destination")
+	}
+	return name, path, nil
 }
 
 func restoreManifestName(name string) string {
@@ -671,9 +713,9 @@ func restorePhysicalEstimate(m BackupManifest) (uint64, uint64, error) {
 	return upperBytes, upperEntries, nil
 }
 
-func prepareRestorePhysicalQuota(ctx context.Context, root *os.Root, m BackupManifest, manifestRaw []byte, backup, backupIdentity, stage, target string) (*resource.Ledger, resource.Allocation, error) {
+func prepareRestorePhysicalQuota(ctx context.Context, root *os.Root, m BackupManifest, manifestRaw []byte, backup, backupIdentity, stage, target string) (*resource.Ledger, resource.ReservationMatch, resource.HandoffState, bool, error) {
 	if root == nil || m.SchemaVersion != 2 || m.PrivacyAuthority == nil {
-		return nil, resource.Allocation{}, c.Fail(c.InvalidArgument, "current restore physical quota binding required")
+		return nil, resource.ReservationMatch{}, "", false, c.Fail(c.InvalidArgument, "current restore physical quota binding required")
 	}
 	var database BackupFile
 	found := false
@@ -684,25 +726,25 @@ func prepareRestorePhysicalQuota(ctx context.Context, root *os.Root, m BackupMan
 		}
 	}
 	if !found {
-		return nil, resource.Allocation{}, c.Fail(c.StoreIntegrityError, "restore database manifest witness is missing")
+		return nil, resource.ReservationMatch{}, "", false, c.Fail(c.StoreIntegrityError, "restore database manifest witness is missing")
 	}
 	pin, err := store.ReadPhysicalQuotaBindingFromBackup(ctx, root, backupIdentity, database.Digest, database.Size)
 	if err != nil {
-		return nil, resource.Allocation{}, err
+		return nil, resource.ReservationMatch{}, "", false, err
 	}
 	if pin == nil {
-		return nil, resource.Allocation{}, c.Fail(c.StaleAuthority, "restore backup has no pinned physical quota ledger")
+		return nil, resource.ReservationMatch{}, "", false, c.Fail(c.StaleAuthority, "restore backup has no pinned physical quota ledger")
 	}
 	authority := m.PrivacyAuthority
 	if pin.AuthorityID != authority.ID || pin.Directory != authority.Directory || pin.PhysicalRoot != authority.PhysicalRoot {
-		return nil, resource.Allocation{}, c.Fail(c.StaleAuthority, "restore backup physical quota pin differs from its privacy authority")
+		return nil, resource.ReservationMatch{}, "", false, c.Fail(c.StaleAuthority, "restore backup physical quota pin differs from its privacy authority")
 	}
 	ledger, err := resource.OpenPinnedExisting(resource.Authority{ID: authority.ID, Directory: authority.Directory, PhysicalRoot: authority.PhysicalRoot}, pin.LedgerID)
 	if err != nil {
-		return nil, resource.Allocation{}, err
+		return nil, resource.ReservationMatch{}, "", false, err
 	}
-	closeOnError := func(err error) (*resource.Ledger, resource.Allocation, error) {
-		return nil, resource.Allocation{}, errors.Join(err, ledger.Close())
+	closeOnError := func(err error) (*resource.Ledger, resource.ReservationMatch, resource.HandoffState, bool, error) {
+		return nil, resource.ReservationMatch{}, "", false, errors.Join(err, ledger.Close())
 	}
 	upperBytes, upperEntries, err := restorePhysicalEstimate(m)
 	if err != nil {
@@ -722,22 +764,55 @@ func prepareRestorePhysicalQuota(ctx context.Context, root *os.Root, m BackupMan
 	binding := restorePhysicalBinding{SchemaVersion: 1, BackupRoot: canonicalBackup, BackupRootIdentity: backupIdentity,
 		ManifestDigest: c.HashBytes(manifestRaw), TargetRoot: target, StageRoot: stage, AuthorityID: authority.ID,
 		AuthorityDigest: authorityDigest, PhysicalRoot: authority.PhysicalRoot, DeletionWatermark: m.DeletionWatermark, LedgerID: pin.LedgerID}
-	requestDigest, err := c.Digest(binding)
+	intentRaw, err := c.CanonicalV1(binding)
 	if err != nil {
 		return closeOnError(err)
 	}
-	allocation, err := ledger.Reserve(ctx, resource.Request{Writer: "agent", Family: "RESTORE_OWNER", RequestDigest: requestDigest,
-		TargetRoot: stage, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload})
+	requestDigest := c.HashBytes(intentRaw)
+	if handoff, state, found, findErr := ledger.FindPartitionHandoff(ctx, target, requestDigest); findErr != nil {
+		return closeOnError(findErr)
+	} else if found {
+		intentPath := stage
+		if state == resource.HandoffCommitted {
+			intentPath = target
+		}
+		saved, intentFound, intentErr := ledger.FindReservationIntent(ctx, intentPath, "agent", "RESTORE_OWNER")
+		if intentErr != nil || !intentFound || saved.Match.Allocation.ID != handoff.Allocation.ID || !bytes.Equal(saved.Binding, intentRaw) {
+			if intentErr == nil {
+				intentErr = c.Fail(c.StaleAuthority, "restore handoff lost its exact source and destination intent")
+			}
+			return closeOnError(intentErr)
+		}
+		return ledger, handoff, state, true, nil
+	}
+	if _, statErr := os.Lstat(target); statErr == nil {
+		return closeOnError(c.Fail(c.Conflict, "restore destination already exists without its exact persisted handoff"))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return closeOnError(statErr)
+	}
+	if _, statErr := os.Lstat(stage); statErr == nil {
+		return closeOnError(c.Fail(c.StaleAuthority, "restore stage exists without its exact persisted handoff"))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return closeOnError(statErr)
+	}
+	match, savedPayload, err := ledger.ReserveOrMatchWithIntent(ctx, resource.Request{Writer: "agent", Family: "RESTORE_OWNER", RequestDigest: requestDigest,
+		TargetRoot: stage, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}, intentRaw, intentRaw)
 	if err != nil {
 		return closeOnError(err)
 	}
-	if err = allocation.PreparePartitionHandoff(ctx, target); err != nil {
-		return closeOnError(err)
+	if match.Scope != resource.ExactReservationScope || !bytes.Equal(savedPayload, intentRaw) || match.RequestDigest != requestDigest || match.UpperBytes != upperBytes || match.UpperEntries != upperEntries {
+		return closeOnError(c.Fail(c.StaleAuthority, "restore reservation differs from its exact persisted intent"))
 	}
-	if err = allocation.Begin(ctx); err != nil {
-		return closeOnError(err)
+	if match.Status == "RESERVED" {
+		if err = match.Allocation.PreparePartitionHandoff(ctx, target); err != nil {
+			return closeOnError(err)
+		}
+	} else if match.Status == "WRITING" {
+		return closeOnError(c.Fail(c.StaleAuthority, "restore allocation is writing without its exact handoff record"))
+	} else {
+		return closeOnError(c.Fail(c.StaleAuthority, "restore allocation has an unsupported lifecycle"))
 	}
-	return ledger, allocation, nil
+	return ledger, match, resource.HandoffPrepared, true, nil
 }
 
 func restoredGCPartitionSpecs(records map[string][]byte) ([]resource.GCPartitionSpec, error) {
@@ -764,7 +839,7 @@ func restoredGCPartitionSpecs(records map[string][]byte) ([]resource.GCPartition
 
 // Legacy migration validation is confined to a disposable private destination;
 // it is never a public restore capability or an authorization to run its tasks.
-func restoreBackup(ctx context.Context, backup, destination string, legacyMigrationValidation bool) (manifest BackupManifest, resultErr error) {
+func restoreBackupWithFault(ctx context.Context, backup, destination string, legacyMigrationValidation bool, fault func(string) error) (manifest BackupManifest, resultErr error) {
 	var m BackupManifest
 	if !fileguard.Disjoint(backup, destination) {
 		return m, c.Fail(c.PolicyDenied, "backup and restore destination overlap")
@@ -807,10 +882,10 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if m.PrivacyAuthority != nil && !fileguard.Disjoint(target, m.PrivacyAuthority.Directory) {
 		return m, c.Fail(c.PolicyDenied, "restore destination overlaps the deletion authority")
 	}
-	if _, err = os.Lstat(target); err == nil {
-		return m, c.Fail(c.Conflict, "restore destination already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return m, err
+	_, targetStatErr := os.Lstat(target)
+	targetExists := targetStatErr == nil
+	if targetStatErr != nil && !errors.Is(targetStatErr, os.ErrNotExist) {
+		return m, targetStatErr
 	}
 	// Preflight every digest and embedded source root before creating anything.
 	gcRecords := map[string][]byte{}
@@ -850,24 +925,83 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 		return m, err
 	}
 	defer parent.Close()
-	stageName := newID(".restore-")
-	stagePath := filepath.Join(parent.Name(), stageName)
-	stagePath, err = fileguard.ResolveProspective(stagePath)
+	stageName := ""
+	stagePath := ""
+	backupIdentity := ""
+	if m.SchemaVersion == 2 {
+		backupIdentity, err = fileguard.DirectoryIdentity(root)
+		if err != nil {
+			return m, err
+		}
+		stageName, stagePath, err = restoreStagePath(backup, backupIdentity, manifestRaw, *m.PrivacyAuthority, target)
+	} else {
+		stageName = newID(".restore-")
+		stagePath, err = fileguard.ResolveProspective(filepath.Join(parent.Name(), stageName))
+	}
 	if err != nil {
 		return m, err
 	}
 	var restoreQuota *resource.Ledger
-	var restoreAllocation resource.Allocation
+	var restoreMatch resource.ReservationMatch
+	var restoreState resource.HandoffState
+	var restoreHandoff bool
 	if m.SchemaVersion == 2 {
-		backupIdentity, identityErr := fileguard.DirectoryIdentity(root)
-		if identityErr != nil {
-			return m, identityErr
-		}
-		restoreQuota, restoreAllocation, err = prepareRestorePhysicalQuota(ctx, root, m, manifestRaw, backup, backupIdentity, stagePath, target)
+		restoreQuota, restoreMatch, restoreState, restoreHandoff, err = prepareRestorePhysicalQuota(ctx, root, m, manifestRaw, backup, backupIdentity, stagePath, target)
 		if err != nil {
 			return m, err
 		}
 		defer func() { resultErr = errors.Join(resultErr, restoreQuota.Close()) }()
+		if restoreHandoff && restoreState != resource.HandoffPrepared {
+			stageInfo, stageErr := os.Lstat(stagePath)
+			finalInfo, finalErr := os.Lstat(target)
+			if stageErr != nil && !errors.Is(stageErr, os.ErrNotExist) || finalErr != nil && !errors.Is(finalErr, os.ErrNotExist) {
+				return m, errors.Join(stageErr, finalErr)
+			}
+			if stageInfo != nil {
+				// A bound but unpublished tree may be only partly copied. Its
+				// reservation remains WRITING/UNKNOWN; do not overwrite or free it.
+				return m, c.Fail(c.StaleAuthority, "restore stage remains unresolved under its exact physical reservation")
+			}
+			if finalInfo == nil || (restoreState != resource.HandoffStageBound && restoreState != resource.HandoffCommitted) {
+				return m, c.Fail(c.StaleAuthority, "restore handoff location does not match its persisted state")
+			}
+			if err = validateRestoredTargetIntent(ctx, *m.PrivacyAuthority, m, manifestRaw, backup, backupIdentity, stagePath, target); err != nil {
+				return m, err
+			}
+			if _, err = restoreMatch.Allocation.CommitPartitionHandoff(ctx, gcSpecs...); err != nil {
+				return m, err
+			}
+			instance, instanceErr := openRestoreRuntimeInstance(target)
+			if instanceErr != nil {
+				return m, instanceErr
+			}
+			if fault != nil {
+				if err = fault("after-owner-commit"); err != nil {
+					return m, err
+				}
+			}
+			if err = registerRestoredScope(ctx, *m.PrivacyAuthority, instance, target); err != nil {
+				return m, err
+			}
+			return m, nil
+		}
+		if targetExists {
+			return m, c.Fail(c.Conflict, "restore destination already exists before its persisted handoff")
+		}
+		if _, stageErr := os.Lstat(stagePath); stageErr == nil {
+			return m, c.Fail(c.StaleAuthority, "restore stage exists without a bound recovery state")
+		} else if !errors.Is(stageErr, os.ErrNotExist) {
+			return m, stageErr
+		}
+		if restoreMatch.Status == "RESERVED" {
+			if err = restoreMatch.Allocation.Begin(ctx); err != nil {
+				return m, err
+			}
+		} else if restoreMatch.Status != "WRITING" {
+			return m, c.Fail(c.StaleAuthority, "restore handoff has an unsupported reservation lifecycle")
+		}
+	} else if targetExists {
+		return m, c.Fail(c.Conflict, "restore destination already exists")
 	}
 	stage, err := freshPrivate(stagePath)
 	if err != nil {
@@ -875,7 +1009,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	}
 	defer stage.Close()
 	if restoreQuota != nil {
-		if err = restoreAllocation.BindPartitionHandoffStage(ctx); err != nil {
+		if err = restoreMatch.Allocation.BindPartitionHandoffStage(ctx); err != nil {
 			return m, err
 		}
 	}
@@ -959,7 +1093,7 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 	if legacyMigrationValidation && m.SchemaVersion == 1 {
 		restored, closeRestored, err = openLegacyRestoreValidationSession(ctx, stagePath, validationInstance)
 	} else if restoreQuota != nil {
-		restored, err = openPreparedRestoreStage(ctx, stagePath, *m.PrivacyAuthority, restoreQuota, restoreAllocation)
+		restored, err = openPreparedRestoreStage(ctx, stagePath, *m.PrivacyAuthority, restoreQuota, restoreMatch.Allocation)
 		if err == nil {
 			closeRestored = restored.Close
 		}
@@ -1009,18 +1143,88 @@ func restoreBackup(ctx context.Context, backup, destination string, legacyMigrat
 		return m, err
 	}
 	if restoreQuota != nil {
-		if _, err = restoreAllocation.CommitPartitionHandoff(ctx, gcSpecs...); err != nil {
+		if _, err = restoreMatch.Allocation.CommitPartitionHandoff(ctx, gcSpecs...); err != nil {
 			return m, err
+		}
+		if fault != nil {
+			if err = fault("after-owner-commit"); err != nil {
+				return m, err
+			}
 		}
 	} else if err = fileguard.RenameNoReplace(parent, stageName, filepath.Base(target)); err != nil {
 		return m, err
 	}
 	if m.SchemaVersion == 2 {
+		if err = validateRestoredTargetIntent(ctx, *m.PrivacyAuthority, m, manifestRaw, backup, backupIdentity, stagePath, target); err != nil {
+			return m, err
+		}
 		if err = registerRestoredScope(ctx, *m.PrivacyAuthority, restored.instance, target); err != nil {
 			return m, err
 		}
 	}
 	return m, nil
+}
+
+func validateRestoredTargetIntent(ctx context.Context, authority PrivacyAuthority, manifest BackupManifest, manifestRaw []byte, backup, backupIdentity, stage, target string) error {
+	canonicalBackup, err := canonicalExistingDirectory(backup)
+	if err != nil {
+		return err
+	}
+	canonicalStage, err := filepath.Abs(filepath.Clean(stage))
+	if err != nil {
+		return err
+	}
+	canonicalTarget, err := canonicalExistingDirectory(target)
+	if err != nil {
+		return err
+	}
+	if canonicalTarget != filepath.Clean(target) {
+		return c.Fail(c.StaleAuthority, "restored target path changed after its persisted handoff")
+	}
+	sourceRoot, err := os.OpenRoot(canonicalBackup)
+	if err != nil {
+		return err
+	}
+	sourceIdentity, identityErr := fileguard.DirectoryIdentity(sourceRoot)
+	closeErr := sourceRoot.Close()
+	if err = errors.Join(identityErr, closeErr); err != nil {
+		return err
+	}
+	if sourceIdentity != backupIdentity {
+		return c.Fail(c.StaleAuthority, "restore source backup inode changed")
+	}
+	instance, err := openRestoreRuntimeInstance(canonicalTarget)
+	if err != nil {
+		return err
+	}
+	root, err := openPrivacyRoot(authority)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	lock, err := privacyLock(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	view, err := readPrivacy(root)
+	if err != nil {
+		return err
+	}
+	stageCopy, stageFound := findManagedCopy(view, canonicalStage)
+	targetCopy, targetFound := findManagedCopy(view, canonicalTarget)
+	if !stageFound || !targetFound || stageCopy.Kind != "RESTORE_STAGE" || targetCopy.Kind != "RESTORE_STAGE" ||
+		stageCopy.Directory != canonicalStage || targetCopy.Directory != canonicalTarget ||
+		stageCopy.RestoreStageDirectory != canonicalStage || stageCopy.RestoreTarget != canonicalTarget ||
+		targetCopy.RestoreStageDirectory != canonicalStage || targetCopy.RestoreTarget != canonicalTarget ||
+		!sameRestoreProvenance(stageCopy, targetCopy) || stageCopy.PhysicalRoot != targetCopy.PhysicalRoot ||
+		stageCopy.PhysicalRoot != instance.PhysicalRoot || stageCopy.RestoreInstanceID != instance.ID ||
+		stageCopy.RestoreSource != canonicalBackup || stageCopy.RestoreSourcePhysicalRoot != backupIdentity ||
+		stageCopy.RestoreBackupDigest != c.HashBytes(manifestRaw) || stageCopy.RestoreWatermark != manifest.DeletionWatermark ||
+		len(stageCopy.Files) != 0 || len(targetCopy.Files) != 0 || validateManagedCopy(stageCopy) != nil || validateManagedCopy(targetCopy) != nil {
+		return c.Fail(c.StaleAuthority, "restored target lacks its exact durable privacy provenance")
+	}
+	return privacyRestoreSource(ctx, root, authority, view, targetCopy)
 }
 
 // openPreparedRestoreStage opens a restored owner only while its exact outer
