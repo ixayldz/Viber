@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,8 @@ const (
 	onboardingMaxLines = 12
 	onboardingMaxTask  = 4096
 )
+
+const onboardingPRDDefaultTask = "Read the PRD, propose a typed plan, implement it, and use registered checks."
 
 // onboardingInput is replaceable in CLI tests; ordinary invocations read the
 // process stdin directly.
@@ -73,6 +76,95 @@ func (p *onboardingPrompter) ask(label, defaultValue string, maxBytes int) (stri
 		}
 	}
 	return value, nil
+}
+
+func (p *onboardingPrompter) askWithDefault(label, defaultValue string, maxBytes int) (string, bool, error) {
+	if p.lines >= onboardingMaxLines {
+		return "", false, c.Fail(c.InvalidArgument, "onboarding input limit reached")
+	}
+	if _, err := fmt.Fprint(p.out, label); err != nil {
+		return "", false, err
+	}
+	if !p.scanner.Scan() {
+		if err := p.scanner.Err(); err != nil {
+			return "", false, c.Fail(c.InvalidArgument, "input line exceeded the onboarding limit")
+		}
+		return "", false, c.Fail(c.Conflict, "onboarding stopped because input ended")
+	}
+	p.lines++
+	value := strings.TrimSpace(p.scanner.Text())
+	usedDefault := value == "" && defaultValue != ""
+	if usedDefault {
+		value = defaultValue
+	}
+	if strings.EqualFold(value, "cancel") || strings.EqualFold(value, "quit") || strings.EqualFold(value, "q") {
+		return "", false, c.Fail(c.Conflict, "onboarding cancelled; no task was started")
+	}
+	if !utf8.ValidString(value) || len(value) > maxBytes {
+		return "", false, c.Fail(c.InvalidArgument, "input is not valid UTF-8 or exceeds the field limit")
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", false, c.Fail(c.InvalidArgument, "control characters are not allowed in onboarding input")
+		}
+	}
+	return value, usedDefault, nil
+}
+
+// discoverOnboardingPRD examines only bounded top-level metadata. It never
+// opens a candidate's body; runTask performs the authoritative captured-source
+// and current-policy check before dispatch.
+func discoverOnboardingPRD(source string) string {
+	root, err := os.OpenRoot(source)
+	if err != nil {
+		return ""
+	}
+	defer root.Close()
+	directory, err := root.Open(".")
+	if err != nil {
+		return ""
+	}
+	entries, readErr := directory.ReadDir(257)
+	_ = directory.Close()
+	if len(entries) > 256 || readErr != nil && !errors.Is(readErr, io.EOF) {
+		return ""
+	}
+	name := ""
+	for _, entry := range entries {
+		if entry.Name() != "PRD.md" && entry.Name() != "prd.md" {
+			continue
+		}
+		if name != "" {
+			return ""
+		}
+		info, statErr := root.Lstat(entry.Name())
+		if statErr != nil || !info.Mode().IsRegular() {
+			return ""
+		}
+		name = entry.Name()
+	}
+	return name
+}
+
+func onboardingTaskPrompt(p *onboardingPrompter, source string) (string, string, error) {
+	prdPath := discoverOnboardingPRD(source)
+	if prdPath == "" {
+		task, err := p.ask("Describe the task in your own words: ", "", onboardingMaxTask)
+		return task, "", err
+	}
+	label := fmt.Sprintf("Describe the task in your own words, or press Enter to use the PRD workflow for %q [%s]: ", prdPath, onboardingPRDDefaultTask)
+	task, usedDefault, err := p.askWithDefault(label, onboardingPRDDefaultTask, onboardingMaxTask)
+	if err != nil || !usedDefault {
+		return task, "", err
+	}
+	return task, prdPath, nil
+}
+
+func appendOnboardingPRD(args []string, path string) []string {
+	if path == "" {
+		return args
+	}
+	return append(args, "--prd", path)
 }
 
 func interactiveOnboarding(out io.Writer) bool {
@@ -397,7 +489,7 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 	if err != nil {
 		return report(out, errout, err, false)
 	}
-	taskPrompt, err := p.ask("Describe the task in your own words: ", "", onboardingMaxTask)
+	taskPrompt, prdPath, err := onboardingTaskPrompt(p, source)
 	if err != nil {
 		return report(out, errout, err, false)
 	}
@@ -440,6 +532,7 @@ func runOnboarding(args []string, out, errout io.Writer) int {
 
 	fmt.Fprintln(out, "Changes are prepared in a separate candidate and require your review. In the interface use /requests, /diff and /resume. An unverified final result also requires approval; it is never reported as verified.")
 	args = []string{taskPrompt, "--root", source, "--store", store, "--task", taskID, "--autonomy", "review"}
+	args = appendOnboardingPRD(args, prdPath)
 	if mode == "1" {
 		args = append(args, "--provider", "chatgpt", "--allow-remote", "--auth-profile", profileID)
 	} else {

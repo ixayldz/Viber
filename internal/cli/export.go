@@ -26,14 +26,30 @@ func runExport(args []string, out, errout io.Writer) int {
 	if task == "" || *directory == "" || *output == "" {
 		return report(out, errout, c.Fail(c.InvalidArgument, "task, store and new output directory required"), *jsonMode)
 	}
-	session, err := agent.OpenExisting(context.Background(), *directory)
+	ctx := context.Background()
+	id, err := resolveCommandID("")
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
 	}
-	defer session.Close()
-	manifest, err := session.Export(context.Background(), task, *output)
+	raw, routed, err := ownerCall(ctx, *directory, task, "delivery-export", id, struct {
+		Output string `json:"output"`
+	}{*output})
+	var manifest agent.ExportManifest
+	if err == nil && routed {
+		err = c.DecodeStrict(raw, &manifest)
+	} else if err == nil {
+		session, openErr := agent.OpenExisting(ctx, *directory)
+		if openErr != nil {
+			return report(out, errout, openErr, *jsonMode)
+		}
+		defer session.Close()
+		manifest, err = session.Export(ctx, task, *output)
+	}
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
+	}
+	if manifest.SchemaVersion != 1 || manifest.TaskID != task || manifest.State.TaskID != task || manifest.LiveWorkspaceWritten {
+		return report(out, errout, c.Fail(c.StoreIntegrityError, "delivery response identity mismatch"), *jsonMode)
 	}
 	if *jsonMode {
 		if err = jsonWrite(out, manifest); err != nil {

@@ -73,6 +73,7 @@ func runTask(args []string, out, errout io.Writer) int {
 	prompt, args := promptFirst(args)
 	f := flags("run", errout)
 	root := f.String("root", ".", "live source root")
+	prdFile := f.String("prd", "", "exact project-relative captured PRD file to guide a planned implementation")
 	userConfigFile := f.String("user-config", "", "secret-free global config; default OS user config directory")
 	operatorPolicyFile := f.String("operator-policy", "", "absolute operator restriction profile outside project; revision changes invalidate task admissions")
 	rankingDirectory := f.String("ranking-registry", "", "explicit local advisory ranking control outside source/store; disabled by default")
@@ -120,6 +121,25 @@ func runTask(args []string, out, errout io.Writer) int {
 		prompt = f.Arg(0)
 	} else if f.NArg() != 0 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "one raw task prompt required"), *jsonMode)
+	}
+	prdRequested := false
+	f.Visit(func(value *flag.Flag) {
+		if value.Name == "prd" {
+			prdRequested = true
+		}
+	})
+	if prdRequested {
+		if prompt == "" {
+			return report(out, errout, c.Fail(c.InvalidArgument, "raw prompt required with --prd"), *jsonMode)
+		}
+		if err := validatePRDPath(*prdFile); err != nil {
+			return report(out, errout, err, *jsonMode)
+		}
+		workflowPrompt, promptErr := promptWithPRDWorkflow(prompt, *prdFile)
+		if promptErr != nil {
+			return report(out, errout, promptErr, *jsonMode)
+		}
+		prompt = workflowPrompt
 	}
 	if (*taskKind != "CODE" && *taskKind != "ANALYSIS") || *maxRepairs < 0 || *maxRepairs > 8 {
 		return report(out, errout, c.Fail(c.InvalidArgument, "invalid task kind/repair limit"), *jsonMode)
@@ -457,9 +477,21 @@ func runTask(args []string, out, errout io.Writer) int {
 		return report(out, errout, err, *jsonMode)
 	}
 	defer session.Close()
-	_, err = session.Create(ctx, agent.StartOptions{GoGraphRuntime: goGraphRuntime, Extension: extension, SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
+	createdState, err := session.Create(ctx, agent.StartOptions{GoGraphRuntime: goGraphRuntime, Extension: extension, SkillRegistry: skillRegistry, Ranking: ranking, GoalReview: goalReview, Config: resolvedConfig, ResourcePolicy: resourcePolicy, TaskKind: *taskKind, MaxRepairs: *maxRepairs, CheckRuntime: checkRuntime, StoreTokens: storeLimits, Runtime: runtime, CheckPlan: checkPlan, Root: source, Prompt: []byte(prompt), Git: *git, TaskID: *task, Budget: budget, Autonomy: *autonomy, AllowUnverified: *allow, Fixture: raw})
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
+	}
+	if prdRequested {
+		binding, bindErr := requireCapturedPRD(ctx, session, *task, *prdFile)
+		if bindErr != nil {
+			return report(out, errout, bindErr, *jsonMode)
+		}
+		if binding.Candidate != createdState.CandidateDigest {
+			return report(out, errout, c.Fail(c.StaleBase, "selected PRD no longer belongs to the created candidate"), *jsonMode)
+		}
+		if binding.Entry.Path != *prdFile || binding.Entry.Hash == "" {
+			return report(out, errout, c.Fail(c.StoreIntegrityError, "selected PRD path changed during capture"), *jsonMode)
+		}
 	}
 	if *detached {
 		if err = session.Close(); err != nil {

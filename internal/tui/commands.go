@@ -11,6 +11,8 @@ var slashCommands = []Command{
 	{"/help", "", "Show commands and keyboard shortcuts"},
 	{"/status", "", "See task progress and pending decisions"},
 	{"/diff", "", "Review proposed file changes"},
+	{"/export", "NEW_DIRECTORY", "Save reviewed changes and exact file contents"},
+	{"/preview", "NEW_DIRECTORY", "Preview merging candidate changes with current project files"},
 	{"/plan", "", "See the current work plan"},
 	{"/requests", "", "List proposals waiting for your decision"},
 	{"/respond", "REQUEST_ID approve|reject", "Approve or reject a reviewed request"},

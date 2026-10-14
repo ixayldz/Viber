@@ -667,4 +667,47 @@ func (a *Archive) GetBytes(task, digest string) ([]byte, error) {
 	return a.readBlob(task, digest, 8<<20)
 }
 
+// ReadSnapshotFile reads one exact captured file without hydrating unrelated
+// source, index, or ignore blobs. Trusted callers must admit the path under
+// the current policy before invoking this method.
+func (a *Archive) ReadSnapshotFile(ref Ref, path string) ([]byte, error) {
+	if !policy.SafePath(path) {
+		return nil, c.Fail(c.InvalidArgument, "exact captured file path required")
+	}
+	manifest, err := a.ReadManifest(ref)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := manifest.Snapshot
+	snapshot.Digest = ""
+	digest, err := c.Digest(snapshot)
+	if err != nil || digest != ref.SnapshotDigest || len(snapshot.Entries) > 100000 {
+		return nil, c.Fail(c.StoreIntegrityError, "captured file manifest binding changed")
+	}
+	var selected *c.Entry
+	for index := range snapshot.Entries {
+		entry := &snapshot.Entries[index]
+		if entry.Path != path {
+			continue
+		}
+		if selected != nil || !c.ValidDigest(entry.Hash) || entry.Size < 0 || entry.Size > 64<<20 {
+			return nil, c.Fail(c.StoreIntegrityError, "captured file envelope is invalid or ambiguous")
+		}
+		selected = entry
+	}
+	if selected == nil {
+		return nil, c.Fail(c.InvalidArgument, "file absent from captured snapshot")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return nil, os.ErrClosed
+	}
+	raw, err := a.readBlob(ref.TaskID, selected.Hash, selected.Size)
+	if err == nil && int64(len(raw)) != selected.Size {
+		return nil, c.Fail(c.StoreIntegrityError, "captured file size differs from its manifest")
+	}
+	return raw, err
+}
+
 func taskValid(task string) bool { return validTask.MatchString(task) && policy.SafePath(task) }

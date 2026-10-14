@@ -293,9 +293,44 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		raw, _ := json.MarshalIndent(view, "", "  ")
 		return string(raw), false, err
 	case "/plan":
+		if arg != "" {
+			return "", false, c.Fail(c.InvalidArgument, "/plan shows the current plan; start a PRD task with run --prd FILE")
+		}
 		view, err := u.status(ctx)
-		raw, _ := json.MarshalIndent(view.Plan, "", "  ")
-		return string(raw), false, err
+		return renderWorkPlan(view), false, err
+	case "/export", "/preview":
+		if arg == "" {
+			return "", false, c.Fail(c.InvalidArgument, command+" requires a new output directory")
+		}
+		if strings.HasPrefix(arg, "\"") {
+			unquoted, err := strconv.Unquote(arg)
+			if err != nil {
+				return "", false, c.Fail(c.InvalidArgument, "invalid quoted output directory")
+			}
+			arg = unquoted
+		}
+		action := "delivery-export"
+		if command == "/preview" {
+			action = "delivery-preview"
+		}
+		raw, err := u.call(ctx, action, struct {
+			Output string `json:"output"`
+		}{arg})
+		if err != nil {
+			return "", false, err
+		}
+		if command == "/preview" {
+			var result agent.DeliveryPreviewManifest
+			if err = c.DecodeStrict(raw, &result); err != nil {
+				return "", false, err
+			}
+			return fmt.Sprintf("Merge preview: %s\nSaved to: %s\nInspect preview files before applying changes.", result.Preview.Status, arg), false, nil
+		}
+		var result agent.ExportManifest
+		if err = c.DecodeStrict(raw, &result); err != nil {
+			return "", false, err
+		}
+		return fmt.Sprintf("Exported %d changes to %s\nchanges.patch, manifest.json and exact before/after files are ready.\nQuality: %s. Original project files are unchanged.", len(result.Changeset.Changes), arg, result.State.Quality), false, nil
 	case "/diff", "/requests":
 		raw, err := u.call(ctx, command[1:], nil)
 		return string(raw), false, err

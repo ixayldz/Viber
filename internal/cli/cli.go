@@ -27,9 +27,9 @@ Usage:
   viber skills source|propose|evaluate|activate|rollback|revoke|expire|status|load --registry PATH --trust-policy FILE [--store PATH --task ID] [--definition FILE --acknowledge-external-copy ACK] [--evaluation FILE --id ID --version N] [--scope-kind KIND --scope-key KEY --approve] [--json]
   viber rank-policy init|status|train|evaluate|select|disable --registry PATH [--id ID --version N --license LICENSE] [--definition FILE --dataset FILE --dataset-sha SHA] [--definition-sha SHA --evaluation-sha SHA --mode SHADOW|CANARY|ACTIVE --approve ACK] [--json]
   viber package install|status|rollback|deactivate|uninstall|run --prefix PATH [--archive FILE --source-sha FULL_SHA --gh ABSOLUTE_GH] [--revision SHA] [--store PATH] [--json] [-- ARGS...]
-  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
+  viber run "TASK" --offline --fixture FILE --root PATH --store PATH [--prd PROJECT_RELATIVE_FILE] [--check-plan FILE --check-runtime FILE] [--task-kind CODE|ANALYSIS] [--max-repairs N] [--allow-unverified] [--detach] [--json]
   viber run "TASK" --provider ollama --model ID --local-model --root PATH --store PATH [--endpoint ORIGIN] [--context-limit N] [--output-limit N] [--stream] [--model-timeout-ms N] [--json]
-  viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--model gpt-6.1-sol] [--auth-profile ID] [--json]
+  viber run "TASK" --provider chatgpt --allow-remote --root PATH --store PATH [--prd PROJECT_RELATIVE_FILE] [--model gpt-6.1-sol] [--auth-profile ID] [--json]
   viber run "TASK" --provider openai|anthropic --allow-remote --model ID --root PATH --store PATH [--context-limit N] [--output-limit N] [--stream] [--json]
     Optional local advisory controls: [--ranking-registry DIR] [--skills-registry DIR --skills-trust-policy FILE]
     Optional isolated MCP tools: [--extension-manifest CANONICAL_FILE] (explicit approval per call)

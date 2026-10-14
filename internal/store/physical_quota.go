@@ -54,19 +54,70 @@ func (s *Store) physicalQuotaBindingLocked(ctx context.Context) (*PhysicalQuotaB
 	if s.db == nil {
 		return nil, os.ErrClosed
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT key,value FROM meta WHERE key LIKE ?", "physical_quota_v1:%")
+	return physicalQuotaBindingFromDB(ctx, s.db)
+}
+
+// physicalQuotaBindingFromDB is shared by the live owner and the read-only
+// backup inspector. Marker and CAS validation must stay identical across both
+// paths so a backup cannot be accepted under a looser contract.
+func physicalQuotaBindingFromDB(ctx context.Context, db *sql.DB) (*PhysicalQuotaBinding, error) {
+	if db == nil {
+		return nil, os.ErrClosed
+	}
+	return physicalQuotaBindingFromSnapshot(ctx, db)
+}
+
+func physicalQuotaBindingFromConn(ctx context.Context, conn *sql.Conn) (*PhysicalQuotaBinding, error) {
+	if conn == nil {
+		return nil, os.ErrClosed
+	}
+	return physicalQuotaBindingFromSnapshot(ctx, conn)
+}
+
+type physicalQuotaReadOnlyBeginner interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func physicalQuotaBindingFromSnapshot(ctx context.Context, beginner physicalQuotaReadOnlyBeginner) (*PhysicalQuotaBinding, error) {
+	tx, err := beginner.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
-	var key string
+	defer tx.Rollback()
+	binding, err := physicalQuotaBindingFromQuery(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return binding, nil
+}
+
+type physicalQuotaBindingQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func physicalQuotaBindingFromQuery(ctx context.Context, queryer physicalQuotaBindingQueryer) (*PhysicalQuotaBinding, error) {
+	const markerPrefix = "physical_quota_v1:"
+	rows, err := queryer.QueryContext(ctx, `SELECT substr(CAST(key AS TEXT),?,64),length(CAST(key AS BLOB)),typeof(key),typeof(value),
+		CASE WHEN typeof(value)='integer' THEN value ELSE -1 END
+		FROM meta WHERE substr(CAST(key AS TEXT),1,?)=? LIMIT 2`, len(markerPrefix)+1, len(markerPrefix), markerPrefix)
+	if err != nil {
+		return nil, err
+	}
+	var digest string
 	count := 0
 	for rows.Next() {
+		var keyBytes int64
+		var keyType, valueType string
 		var value int64
-		if err = rows.Scan(&key, &value); err != nil {
+		if err = rows.Scan(&digest, &keyBytes, &keyType, &valueType, &value); err != nil {
 			break
 		}
 		count++
-		if count > 1 || value != 1 {
+		if count > 1 || keyType != "text" || keyBytes != int64(len(markerPrefix)+64) || valueType != "integer" || value != 1 || !c.ValidDigest(digest) {
 			err = c.Fail(c.StoreIntegrityError, "ambiguous physical quota owner binding")
 			break
 		}
@@ -75,13 +126,15 @@ func (s *Store) physicalQuotaBindingLocked(ctx context.Context) (*PhysicalQuotaB
 	if err != nil || count == 0 {
 		return nil, err
 	}
-	digest := strings.TrimPrefix(key, "physical_quota_v1:")
-	if !c.ValidDigest(digest) {
-		return nil, c.Fail(c.StoreIntegrityError, "invalid physical quota owner marker")
-	}
+	var bodyType string
+	var bodyBytes int64
 	var raw []byte
-	if err = s.db.QueryRowContext(ctx, "SELECT body FROM payloads WHERE task_id='' AND digest=?", digest).Scan(&raw); err != nil {
+	if err = queryer.QueryRowContext(ctx, `SELECT typeof(body),length(CAST(body AS BLOB)),substr(CAST(body AS BLOB),1,4097)
+		FROM payloads WHERE task_id='' AND digest=? LIMIT 1`, digest).Scan(&bodyType, &bodyBytes, &raw); err != nil {
 		return nil, err
+	}
+	if bodyType != "blob" || bodyBytes <= 0 || bodyBytes > 4096 || int64(len(raw)) != bodyBytes {
+		return nil, c.Fail(c.StoreIntegrityError, "physical quota owner CAS exceeds its bound")
 	}
 	var binding PhysicalQuotaBinding
 	if len(raw) > 4096 || c.HashBytes(raw) != digest || c.DecodeStrict(raw, &binding) != nil || binding.validate() != nil {

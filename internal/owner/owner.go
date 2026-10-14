@@ -328,6 +328,27 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return o.Session.RetirePrivacyOperationLeases(ctx)
 		}
 		return o.Session.PrivacyMetadataCapacity(ctx)
+	case "delivery-export", "delivery-preview":
+		o.control.Lock()
+		defer o.control.Unlock()
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.closed || o.active != nil {
+			return nil, c.Fail(c.Conflict, "delivery requires a paused or completed task; use pause first")
+		}
+		var query struct {
+			Output string `json:"output"`
+		}
+		if err := c.DecodeStrict(request.Payload, &query); err != nil {
+			return nil, err
+		}
+		if query.Output == "" {
+			return nil, c.Fail(c.InvalidArgument, "fresh output directory required")
+		}
+		if request.Command == "delivery-preview" {
+			return o.Session.DeliveryPreview(ctx, request.TaskID, query.Output)
+		}
+		return o.Session.Export(ctx, request.TaskID, query.Output)
 	case "support", "support-export":
 		if request.TaskID != "" {
 			return nil, c.Fail(c.InvalidArgument, "support command is store scoped")

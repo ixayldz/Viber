@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -279,12 +280,8 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 			return report, c.Fail(c.StaleAuthority, "interrupted support output contains a different report")
 		}
 	} else if errors.Is(readErr, os.ErrNotExist) {
-		entries, listErr := fs.ReadDir(root.FS(), ".")
-		if listErr != nil {
-			return report, listErr
-		}
-		if len(entries) != 0 {
-			return report, c.Fail(c.StaleAuthority, "interrupted support output contains an unrecognized partial file")
+		if err = removeExactSupportPublishTemp(root, raw); err != nil {
+			return report, err
 		}
 		if err = fileguard.Publish(root, "support.json", raw); err != nil {
 			return report, err
@@ -313,4 +310,57 @@ func (s *Session) ExportSupport(ctx context.Context, output string) (SupportRepo
 		}
 	}
 	return report, nil
+}
+
+// removeExactSupportPublishTemp recovers the crash point after Publish synced
+// the temporary payload but before it renamed that file to support.json. It is
+// called only after the saved managed-copy registration has bound this root's
+// physical identity. A matching filename alone is insufficient: the temp must
+// be the sole directory entry and contain the exact payload retained by the
+// original quota intent. Anything else remains untouched and fails closed.
+func removeExactSupportPublishTemp(root *os.Root, savedPayload []byte) error {
+	directory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	// Two entries already disprove sole-temp ownership; do not hydrate a
+	// foreign directory's complete listing before refusing recovery.
+	entries, readErr := directory.ReadDir(2)
+	if errors.Is(readErr, io.EOF) {
+		readErr = nil
+	}
+	if err = errors.Join(readErr, directory.Close()); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) != 1 || !supportPublishTempName(entries[0].Name()) {
+		return c.Fail(c.StaleAuthority, "interrupted support output contains an unrecognized partial file")
+	}
+	name := entries[0].Name()
+	partial, err := fileguard.ReadRegular(root, name, maxSupportReportBytes)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(partial, savedPayload) {
+		return c.Fail(c.StaleAuthority, "interrupted support publication temp differs from its saved payload")
+	}
+	if _, err = fileguard.RemoveBound(root, name, c.HashBytes(savedPayload), int64(len(savedPayload)), maxSupportReportBytes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func supportPublishTempName(name string) bool {
+	const prefix = ".publish-"
+	if len(name) != len(prefix)+32 || name[:len(prefix)] != prefix {
+		return false
+	}
+	for _, digit := range name[len(prefix):] {
+		if !(digit >= '0' && digit <= '9') && !(digit >= 'a' && digit <= 'f') {
+			return false
+		}
+	}
+	return true
 }

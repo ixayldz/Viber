@@ -239,6 +239,271 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	}
 }
 
+// Once the managed-copy record has durably bound the output root, an exact
+// synced Publish temp is sufficient evidence to replay the original payload.
+// The test stops after the temp file is synced and before support.json exists.
+func TestSupportRetryRecoversExactManagedPublishTemp(t *testing.T) {
+	ctx := context.Background()
+	s, opts, _ := startFixture(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "done", UsageKnown: true}}, true)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = s.Close()
+		}
+	}()
+	if _, err := s.Run(ctx, opts.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	original, err := s.Support(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalRaw, upperBytes, upperEntries, err := supportExportEnvelope(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bindingRaw, err := buildSupportExportBinding(ctx, s, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := fileguard.ResolveProspective(filepath.Join(t.TempDir(), "support-recovery"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(originalRaw), TargetRoot: output, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
+	reservation, saved, err := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, bindingRaw, originalRaw)
+	if err != nil || !reservation.Created || !bytes.Equal(saved, originalRaw) {
+		t.Fatal("support reservation did not preserve its initial payload", err)
+	}
+	if err = reservation.Allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	root, err := freshPrivate(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := supportTasks(ctx, s)
+	if err == nil {
+		err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks)
+	}
+	const partialName = ".publish-0123456789abcdef0123456789abcdef"
+	var partial *os.File
+	if err == nil {
+		partial, err = root.OpenFile(partialName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	}
+	if err == nil {
+		_, err = partial.Write(originalRaw)
+	}
+	if err == nil {
+		err = partial.Sync()
+	}
+	if partial != nil {
+		err = errors.Join(err, partial.Close())
+	}
+	closeRootErr := root.Close()
+	if err = errors.Join(err, closeRootErr); err != nil {
+		t.Fatal(err)
+	}
+	directory := s.directory
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	reopened, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	before, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := reopened.ExportSupport(ctx, output)
+	if err != nil {
+		t.Fatal("retry did not recover the exact synced publication temp", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(output, "support.json"))
+	if err != nil || !bytes.Equal(stored, originalRaw) {
+		t.Fatal("recovered support output differs from the original intent payload", err)
+	}
+	if _, err = os.Stat(filepath.Join(output, partialName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("exact interrupted temp was not retired", err)
+	}
+	exportedRaw, err := c.CanonicalV1(exported)
+	if err != nil || !bytes.Equal(exportedRaw, originalRaw) {
+		t.Fatal("support retry returned a regenerated report instead of its original intent", err)
+	}
+	retained, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	if err != nil || !found || retained.Match.Status != "RETAINED" || retained.Match.Allocation.ID != reservation.Allocation.ID || retained.Match.RequestDigest != request.RequestDigest || retained.Match.UpperBytes != uint64(upperBytes) || retained.Match.UpperEntries != upperEntries || !bytes.Equal(retained.Binding, bindingRaw) {
+		t.Fatalf("support retry did not settle the exact original allocation: %+v found=%v err=%v", retained.Match, found, err)
+	}
+	retainedRoot, err := os.OpenRoot(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedInventory, measureErr := resource.Measure(retainedRoot, true)
+	closeErr := retainedRoot.Close()
+	if err = errors.Join(measureErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	if err = retained.Match.Allocation.ValidateRetained(ctx, retainedInventory); err != nil {
+		t.Fatal("support retry's current files differ from its exact retained receipt", err)
+	}
+	after, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil || after.Allocations != before.Allocations {
+		t.Fatalf("support recovery changed its original charge: before=%+v after=%+v err=%v", before, after, err)
+	}
+
+	t.Run("refuses_truncated_temp_without_settling", func(t *testing.T) {
+		fixture := prepareSupportPublishTempRetry(t, true, false)
+		assertSupportTempRetryRefusedWithoutMutation(t, fixture)
+	})
+	t.Run("refuses_exact_temp_with_foreign_sibling", func(t *testing.T) {
+		fixture := prepareSupportPublishTempRetry(t, false, true)
+		assertSupportTempRetryRefusedWithoutMutation(t, fixture)
+	})
+}
+
+type supportPublishRetryFixture struct {
+	session      *Session
+	output       string
+	original     []byte
+	partial      []byte
+	partialName  string
+	foreignName  string
+	foreign      []byte
+	request      resource.Request
+	binding      []byte
+	allocationID string
+}
+
+func prepareSupportPublishTempRetry(t *testing.T, truncate, addForeign bool) supportPublishRetryFixture {
+	t.Helper()
+	ctx := context.Background()
+	s, opts, _ := startFixture(t, []Turn{{Calls: []model.Call{patchCall()}, UsageKnown: true}, {Text: "done", UsageKnown: true}}, true)
+	sessionOpen := true
+	t.Cleanup(func() {
+		if sessionOpen {
+			_ = s.Close()
+		}
+	})
+	if _, err := s.Run(ctx, opts.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.Support(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, upperBytes, upperEntries, err := supportExportEnvelope(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, binding, err := buildSupportExportBinding(ctx, s, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := fileguard.ResolveProspective(filepath.Join(t.TempDir(), "support-recovery"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := resource.Request{Writer: "agent", Family: "SUPPORT", RequestDigest: c.HashBytes(original), TargetRoot: output, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Payload}
+	reservation, saved, err := s.PhysicalQuota.ReserveOrMatchWithIntent(ctx, request, binding, original)
+	if err != nil || !reservation.Created || !bytes.Equal(saved, original) {
+		t.Fatal("support reservation did not preserve its initial payload", err)
+	}
+	if err = reservation.Allocation.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	root, err := freshPrivate(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootOpen := true
+	defer func() {
+		if rootOpen {
+			_ = root.Close()
+		}
+	}()
+	tasks, err := supportTasks(ctx, s)
+	if err == nil {
+		err = s.allocateManagedCopy(ctx, root, "SUPPORT", tasks)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	const partialName = ".publish-0123456789abcdef0123456789abcdef"
+	partialPayload := original
+	if truncate {
+		partialPayload = append([]byte(nil), original[:len(original)-1]...)
+	}
+	partial, err := root.OpenFile(partialName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = partial.Write(partialPayload); err == nil {
+		err = partial.Sync()
+	}
+	if closeErr := partial.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := supportPublishRetryFixture{session: s, output: output, original: original, partial: partialPayload, partialName: partialName, request: request, binding: binding, allocationID: reservation.Allocation.ID}
+	if addForeign {
+		fixture.foreignName = "foreign.txt"
+		fixture.foreign = []byte("preserve foreign content")
+		if err = fileguard.Publish(root, fixture.foreignName, fixture.foreign); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rootOpen = false
+	directory := s.directory
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sessionOpen = false
+	reopened, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.session = reopened
+	t.Cleanup(func() { _ = reopened.Close() })
+	intent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	if err != nil || !found || intent.Match.Status != "WRITING" || intent.Match.Allocation.ID != fixture.allocationID || intent.Match.RequestDigest != request.RequestDigest || !bytes.Equal(intent.Binding, binding) {
+		t.Fatalf("interrupted support reservation changed before retry: %+v found=%v err=%v", intent.Match, found, err)
+	}
+	return fixture
+}
+
+func assertSupportTempRetryRefusedWithoutMutation(t *testing.T, fixture supportPublishRetryFixture) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := fixture.session.ExportSupport(ctx, fixture.output); err == nil {
+		t.Fatal("support retry accepted an unproven partial publication directory")
+	}
+	partial, err := os.ReadFile(filepath.Join(fixture.output, fixture.partialName))
+	if err != nil || !bytes.Equal(partial, fixture.partial) {
+		t.Fatal("refused support retry changed its publication temp", err)
+	}
+	if fixture.foreignName != "" {
+		foreign, readErr := os.ReadFile(filepath.Join(fixture.output, fixture.foreignName))
+		if readErr != nil || !bytes.Equal(foreign, fixture.foreign) {
+			t.Fatal("refused support retry changed the foreign sibling", readErr)
+		}
+	}
+	if _, err = os.Stat(filepath.Join(fixture.output, "support.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("refused support retry published a completed report", err)
+	}
+	intent, found, err := fixture.session.PhysicalQuota.FindReservationIntent(ctx, fixture.output, "agent", "SUPPORT")
+	if err != nil || !found || intent.Match.Status != "WRITING" || intent.Match.Allocation.ID != fixture.allocationID || intent.Match.RequestDigest != fixture.request.RequestDigest || intent.Match.UpperBytes != fixture.request.UpperBytes || intent.Match.UpperEntries != fixture.request.UpperEntries || !bytes.Equal(intent.Binding, fixture.binding) {
+		t.Fatalf("refused support retry settled or changed its original WRITING allocation: %+v found=%v err=%v", intent.Match, found, err)
+	}
+}
+
 // A self-registered copy is the sole privacy-history suffix that an exact
 // interrupted support export may adopt. The 9-to-10 transition also changes
 // the fresh report's byte estimate, so retry must carry the saved envelope.
@@ -593,12 +858,45 @@ func TestCollectGarbageSettlesCompletedWritingAllocationAfterReopen(t *testing.T
 	if err != nil || !reflect.DeepEqual(second, completed) {
 		t.Fatal("retained GC retry did not validate idempotently", second, err, completed)
 	}
-	retried, err := reopened.PhysicalQuota.Capacity(ctx)
-	if err != nil {
-		t.Fatal(err)
+	request := resource.Request{Writer: "agent", Family: "GC_MAINTENANCE", RequestDigest: c.HashBytes(commandRaw), TargetRoot: target, UpperBytes: upperBytes, UpperEntries: upperEntries, Class: resource.Control}
+	verifyExactRetainedAllocation := func() (resource.Inventory, resource.ReservationMatch, error) {
+		match, matchErr := reopened.PhysicalQuota.ReserveOrMatch(ctx, request)
+		if matchErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, matchErr
+		}
+		if match.Scope != resource.ExactReservationScope || match.Status != "RETAINED" && match.Status != "FREE_PENDING" || match.RequestDigest != request.RequestDigest || match.UpperBytes != upperBytes || match.UpperEntries != upperEntries {
+			return resource.Inventory{}, resource.ReservationMatch{}, errors.New("retained GC retry changed its exact allocation binding")
+		}
+		gcRoot, openErr := os.OpenRoot(target)
+		if openErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, openErr
+		}
+		inventory, measureErr := resource.Measure(gcRoot, true)
+		closeErr := gcRoot.Close()
+		if measureErr = errors.Join(measureErr, closeErr); measureErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, measureErr
+		}
+		var validateErr error
+		if match.Status == "FREE_PENDING" {
+			validateErr = match.Allocation.ValidateFreePending(ctx, inventory)
+		} else {
+			validateErr = match.Allocation.ValidateRetained(ctx, inventory)
+		}
+		if validateErr != nil {
+			return resource.Inventory{}, resource.ReservationMatch{}, validateErr
+		}
+		return inventory, match, nil
 	}
-	if retried != settled {
-		t.Fatal("retained GC retry changed shared quota capacity", settled, retried)
+	retryInventory, retryMatch, err := verifyExactRetainedAllocation()
+	if err != nil {
+		t.Fatal("retained GC retry no longer matches its exact receipt:", err)
+	}
+	retried, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil || retried.Allocations != settled.Allocations || retryMatch.Allocation.ID == "" {
+		t.Fatal("retained GC retry created a physical allocation", settled, retried, err)
+	}
+	if afterInventory, afterMatch, verifyErr := verifyExactRetainedAllocation(); verifyErr != nil || afterMatch.Allocation.ID != retryMatch.Allocation.ID || !reflect.DeepEqual(afterInventory, retryInventory) {
+		t.Fatal("retained GC retry changed its exact receipt or current files", retryInventory, retryMatch, afterInventory, afterMatch, verifyErr)
 	}
 }
 

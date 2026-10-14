@@ -45,19 +45,25 @@ func (s *Session) sourceObservation(state c.TaskState, doc Document, args Observ
 	if args.Candidate != "" && args.Candidate != doc.Candidate.SnapshotDigest {
 		return nil, c.Fail(c.StaleBase, "source candidate changed")
 	}
-	capture, err := s.Archive.Get(doc.Candidate)
+	admit := func(path string) bool {
+		return policy.Admit(s.layers(state, doc), policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effect: "snapshot.read", Path: path}) == nil
+	}
+	if args.Kind == "source-page" && (args.Candidate == "" || args.Query != "" || !policy.SafePath(args.Path) || !admit(args.Path)) {
+		return nil, c.Fail(c.PolicyDenied, "exact candidate/path read authority required")
+	}
+	manifest, err := s.Archive.ReadManifest(doc.Candidate)
 	if err != nil {
 		return nil, err
 	}
-	admit := func(path string) bool {
-		return policy.Admit(s.layers(state, doc), policy.Action{Epoch: state.PolicyEpoch, Generation: state.KernelGeneration, Effect: "snapshot.read", Path: path}) == nil
+	if err = verifyProjectInstructionSnapshot(manifest.Snapshot, doc.Candidate.SnapshotDigest); err != nil {
+		return nil, err
 	}
 	if args.Kind == "source-list" {
 		if args.Path != "" || args.Offset != 0 || args.Limit > 64 {
 			return nil, c.Fail(c.InvalidArgument, "source listing limit 1..64 required")
 		}
 		entries := []c.Entry{}
-		for _, entry := range capture.Snapshot.Entries {
+		for _, entry := range manifest.Snapshot.Entries {
 			if fuzzyMatch(entry.Path, args.Query) && admit(entry.Path) {
 				entries = append(entries, entry)
 			}
@@ -73,14 +79,14 @@ func (s *Session) sourceObservation(state c.TaskState, doc Document, args Observ
 		entries = entries[:min(total, int(args.Limit))]
 		return SourceMatches{1, doc.Candidate.SnapshotDigest, entries, total, total > len(entries)}, nil
 	}
-	if args.Candidate == "" || args.Query != "" || !policy.SafePath(args.Path) || !admit(args.Path) {
-		return nil, c.Fail(c.PolicyDenied, "exact candidate/path read authority required")
-	}
-	for _, entry := range capture.Snapshot.Entries {
+	for _, entry := range manifest.Snapshot.Entries {
 		if entry.Path != args.Path {
 			continue
 		}
-		raw := capture.Contents[entry.Path]
+		raw, err := s.Archive.ReadSnapshotFile(doc.Candidate, entry.Path)
+		if err != nil {
+			return nil, err
+		}
 		if args.Offset > int64(len(raw)) {
 			return nil, c.Fail(c.InvalidArgument, "source offset exceeds retained bytes")
 		}
