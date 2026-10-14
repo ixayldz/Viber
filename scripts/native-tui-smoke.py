@@ -428,7 +428,10 @@ def _journey(binary: Path, revision: str) -> dict:
             ui.write(b"/help\r")
             ui.wait_for("Commands — type / to browse; Up/Down selects, Tab completes, Esc closes.".encode("utf-8"), 8, stage)
             pre_resize = bytes(ui.capture)
-            resize_text = b"Search or maintain source-bound project memory"
+            # This command lies below the initial short viewport and becomes
+            # visible after the resize. Probe the stable command name rather
+            # than help prose that changes with memory features.
+            resize_text = b"/context"
             if resize_text in pre_resize:
                 raise SmokeFailure("resize_probe_precondition")
 
