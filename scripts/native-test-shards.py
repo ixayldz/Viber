@@ -2,7 +2,7 @@
 
 No test is filtered out: discover Test/Fuzz/Example names and distribute all of
 them. Other packages run first and serially, preserving owner/CLI isolation.
-Agent shards default to two workers; Windows CI explicitly uses sixteen shards
+Agent shards default to two workers; Windows CI explicitly uses thirty-two shards
 and four workers to keep whole-shard duration within the unchanged timeout.
 Each worker has a separate
 output file; complete JSONL is merged in shard order without interleaving.
@@ -65,7 +65,7 @@ def execute(commands, workers=2):
 
 
 def main(race=False, agent_shards=4, workers=2):
-    if not 1 <= agent_shards <= 16 or not 1 <= workers <= min(4, agent_shards):
+    if not 1 <= agent_shards <= 32 or not 1 <= workers <= min(4, agent_shards):
         raise RuntimeError("invalid bounded native shard profile")
     package = "github.com/ixayldz/Viber/internal/agent"
     packages = checked(["go", "list", "./..."])
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--race", action="store_true", help="run every package with the race detector")
-        parser.add_argument("--agent-shards", type=int, default=4, help="complete agent shards, 1..16")
+        parser.add_argument("--agent-shards", type=int, default=4, help="complete agent shards, 1..32")
         parser.add_argument("--workers", type=int, default=2, help="bounded concurrent agent processes, 1..4")
         options = parser.parse_args()
         main(race=options.race, agent_shards=options.agent_shards, workers=options.workers)
