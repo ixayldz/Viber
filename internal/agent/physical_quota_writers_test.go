@@ -221,7 +221,11 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	intentOutput, err := fileguard.ResolveProspective(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, intentOutput, "agent", "SUPPORT")
 	if err != nil || !found || beforeIntent.Match.Status != "WRITING" || beforeIntent.Match.RequestDigest != request.RequestDigest ||
 		beforeIntent.Match.UpperBytes != request.UpperBytes || beforeIntent.Match.UpperEntries != request.UpperEntries || !bytes.Equal(beforeIntent.Binding, bindingRaw) {
 		t.Fatalf("reopened support writer did not retain its exact original intent: intent=%+v found=%v err=%v", beforeIntent, found, err)
@@ -246,7 +250,7 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	afterIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, intentOutput, "agent", "SUPPORT")
 	if err != nil || !found || afterIntent.Match.Status != "RETAINED" || afterIntent.Match.Allocation.ID != beforeIntent.Match.Allocation.ID ||
 		afterIntent.Match.RequestDigest != beforeIntent.Match.RequestDigest || afterIntent.Match.UpperBytes != beforeIntent.Match.UpperBytes ||
 		afterIntent.Match.UpperEntries != beforeIntent.Match.UpperEntries || !bytes.Equal(afterIntent.Binding, beforeIntent.Binding) {
@@ -274,7 +278,7 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	if err != nil || afterRepeat != after {
 		t.Fatalf("completed support retry charged physical metadata or payload twice: first=%+v repeat=%+v err=%v", after, afterRepeat, err)
 	}
-	repeatedIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	repeatedIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, intentOutput, "agent", "SUPPORT")
 	if err != nil || !found || repeatedIntent.Match.Allocation.ID != afterIntent.Match.Allocation.ID ||
 		repeatedIntent.Match.RequestDigest != afterIntent.Match.RequestDigest || repeatedIntent.Match.UpperBytes != afterIntent.Match.UpperBytes ||
 		repeatedIntent.Match.UpperEntries != afterIntent.Match.UpperEntries || !bytes.Equal(repeatedIntent.Binding, afterIntent.Binding) {

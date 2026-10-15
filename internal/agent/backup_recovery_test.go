@@ -43,7 +43,11 @@ func TestRestoreBackupRetriesAfterQuotaCommitBeforePrivacyRegistration(t *testin
 	if committed.RetainedBytes <= before.RetainedBytes {
 		t.Fatalf("physical commit did not retain the exact restore owner once: before=%+v after=%+v", before, committed)
 	}
-	committedIntent, found, err := session.PhysicalQuota.FindReservationIntent(ctx, target, "agent", "RESTORE_OWNER")
+	intentTarget, err := canonicalExistingDirectory(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedIntent, found, err := session.PhysicalQuota.FindReservationIntent(ctx, intentTarget, "agent", "RESTORE_OWNER")
 	if err != nil || !found || committedIntent.Match.Status != "RETAINED" {
 		t.Fatalf("committed restore lost its original writer intent: intent=%+v found=%v err=%v", committedIntent, found, err)
 	}
@@ -58,7 +62,7 @@ func TestRestoreBackupRetriesAfterQuotaCommitBeforePrivacyRegistration(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	retriedIntent, found, intentErr := session.PhysicalQuota.FindReservationIntent(ctx, target, "agent", "RESTORE_OWNER")
+	retriedIntent, found, intentErr := session.PhysicalQuota.FindReservationIntent(ctx, intentTarget, "agent", "RESTORE_OWNER")
 	if intentErr != nil || !found || retriedIntent.Match.Status != "RETAINED" || retriedIntent.Match.Allocation.ID != committedIntent.Match.Allocation.ID ||
 		retriedIntent.Match.RequestDigest != committedIntent.Match.RequestDigest || retriedIntent.Match.UpperBytes != committedIntent.Match.UpperBytes ||
 		retriedIntent.Match.UpperEntries != committedIntent.Match.UpperEntries || !bytes.Equal(retriedIntent.Binding, committedIntent.Binding) {
@@ -82,7 +86,7 @@ func TestRestoreBackupRetriesAfterQuotaCommitBeforePrivacyRegistration(t *testin
 	if err != nil || afterRepeat != afterRetry {
 		t.Fatalf("completed restore repeat charged the owner again: firstRetry=%+v repeat=%+v err=%v", afterRetry, afterRepeat, err)
 	}
-	repeatedIntent, found, intentErr := session.PhysicalQuota.FindReservationIntent(ctx, target, "agent", "RESTORE_OWNER")
+	repeatedIntent, found, intentErr := session.PhysicalQuota.FindReservationIntent(ctx, intentTarget, "agent", "RESTORE_OWNER")
 	if intentErr != nil || !found || repeatedIntent.Match.Allocation.ID != committedIntent.Match.Allocation.ID ||
 		repeatedIntent.Match.RequestDigest != committedIntent.Match.RequestDigest || repeatedIntent.Match.UpperBytes != committedIntent.Match.UpperBytes ||
 		repeatedIntent.Match.UpperEntries != committedIntent.Match.UpperEntries || !bytes.Equal(repeatedIntent.Binding, committedIntent.Binding) {
