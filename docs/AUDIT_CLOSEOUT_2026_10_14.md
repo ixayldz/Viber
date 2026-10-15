@@ -52,6 +52,36 @@ Yerelde yeni davranışları hedefleyen küçük negatif/pozitif/crash-retry gru
 çalıştırılır. Hosted full/race/fuzz/migration ve gerçek engine kapıları kaldırılmaz;
 aynı geniş test grubu her küçük UI düzenlemesinde tekrar çalıştırılmaz.
 
+## Bootstrap, metadata ve model worker uygulaması
+
+Owner-store artık ilk privacy dizini oluşturulmadan önce exact path/parent/volume/
+owner/generation ve üst sınırları kaydeder. Staging inode'u yayınlanmadan önce
+bağlanır; kaybolan yanıt ve restore devri aynı intent üzerinde uzlaştırılır.
+Allocator ledger ID'si DDL'den önce bu kayda yazılır. Var olan metadata envanteri
+registry lock altında doğrulanıp içe alınır; yabancı dizin veya eksik pin resetlenmez.
+
+Değişmez journal/scope/checkpoint dosyaları ayrı `PAYLOAD` ve deletion-intent
+`CONTROL` kayıtlarıyla yönetilir. Temp adı, içerik ve inode exact retry'ye bağlıdır;
+silinen pathname tek başına kapasiteyi serbest bırakmaz. Allocator DB/WAL/SHM ve
+static genesis/control dosyaları ayrı, sabit bir self-overhead üst sınırına sahiptir.
+Kapasite raporu bu sınırı eski managed payload limiti ve ölçülen kullanımdan ayırır.
+Registry/owner lock'ları, değişen checkpoint selector'ları ve directory slack,
+mevcut privacy catalog/diskguard sınırlarını kullanmaya devam eder; bunlar yeni
+değişmez dosya kataloğundaki ölçülmüş makbuzlar olarak sunulmaz.
+
+`/explore` ve `/review` gerçek model kullanan, captured candidate'a bağlı `ANALYSIS`
+child başlatır. Parent bütçesinden ayrılan tranche, parent scope/policy/runtime,
+generation ve monotonic TTL ile bağlanır. Child dosya değiştiremez; sonuç advisory
+kalır. Kuyruktaki iş iptalinde kullanılmamış pay serbest kalır. Activation başladıktan
+sonra iptal, receipt henüz yazılmamış olsa da `UNKNOWN` payını tutar; harcanmış veya
+belirsiz model kullanımı parent'a ücretsiz bütçe kazandırmaz. Owner aynı anda tek
+model invocation yürütür; bu özellik full multi-writer olarak sınıflandırılmaz.
+
+Managed paket seçimi yeni bootstrap/metadata/LLM worker/SKILL.md format kullanımını
+kontrol eder. Kullanılmış formatı desteklemeyen eski paket aktive edilmez. Read-only
+kota taraması migration başlatmaz; bir yarım import'un kalıcı state row'u da gerekli
+capability'yi korur. Yerel hedefli kontroller ve hosted exact-source kabul ayrı tutulur.
+
 ## API anahtarı ayrımı
 
 ### Engine kapsamındaki kapasite sınırı

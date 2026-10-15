@@ -10,7 +10,9 @@ env:
   GOTOOLCHAIN: local
 jobs:
   test:
-    timeout-minutes: 45
+    # Windows full fixtures took 41m33s on 484d223 before migration started.
+    # Keep every gate and per-process timeout; give their sequential job room.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:

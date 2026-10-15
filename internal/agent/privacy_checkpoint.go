@@ -14,6 +14,7 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -780,7 +781,7 @@ func retirePrivacyCheckpointSources(ctx context.Context, root *os.Root, authorit
 		if statErr != nil {
 			return statErr
 		}
-		if _, err = fileguard.RemoveBoundIdentity(root, name, info, source.Digest, source.Size, 16<<20); err != nil {
+		if _, err = removePrivacyMetadata(ctx, root, name, source.Digest, source.Size, 16<<20, info); err != nil {
 			return err
 		}
 	}
@@ -1042,6 +1043,14 @@ func buildPrivacyCheckpoint(root *os.Root, authority PrivacyAuthority, view priv
 }
 
 func publishCheckpointImmutable(root *os.Root, path string, raw []byte, limit int64) error {
+	// The intent and next-anchor selectors are mutable protocol witnesses: the
+	// recovery path consumes them and publishes a later revision at the same
+	// name. Keep them on the existing bounded selector protocol; the shared
+	// immutable catalog owns only content-addressed data, anchor history, and
+	// retirement receipts.
+	if filepath.Clean(path) == filepath.Clean(privacyCheckpointIntentPath()) || filepath.Clean(path) == filepath.Clean(privacyCheckpointNextPath()) {
+		return fileguard.Publish(root, path, raw)
+	}
 	existing, err := fileguard.ReadRegular(root, path, limit)
 	if err == nil {
 		if string(existing) != string(raw) {
@@ -1052,7 +1061,7 @@ func publishCheckpointImmutable(root *os.Root, path string, raw []byte, limit in
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return fileguard.Publish(root, path, raw)
+	return publishPrivacyMetadata(context.Background(), root, path, raw, resource.Payload)
 }
 
 func privacyRuntimeForScope(scope privacyScope) error {

@@ -71,7 +71,7 @@ func publishPrivacyScope(root *os.Root, scope privacyScope) error {
 	if err = admitPrivacyDisk(root, int64(len(raw))*2, false); err != nil {
 		return err
 	}
-	return fileguard.Publish(root, path, raw)
+	return publishPrivacyMetadata(context.Background(), root, path, raw, resource.Payload)
 }
 func readPrivacyScopes(root *os.Root) ([]privacyScope, string, error) {
 	result := []privacyScope{}

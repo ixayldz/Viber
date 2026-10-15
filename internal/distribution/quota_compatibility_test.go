@@ -34,7 +34,7 @@ func TestInstallAndRollbackRespectPhysicalQuotaProtocols(t *testing.T) {
 				t.Fatal(err)
 			}
 			legacyRevision := strings.Repeat("7", 40)
-			legacy, err := ParseArchive(fixtureArchive(t, legacyRevision, nil), "zip", legacyRevision, platform)
+			legacy, err := ParseArchive(fixtureArchiveCapabilities(t, legacyRevision, fixtureCapabilitiesWithout(protocol), nil), "zip", legacyRevision, platform)
 			if err != nil {
 				t.Fatal(err)
 			}

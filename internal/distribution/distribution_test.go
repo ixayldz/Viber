@@ -63,6 +63,31 @@ func fixtureArchiveCapabilities(t *testing.T, revision string, capabilities []st
 	}
 	return buffer.Bytes()
 }
+
+// Keep unrelated durable protocols supported when a regression isolates one
+// missing capability. Dependent declarations are omitted with their parent.
+func fixtureCapabilitiesWithout(missing string) []string {
+	removed := map[string]bool{missing: true}
+	if missing == RuntimeCapabilityPhysicalQuotaPartitionV1 {
+		removed[RuntimeCapabilityNativeEnginePartitionV1] = true
+		removed[RuntimeCapabilityPhysicalQuotaRestorePartitionV1] = true
+	}
+	if missing == RuntimeCapabilityPhysicalQuotaHandoffV1 {
+		removed[RuntimeCapabilityPhysicalQuotaRestorePartitionV1] = true
+	}
+	if missing == RuntimeCapabilityProjectMemoryV1 {
+		removed[RuntimeCapabilityProjectMemoryCopyV1] = true
+		removed[RuntimeCapabilityProjectMemoryConflictMetadataV1] = true
+	}
+	capabilities := []string{}
+	for _, capability := range supportedRuntimeCapabilities {
+		if !removed[capability] {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	sort.Strings(capabilities)
+	return capabilities
+}
 func nativePlatform(t *testing.T) string {
 	t.Helper()
 	platform := runtime.GOOS + "/" + runtime.GOARCH

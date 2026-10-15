@@ -122,6 +122,9 @@ func (s *Session) runtimeClient(doc Document) (*model.Client, error) {
 		if err != nil {
 			return model.Admission{}, err
 		}
+		if err = s.validateReadWorkerLease(ctx, state, doc); err != nil {
+			return model.Admission{}, err
+		}
 		if state.Execution != c.Running || state.SpecVersion != doc.Spec.Version || state.KernelGeneration != s.Journal.Generation() {
 			return model.Admission{}, c.Fail(c.StaleAuthority, "model inference is not in the active task/spec/generation")
 		}

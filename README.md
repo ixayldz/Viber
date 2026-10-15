@@ -2,7 +2,7 @@
 
 Viber, terminalden kodlama görevleri başlatır; önerilen değişiklikleri kaynak projenizden ayrı bir adayda tutar ve incelemenize veya dışa aktarmanıza izin verir.
 
-> **Engineering önizlemesi:** Public paket [`engineering-08d4bf8`](https://github.com/ixayldz/Viber/releases/tag/engineering-08d4bf868c02bfeea5e90cd095d11945b3cf8f6c) sürümüdür. Aşağıdaki PRD seçimi ve onboarding akışı bu pakette bulunmayan güncel kaynak değişiklikleridir. Viber kararlı veya üretime hazır bir sürüm değildir.
+> **Engineering önizlemesi:** Public paket [`engineering-96fe0b8`](https://github.com/ixayldz/Viber/releases/tag/engineering-96fe0b84284e270806ac6607433ab1a75114b6cd) sürümüdür; indirme ve Windows kurulum kabulü geçti. Aşağıdaki yeni PRD seçimi ve model worker komutları güncel kaynakta bulunur, bu pakette henüz yoktur. Viber kararlı veya üretime hazır bir sürüm değildir.
 
 [Kurulum](docs/INSTALL.md) · [CLI kılavuzu](docs/CLI_REFERENCE.md) · [Yetenekler ve sınırlar](docs/CAPABILITIES.md)
 
@@ -39,6 +39,12 @@ Görev arayüzü slash komutlarını kabul eder. Derlemenizdeki komutları görm
 /status
 /verification
 ```
+
+Yakalanmış aday hakkında ayrı model incelemesi başlatmak için `/explore SORU` veya
+`/review SORU` yazın. `/worker result` son incelemeyi gösterir; `/worker cancel GOAL_ID`
+seçilen işi durdurur. Bu işler ana görevin kalan bütçesinden pay alır, aynı model
+bağlantısını kullanır ve dosya değiştiremez. Sonuçları model tavsiyesidir;
+doğrulanmış başarı sayılmaz. Owner aynı anda bir model görevini yürütür.
 
 Onaylamadan önce `/requests` ile önerileri okuyun. Birden fazla bekleyen istek varsa doğru kimliği `/approve` veya `/reject` komutuna ekleyin. Onay görevi sürdürmez; devam etmek için `/resume` yazın. Önerileri `/diff` ile inceleyin, `/export` ile teslim paketini kaydedin. Varsayılan akış kaynak projenizdeki dosyaları değiştirmez.
 

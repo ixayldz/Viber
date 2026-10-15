@@ -313,10 +313,16 @@ type GoalSchedule struct {
 	ParentDocumentDigest   string           `json:"parent_document_digest"`
 	SourceSnapshotDigest   string           `json:"source_snapshot_digest"`
 	ChildTaskID            string           `json:"child_task_id"`
-	Status                 string           `json:"status"`
-	ActivationCommandID    string           `json:"activation_command_id,omitempty"`
-	ChildTaskSeq           int64            `json:"child_task_seq,omitempty"`
-	ChildDocumentDigest    string           `json:"child_document_digest,omitempty"`
+	Role                   string           `json:"role,omitempty"`
+	ReadWorkerLease        ReadWorkerLease  `json:"read_worker_lease,omitempty,omitzero"`
+	// UNKNOWN is used after an active read-worker cancellation, including a
+	// receipt-free ACTIVATING intent. It is a durable retained-allocation marker
+	// because child creation may precede the activation receipt. Only a worker
+	// that is still QUEUED can become refundable CANCELLED.
+	Status              string `json:"status"`
+	ActivationCommandID string `json:"activation_command_id,omitempty"`
+	ChildTaskSeq        int64  `json:"child_task_seq,omitempty"`
+	ChildDocumentDigest string `json:"child_document_digest,omitempty"`
 }
 
 // TaskWorkBudget is the parent task's authoritative local work pool. Limits
@@ -414,6 +420,8 @@ type GoalMutation struct {
 	ParentDocumentDigest   string           `json:"parent_document_digest,omitempty"`
 	SourceSnapshotDigest   string           `json:"source_snapshot_digest,omitempty"`
 	ChildTaskID            string           `json:"child_task_id,omitempty"`
+	Role                   string           `json:"role,omitempty"`
+	ReadWorkerLease        ReadWorkerLease  `json:"read_worker_lease,omitempty,omitzero"`
 	ActivationCommandID    string           `json:"activation_command_id,omitempty"`
 	ChildTaskSeq           int64            `json:"child_task_seq,omitempty"`
 	ChildDocumentDigest    string           `json:"child_document_digest,omitempty"`

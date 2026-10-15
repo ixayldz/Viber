@@ -33,6 +33,183 @@ func TestPrivacyInitializationCrashHelper(t *testing.T) {
 	t.Fatal("initialization crash boundary was not reached")
 }
 
+func TestPrivacyBootstrapIsPinnedBeforeDirectoryCreationAndRecoversSamePath(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "owner")
+	_, err := openSessionWithPrivacyFault(ctx, directory, nil, func(step string) error {
+		if step == "bootstrap-reserved" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("bootstrap fault hook was not reached", err)
+	}
+	if got := authorityDirectoryCount(t, parent); got != 0 {
+		t.Fatal("privacy root was created before the owner-store bootstrap CAS", got)
+	}
+
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := journal.PrivacyBootstrap(ctx)
+	if err != nil || bootstrap == nil || bootstrap.State != "PENDING" {
+		journal.Close()
+		t.Fatal("pre-directory bootstrap descriptor was not durable", bootstrap, err)
+	}
+	pending, err := journal.PendingPrivacyAuthority(ctx)
+	if err != nil || pending != nil {
+		journal.Close()
+		t.Fatal("final physical-root authority was written before mkdir", err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal("same-path bootstrap recovery failed", err)
+	}
+	defer s.Close()
+	if got := authorityDirectoryCount(t, parent); got != 1 {
+		t.Fatal("recovery did not reuse the reserved authority path", got)
+	}
+	active, err := s.Journal.PrivacyAuthority(ctx)
+	if err != nil || active == nil {
+		t.Fatal("recovered privacy authority is missing", err)
+	}
+	var authority PrivacyAuthority
+	if c.DecodeStrict(active, &authority) != nil || authority.ID != bootstrap.AuthorityID || authority.Directory != bootstrap.Directory || authority.PhysicalRoot == "" {
+		t.Fatal("recovery changed the bootstrap authority binding", authority)
+	}
+	bound, err := s.Journal.PrivacyBootstrap(ctx)
+	if err != nil || bound == nil || bound.PhysicalRoot != authority.PhysicalRoot || bound.RequestDigest != bootstrap.RequestDigest {
+		t.Fatal("recovery lost the exact owner-store bootstrap binding", bound, err)
+	}
+}
+
+func TestPrivacyBootstrapRejectsForeignRootCreatedAtPendingDestination(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "owner")
+	_, err := openSessionWithPrivacyFault(ctx, directory, nil, func(step string) error {
+		if step == "bootstrap-reserved" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("bootstrap reservation fault hook was not reached", err)
+	}
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := journal.PrivacyBootstrap(ctx)
+	if err != nil || bootstrap == nil || bootstrap.State != "PENDING" {
+		journal.Close()
+		t.Fatal("pre-directory bootstrap descriptor was not durable", bootstrap, err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(bootstrap.Directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if session, openErr := OpenExisting(ctx, directory); openErr == nil {
+		session.Close()
+		t.Fatal("foreign empty destination was adopted without a creation witness")
+	}
+	if _, err = os.Lstat(bootstrap.Directory); err != nil {
+		t.Fatal("rejected foreign directory was removed", err)
+	}
+	journal, err = store.Open(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	if active, activeErr := journal.PrivacyAuthority(ctx); activeErr != nil || active != nil {
+		t.Fatal("foreign destination became active authority", activeErr)
+	}
+}
+
+func TestPrivacyBootstrapRecoversPinnedStagingDirectory(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "owner")
+	_, err := openSessionWithPrivacyFault(ctx, directory, nil, func(step string) error {
+		if step == "bootstrap-stage-bound" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("staged-root fault hook was not reached", err)
+	}
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := journal.PrivacyBootstrap(ctx)
+	if err != nil || bootstrap == nil || bootstrap.State != "STAGE_BOUND" || bootstrap.PhysicalRoot == "" {
+		journal.Close()
+		t.Fatal("staging identity was not durably pinned", bootstrap, err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal("pinned staging directory was not published and recovered", err)
+	}
+	defer session.Close()
+	recovered, err := session.Journal.PrivacyBootstrap(ctx)
+	if err != nil || recovered == nil || recovered.State != "AUTHORITY_BOUND" || recovered.PhysicalRoot != bootstrap.PhysicalRoot {
+		t.Fatal("recovery changed staging identity", recovered, err)
+	}
+}
+
+func TestPrivacyBootstrapRecoversAuthorityBindBeforeBootstrapAdvance(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "owner")
+	_, err := openSessionWithPrivacyFault(ctx, directory, nil, func(step string) error {
+		if step == "authority-bound-before-bootstrap" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("authority/bootstrap crash window was not reached", err)
+	}
+
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := journal.PrivacyAuthority(ctx)
+	bootstrap, bootstrapErr := journal.PrivacyBootstrap(ctx)
+	if err = errors.Join(err, bootstrapErr); err != nil || active == nil || bootstrap == nil || bootstrap.State != "ROOT_BOUND" {
+		journal.Close()
+		t.Fatal("crash did not preserve the exact intermediate authority state", bootstrap, err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := OpenExisting(ctx, directory)
+	if err != nil {
+		t.Fatal("authority bind crash recovery failed", err)
+	}
+	defer session.Close()
+	recovered, err := session.Journal.PrivacyBootstrap(ctx)
+	if err != nil || recovered == nil || recovered.State == "ROOT_BOUND" || recovered.AuthorityDigest == "" {
+		t.Fatal("recovery did not advance the exact authority receipt", recovered, err)
+	}
+}
+
 func authorityDirectoryCount(t *testing.T, parent string) int {
 	t.Helper()
 	entries, err := os.ReadDir(parent)

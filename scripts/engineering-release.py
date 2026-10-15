@@ -200,6 +200,58 @@ def validate_install(proof, target):
         portable.fail("attested native archive installation proof missing or changed")
 
 
+def validate_managed_install(proof, target, revision, archive_digest):
+    """Validate a native managed-install receipt, including protocol gates."""
+    if (not isinstance(proof, dict) or proof.get("schema_version") != 1
+            or proof.get("source_revision") != revision or proof.get("platform") != target
+            or proof.get("status") != "PASS" or proof.get("archive_sha256") != archive_digest
+            or proof.get("actual_oidc_verification") is not True
+            or proof.get("external_store_preserved") is not True
+            or proof.get("owned_uninstall") is not True
+            or proof.get("release_ready") is not False
+            or proof.get("installed_first_task") != "OFFLINE_FIXTURE_UNVERIFIED_EXIT_2"):
+        portable.fail("managed installation source/archive/scope binding mismatch")
+    scope = proof.get("scope")
+    cross = proof.get("cross_version")
+    old_scope = "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM"
+    new_scope = "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; DURABLE_PROTOCOL_DOWNGRADE_REFUSAL; NO_SIGNING_CLAIM"
+    if scope == old_scope:
+        if (not isinstance(cross, dict) or cross.get("status") != "PASS"
+                or not portable.REVISION.fullmatch(str(cross.get("baseline_revision", "")))
+                or cross["baseline_revision"] == revision
+                or not portable.DIGEST.fullmatch(str(cross.get("baseline_archive_sha256", "")))
+                or cross.get("actual_oidc_verification") is not True
+                or cross.get("existing_task_projection_preserved") is not True
+                or cross.get("upgrade_rollback_upgrade") is not True
+                or cross.get("scope") != "COMPATIBLE_FORMAT_NO_IMPLICIT_STORE_MIGRATION"):
+            portable.fail("cross-version installation proof is incomplete")
+    elif scope == new_scope:
+        if (not isinstance(cross, dict) or cross.get("status") != "PASS"
+                or not portable.REVISION.fullmatch(str(cross.get("baseline_revision", "")))
+                or cross["baseline_revision"] == revision
+                or not portable.DIGEST.fullmatch(str(cross.get("baseline_archive_sha256", "")))
+                or cross.get("actual_oidc_verification") is not True
+                or cross.get("existing_task_projection_preserved") is not True
+                or cross.get("upgrade_rollback_upgrade") is not True
+                or cross.get("rollback_refused_after_protocol_activation") is not True
+                or cross.get("rollback_refusal_code") != "UNSUPPORTED_CAPABILITY"
+                or cross.get("active_revision_after_refusal") != revision
+                or cross.get("active_selection_preserved_after_refusal") is not True
+                or not portable.DIGEST.fullmatch(str(cross.get("active_manifest_digest_after_refusal", "")))
+                or not portable.DIGEST.fullmatch(str(cross.get("active_archive_digest_after_refusal", "")))
+                or cross.get("new_binary_projection_preserved") is not True
+                or cross.get("scope") != "COMPATIBLE_SELECTION_THEN_DURABLE_PROTOCOL_DOWNGRADE_REFUSAL"):
+            portable.fail("durable protocol downgrade refusal proof is incomplete")
+        missing = cross.get("missing_capabilities")
+        if missing != ["physical_quota_metadata_v1"]:
+            portable.fail("durable protocol downgrade missing-capability fields are invalid")
+        if any(capability not in portable.RUNTIME_CAPABILITIES for capability in missing):
+            portable.fail("durable protocol downgrade missing-capability fields are invalid")
+    elif cross is not None:
+        portable.fail("cross-version evidence contradicts declared installation scope")
+    return scope
+
+
 def publish(args):
     revision = args.revision
     if not portable.REVISION.fullmatch(revision) or args.tag != "engineering-" + revision:
@@ -261,28 +313,7 @@ def publish(args):
         installation_raw = portable.read_regular(installation_folder, "installation.json", 64 << 10)
         provenance(installation_folder / "installation.json", revision)
         managed = portable.strict_json(installation_raw)
-        if (managed.get("schema_version") != 1 or managed.get("source_revision") != revision
-                or managed.get("platform") != PLATFORMS[os] or managed.get("status") != "PASS"
-                or managed.get("archive_sha256") != digest or managed.get("actual_oidc_verification") is not True
-                or managed.get("external_store_preserved") is not True or managed.get("owned_uninstall") is not True
-                or managed.get("release_ready") is not False
-                or managed.get("installed_first_task") != "OFFLINE_FIXTURE_UNVERIFIED_EXIT_2"
-                or managed.get("scope") not in {"EXACT_SOURCE_INSTALL_REINSTALL_SAME_REVISION_ROLLBACK_UNINSTALL; NO_CROSS_VERSION_UPGRADE_OR_SIGNING_CLAIM",
-                                                "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM"}):
-            portable.fail("managed installation source/archive/scope binding mismatch")
-        cross = managed.get("cross_version")
-        if managed["scope"] == "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM":
-            if (not isinstance(cross, dict) or cross.get("status") != "PASS"
-                    or not portable.REVISION.fullmatch(str(cross.get("baseline_revision", "")))
-                    or cross["baseline_revision"] == revision
-                    or not portable.DIGEST.fullmatch(str(cross.get("baseline_archive_sha256", "")))
-                    or cross.get("actual_oidc_verification") is not True
-                    or cross.get("existing_task_projection_preserved") is not True
-                    or cross.get("upgrade_rollback_upgrade") is not True
-                    or cross.get("scope") != "COMPATIBLE_FORMAT_NO_IMPLICIT_STORE_MIGRATION"):
-                portable.fail("cross-version installation proof is incomplete")
-        elif cross is not None:
-            portable.fail("cross-version evidence contradicts declared installation scope")
+        validate_managed_install(managed, PLATFORMS[os], revision, digest)
         installation_asset = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-installation.json"
         (assets / installation_asset).write_bytes(installation_raw)
         proof_name = f"viber-{revision[:12]}-{PLATFORMS[os].replace('/', '-')}-distribution.json"
@@ -296,10 +327,14 @@ def publish(args):
     sums = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(assets.iterdir()))
     (assets / "SHA256SUMS").write_bytes(sums.encode())
     notes = output / "notes.md"
-    cross_version_accepted = all(portable.strict_json(
-        (assets / item["attested_installation"]["path"]).read_bytes()
-    ).get("cross_version", {}).get("status") == "PASS" for item in inventory)
+    managed_receipts = [portable.strict_json((assets / item["attested_installation"]["path"]).read_bytes()) for item in inventory]
+    cross_version_accepted = all(receipt.get("cross_version", {}).get("status") == "PASS" for receipt in managed_receipts)
+    durable_protocol_refusal = cross_version_accepted and all(
+        receipt.get("cross_version", {}).get("scope") == "COMPATIBLE_SELECTION_THEN_DURABLE_PROTOCOL_DOWNGRADE_REFUSAL"
+        for receipt in managed_receipts)
     managed_scope = (
+        "a compatible earlier public revision upgraded, rolled back and upgraded again before the new durable metadata protocol was activated; after activation, rollback to the older package was refused with UNSUPPORTED_CAPABILITY"
+        if durable_protocol_refusal else
         "a compatible earlier public revision upgraded, rolled back and upgraded again without implicit store migration"
         if cross_version_accepted else
         "same-revision reinstall/rollback; cross-version upgrade is not claimed"

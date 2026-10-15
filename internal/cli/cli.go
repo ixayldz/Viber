@@ -78,6 +78,8 @@ Usage:
   viber project-memory copy --store PATH --from SOURCE_TASK --to TARGET_TASK --id ID --digest SHA --command-id ID [--json]
   viber retrieval-report TASK --store PATH --call-id ID [--json]
   viber read-workers TASK --store PATH --candidate SHA [--workers inventory,requirements --query TEXT --timeout-ms N] [--json]
+  viber read-worker explore|review TASK --prompt TEXT --store PATH [--child-task ID --command-id ID --json]
+  viber read-worker status|result|cancel TASK --goal ID --store PATH [--command-id ID --json]
   viber queue TASK --store PATH [--command-file FILE] [--json]
   viber goal-queue TASK --store PATH [--command-file FILE] [--json]
   viber support --store PATH [--output NEW_PATH] [--json]
@@ -207,6 +209,8 @@ func Execute(args []string, out, errout io.Writer) int {
 		return runProjectMemory(args[1:], out, errout)
 	case "read-workers":
 		return runReadWorkers(args[1:], out, errout)
+	case "read-worker":
+		return runReadWorker(args[1:], out, errout)
 	case "apply", "delivery-apply":
 		return runDeliveryApply(args[1:], out, errout)
 	case "restore", "delivery-restore":

@@ -11,6 +11,8 @@ import (
 
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
+	"github.com/ixayldz/Viber/internal/store"
 )
 
 // A failed/abrupt bind reuses the exact journal-pinned allocation, never creates
@@ -20,8 +22,39 @@ func (s *Session) initializePrivacyAuthority(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	bootstrap, err := s.Journal.PrivacyBootstrap(ctx)
+	if err != nil {
+		return err
+	}
 	if active != nil {
-		return s.attachPrivacy(ctx)
+		var authority PrivacyAuthority
+		if c.DecodeStrict(active, &authority) != nil || authority.validate() != nil {
+			return c.Fail(c.StoreIntegrityError, "invalid active privacy authority")
+		}
+		if bootstrap != nil {
+			if err = s.validatePrivacyBootstrapOwner(*bootstrap); err != nil {
+				return err
+			}
+			if bootstrap.AuthorityID != authority.ID || bootstrap.Directory != authority.Directory || bootstrap.PhysicalRoot != authority.PhysicalRoot {
+				return c.Fail(c.StaleAuthority, "active privacy authority differs from its bootstrap reservation")
+			}
+			digest := c.HashBytes(active)
+			if bootstrap.State == "ROOT_BOUND" {
+				bootstrap.State = "AUTHORITY_BOUND"
+				bootstrap.AuthorityDigest = digest
+				if err = s.Journal.AdvancePrivacyBootstrap(ctx, "ROOT_BOUND", *bootstrap); err != nil {
+					return err
+				}
+			} else if bootstrap.State == "AUTHORITY_BOUND" || bootstrap.State == "IMPORTING" || bootstrap.State == "BOUND" || bootstrap.State == "RELEASED" {
+				if bootstrap.AuthorityDigest != digest {
+					return c.Fail(c.StaleAuthority, "privacy bootstrap authority receipt changed")
+				}
+			} else {
+				return c.Fail(c.StaleAuthority, "active privacy authority has an incomplete bootstrap reservation")
+			}
+		}
+		s.privacy = &authority
+		return nil
 	}
 	raw, err := s.Journal.PendingPrivacyAuthority(ctx)
 	if err != nil {
@@ -29,20 +62,81 @@ func (s *Session) initializePrivacyAuthority(ctx context.Context) error {
 	}
 	var authority PrivacyAuthority
 	if raw == nil {
-		directory, err := fileguard.ResolveProspective(filepath.Join(filepath.Dir(s.directory), ".viber-privacy-"+newID("")))
-		if err != nil {
+		if bootstrap == nil {
+			bootstrap, err = s.newPrivacyBootstrapReservation()
+			if err != nil {
+				return err
+			}
+			if err = s.Journal.ReservePrivacyBootstrap(ctx, *bootstrap); err != nil {
+				return err
+			}
+			if err = s.privacyInitializationFault("bootstrap-reserved"); err != nil {
+				return err
+			}
+		}
+		if err = s.validatePrivacyBootstrapOwner(*bootstrap); err != nil {
 			return err
 		}
-		root, err := freshPrivate(directory)
-		if err != nil {
-			return err
+		if bootstrap.State == "PENDING" {
+			var root *os.Root
+			root, err = createPrivacyBootstrapStage(*bootstrap)
+			if err != nil {
+				return err
+			}
+			physical, identityErr := fileguard.DirectoryIdentity(root)
+			if err = identityErr; err != nil {
+				root.Close()
+				return err
+			}
+			if err = s.Journal.BindPrivacyBootstrapStage(ctx, root, physical); err != nil {
+				root.Close()
+				return err
+			}
+			if err = root.Close(); err != nil {
+				return err
+			}
+			bootstrap, err = s.Journal.PrivacyBootstrap(ctx)
+			if err != nil || bootstrap == nil {
+				if err == nil {
+					err = c.Fail(c.StaleAuthority, "privacy bootstrap root receipt was not committed")
+				}
+				return err
+			}
+			if err = s.privacyInitializationFault("bootstrap-stage-bound"); err != nil {
+				return err
+			}
 		}
-		physical, identityErr := fileguard.DirectoryIdentity(root)
-		err = errors.Join(identityErr, root.Close())
-		if err != nil {
-			return err
+		if bootstrap.State == "STAGE_BOUND" {
+			if err = publishPrivacyBootstrapStage(*bootstrap); err != nil {
+				return err
+			}
+			root, err := openBoundPrivacyBootstrap(*bootstrap)
+			if err != nil {
+				return err
+			}
+			physical, identityErr := fileguard.DirectoryIdentity(root)
+			closeErr := root.Close()
+			if err = errors.Join(identityErr, closeErr); err != nil {
+				return err
+			}
+			if err = s.Journal.BindPrivacyBootstrapRoot(ctx, physical); err != nil {
+				return err
+			}
+			bootstrap, err = s.Journal.PrivacyBootstrap(ctx)
+			if err != nil || bootstrap == nil {
+				if err == nil {
+					err = c.Fail(c.StaleAuthority, "privacy bootstrap root receipt was not committed")
+				}
+				return err
+			}
+			if err = s.privacyInitializationFault("bootstrap-root-bound"); err != nil {
+				return err
+			}
 		}
-		authority = PrivacyAuthority{1, newID(""), directory, physical}
+		if bootstrap.State != "ROOT_BOUND" || !c.ValidDigest(bootstrap.PhysicalRoot) {
+			return c.Fail(c.StaleAuthority, "privacy bootstrap is not bound to its exact physical root")
+		}
+		authority = PrivacyAuthority{1, bootstrap.AuthorityID, bootstrap.Directory, bootstrap.PhysicalRoot}
 		raw, err = c.CanonicalV1(authority)
 		if err == nil {
 			err = s.Journal.ReservePrivacyAuthority(ctx, raw)
@@ -55,6 +149,9 @@ func (s *Session) initializePrivacyAuthority(ctx context.Context) error {
 		}
 	} else if c.DecodeStrict(raw, &authority) != nil || authority.validate() != nil {
 		return c.Fail(c.StoreIntegrityError, "invalid pending privacy allocation")
+	}
+	if bootstrap == nil || bootstrap.AuthorityID != authority.ID || bootstrap.Directory != authority.Directory || bootstrap.PhysicalRoot != authority.PhysicalRoot || bootstrap.State != "ROOT_BOUND" {
+		return c.Fail(c.StaleAuthority, "privacy authority is not bound to its owner-store bootstrap reservation")
 	}
 	root, err := openPendingPrivacy(authority)
 	if err != nil {
@@ -88,10 +185,208 @@ func (s *Session) initializePrivacyAuthority(ctx context.Context) error {
 	if err = s.Journal.BindPrivacyAuthority(ctx, raw); err != nil {
 		return err
 	}
+	if err = s.privacyInitializationFault("authority-bound-before-bootstrap"); err != nil {
+		return err
+	}
+	bootstrap.State = "AUTHORITY_BOUND"
+	bootstrap.AuthorityDigest = c.HashBytes(raw)
+	if err = s.Journal.AdvancePrivacyBootstrap(ctx, "ROOT_BOUND", *bootstrap); err != nil {
+		return err
+	}
 	if err = s.privacyInitializationFault("bound"); err != nil {
 		return err
 	}
-	return s.attachPrivacy(ctx)
+	s.privacy = &authority
+	return nil
+}
+
+func (s *Session) newPrivacyBootstrapReservation() (*store.PrivacyBootstrapReservation, error) {
+	directory, err := fileguard.ResolveProspective(filepath.Join(filepath.Dir(s.directory), ".viber-privacy-"+newID("")))
+	if err != nil {
+		return nil, err
+	}
+	parentPath := filepath.Dir(directory)
+	parent, err := os.OpenRoot(parentPath)
+	if err != nil {
+		return nil, err
+	}
+	parentIdentity, identityErr := fileguard.DirectoryIdentity(parent)
+	volumeIdentity, volumeErr := fileguard.VolumeIdentity(parent)
+	closeErr := parent.Close()
+	if err = errors.Join(identityErr, volumeErr, closeErr); err != nil {
+		return nil, err
+	}
+	owner, err := os.OpenRoot(s.directory)
+	if err != nil {
+		return nil, err
+	}
+	ownerIdentity, ownerErr := fileguard.DirectoryIdentity(owner)
+	ownerCloseErr := owner.Close()
+	if err = errors.Join(ownerErr, ownerCloseErr); err != nil {
+		return nil, err
+	}
+	overheadBytes, overheadEntries := resource.PrivacyBootstrapOverhead()
+	bootstrap := store.PrivacyBootstrapReservation{
+		SchemaVersion: 1, State: "PENDING", AuthorityID: newID(""), Directory: directory,
+		StagingDirectory: filepath.Join(parentPath, ".viber-privacy-stage-"+newID("")),
+		ParentPath:       parentPath, ParentIdentity: parentIdentity, VolumeIdentity: volumeIdentity,
+		OwnerDirectory: filepath.Clean(s.directory), OwnerIdentity: ownerIdentity, OwnerInstanceID: s.instance.ID,
+		OwnerGeneration: s.Journal.Generation(), UpperBytes: overheadBytes + 64<<10, UpperEntries: overheadEntries + 16,
+	}
+	bootstrap.RequestDigest, err = store.PrivacyBootstrapRequestDigest(bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	return &bootstrap, nil
+}
+
+func (s *Session) validatePrivacyBootstrapOwner(bootstrap store.PrivacyBootstrapReservation) error {
+	ownerDirectory, ownerIdentity, ownerInstance, ownerGeneration := bootstrap.OwnerDirectory, bootstrap.OwnerIdentity, bootstrap.OwnerInstanceID, bootstrap.OwnerGeneration
+	ownerTarget := ""
+	if bootstrap.RestoreBinding != "" {
+		ownerDirectory, ownerIdentity = bootstrap.RestoreOwnerDirectory, bootstrap.RestoreOwnerIdentity
+		ownerTarget = bootstrap.RestoreOwnerTarget
+		ownerInstance, ownerGeneration = bootstrap.RestoreOwnerInstanceID, bootstrap.RestoreOwnerGeneration
+	}
+	owner, err := os.OpenRoot(s.directory)
+	if err != nil {
+		return err
+	}
+	identity, identityErr := fileguard.DirectoryIdentity(owner)
+	closeErr := owner.Close()
+	if err = errors.Join(identityErr, closeErr); err != nil {
+		return err
+	}
+	pathMatches := filepath.Clean(ownerDirectory) == filepath.Clean(s.directory) || ownerTarget != "" && filepath.Clean(ownerTarget) == filepath.Clean(s.directory)
+	if !pathMatches || ownerIdentity != identity || ownerInstance != s.instance.ID ||
+		ownerGeneration < 1 || s.Journal.Generation() < ownerGeneration || bootstrap.UpperBytes < 1 || bootstrap.UpperEntries < 1 {
+		return c.Fail(c.StaleAuthority, "privacy bootstrap owner instance, generation, or store identity changed")
+	}
+	return nil
+}
+
+// openUnboundPrivacyBootstrap only recovers an empty directory at the exact
+// reserved name. The owner-store descriptor exists before the initial mkdir;
+// a foreign or partially populated tree remains reserved and fail-closed.
+func createPrivacyBootstrapStage(bootstrap store.PrivacyBootstrapReservation) (*os.Root, error) {
+	if err := bootstrapPathParentMatches(bootstrap); err != nil {
+		return nil, err
+	}
+	for _, path := range []string{bootstrap.Directory, bootstrap.StagingDirectory} {
+		if _, err := os.Lstat(path); err == nil {
+			return nil, c.Fail(c.StaleAuthority, "unbound privacy bootstrap path exists without a creation witness")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return freshPrivate(bootstrap.StagingDirectory)
+}
+
+func publishPrivacyBootstrapStage(bootstrap store.PrivacyBootstrapReservation) error {
+	if bootstrap.State != "STAGE_BOUND" || !c.ValidDigest(bootstrap.PhysicalRoot) {
+		return c.Fail(c.StaleAuthority, "privacy bootstrap has no pinned staging root")
+	}
+	if err := bootstrapPathParentMatches(bootstrap); err != nil {
+		return err
+	}
+	stageID, stageErr := directoryIdentity(bootstrap.StagingDirectory)
+	finalID, finalErr := directoryIdentity(bootstrap.Directory)
+	stageExists, finalExists := stageErr == nil, finalErr == nil
+	if stageErr != nil && !errors.Is(stageErr, os.ErrNotExist) || finalErr != nil && !errors.Is(finalErr, os.ErrNotExist) {
+		return errors.Join(stageErr, finalErr)
+	}
+	if stageExists && finalExists || stageExists && stageID != bootstrap.PhysicalRoot || finalExists && finalID != bootstrap.PhysicalRoot {
+		return c.Fail(c.StaleAuthority, "privacy bootstrap staging or destination path changed")
+	}
+	if finalExists {
+		return nil // crash after the no-replace rename; the owner CAS pins this inode.
+	}
+	parent, err := os.OpenRoot(bootstrap.ParentPath)
+	if err != nil {
+		return err
+	}
+	err = fileguard.RenameNoReplace(parent, filepath.Base(bootstrap.StagingDirectory), filepath.Base(bootstrap.Directory))
+	closeErr := parent.Close()
+	if err = errors.Join(err, closeErr); err != nil {
+		return err
+	}
+	finalID, err = directoryIdentity(bootstrap.Directory)
+	if err != nil {
+		return err
+	}
+	if finalID != bootstrap.PhysicalRoot {
+		return c.Fail(c.StaleAuthority, "published privacy bootstrap root differs from its staging witness")
+	}
+	return nil
+}
+
+func openBoundPrivacyBootstrap(bootstrap store.PrivacyBootstrapReservation) (*os.Root, error) {
+	if bootstrap.State != "STAGE_BOUND" || !c.ValidDigest(bootstrap.PhysicalRoot) {
+		return nil, c.Fail(c.StaleAuthority, "privacy bootstrap is not bound to a staged root")
+	}
+	if err := bootstrapPathParentMatches(bootstrap); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(bootstrap.Directory)
+	if err != nil {
+		return nil, c.Fail(c.StaleAuthority, "published privacy bootstrap destination is missing")
+	}
+	physical, identityErr := fileguard.DirectoryIdentity(root)
+	volume, volumeErr := fileguard.VolumeIdentity(root)
+	if err = errors.Join(identityErr, volumeErr); err == nil && (physical != bootstrap.PhysicalRoot || volume != bootstrap.VolumeIdentity) {
+		err = c.Fail(c.StaleAuthority, "published privacy bootstrap root identity or volume changed")
+	}
+	if err == nil {
+		err = fileguard.Private(root)
+	}
+	if err == nil {
+		var directory *os.File
+		directory, err = root.Open(".")
+		var entries []string
+		if err == nil {
+			var readErr error
+			entries, readErr = directory.Readdirnames(1)
+			if errors.Is(readErr, io.EOF) {
+				readErr = nil
+			}
+			err = errors.Join(readErr, directory.Close())
+		}
+		if err == nil && len(entries) != 0 {
+			err = c.Fail(c.StaleAuthority, "staged privacy bootstrap root contains unexpected entries")
+		}
+	}
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	return root, nil
+}
+
+func directoryIdentity(path string) (string, error) {
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return "", err
+	}
+	identity, identityErr := fileguard.DirectoryIdentity(root)
+	closeErr := root.Close()
+	return identity, errors.Join(identityErr, closeErr)
+}
+
+func bootstrapPathParentMatches(bootstrap store.PrivacyBootstrapReservation) error {
+	parent, err := os.OpenRoot(bootstrap.ParentPath)
+	if err != nil {
+		return err
+	}
+	identity, identityErr := fileguard.DirectoryIdentity(parent)
+	volume, volumeErr := fileguard.VolumeIdentity(parent)
+	closeErr := parent.Close()
+	if err = errors.Join(identityErr, volumeErr, closeErr); err != nil {
+		return err
+	}
+	if identity != bootstrap.ParentIdentity || volume != bootstrap.VolumeIdentity {
+		return c.Fail(c.StaleAuthority, "privacy bootstrap parent or volume changed")
+	}
+	return nil
 }
 
 func (s *Session) privacyInitializationFault(step string) error {

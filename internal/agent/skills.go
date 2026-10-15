@@ -27,12 +27,13 @@ type SkillBinding struct {
 	RegistryDigest    string        `json:"registry_digest"`
 	Scope             skills.Scope  `json:"scope"`
 	Source            skills.Source `json:"source"`
+	MarkdownManifest  string        `json:"markdown_manifest_digest,omitempty"`
 }
 
 func (binding SkillBinding) Validate() error {
 	if binding.SchemaVersion != 1 || binding.ID == "" || len(binding.ID) > 96 || binding.Version < 1 || binding.Version > 1<<53 ||
 		!c.ValidDigest(binding.DefinitionDigest) || !c.ValidDigest(binding.EvaluationDigest) || !c.ValidDigest(binding.TrustPolicyDigest) ||
-		!c.ValidDigest(binding.AuthorityDigest) || !c.ValidDigest(binding.RegistryDigest) || binding.Scope.Validate() != nil || binding.Source.Validate() != nil {
+		!c.ValidDigest(binding.AuthorityDigest) || !c.ValidDigest(binding.RegistryDigest) || binding.Scope.Validate() != nil || binding.Source.Validate() != nil || binding.MarkdownManifest != "" && !c.ValidDigest(binding.MarkdownManifest) {
 		return c.Fail(c.StoreIntegrityError, "invalid advisory skill binding")
 	}
 	return nil
@@ -297,6 +298,9 @@ func (s *Session) BindActiveSkillsFromPolicyFile(ctx context.Context, registryPa
 	bindings := make([]SkillBinding, 0, len(active))
 	for _, item := range active {
 		binding := SkillBinding{SchemaVersion: 1, ID: item.Definition.ID, Version: item.Definition.Version, DefinitionDigest: item.DefinitionDigest, EvaluationDigest: item.EvaluationDigest, TrustPolicyDigest: item.TrustPolicyDigest, AuthorityDigest: authorityDigest, RegistryDigest: registryDigest, Scope: item.Definition.Scope, Source: item.Definition.Source}
+		if item.Definition.MarkdownSource != nil {
+			binding.MarkdownManifest = item.Definition.MarkdownSource.ManifestDigest
+		}
 		if err = binding.Validate(); err != nil {
 			return nil, err
 		}
@@ -334,6 +338,9 @@ func (s *Session) LoadBoundSkillAdvice(ctx context.Context, registryPath, policy
 	}
 	for _, item := range active {
 		if item.Definition.ID == binding.ID && item.Definition.Version == binding.Version && item.DefinitionDigest == binding.DefinitionDigest && item.EvaluationDigest == binding.EvaluationDigest && item.TrustPolicyDigest == binding.TrustPolicyDigest && item.AuthorityDigest == binding.AuthorityDigest && item.Definition.Scope == binding.Scope && item.Definition.Source == binding.Source {
+			if item.Definition.MarkdownSource == nil && binding.MarkdownManifest != "" || item.Definition.MarkdownSource != nil && item.Definition.MarkdownSource.ManifestDigest != binding.MarkdownManifest {
+				return empty, c.Fail(c.StaleAuthority, "imported skill source manifest binding changed")
+			}
 			if err = document.Config.CurrentAuthority(); err != nil {
 				return empty, err
 			}

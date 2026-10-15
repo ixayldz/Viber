@@ -338,12 +338,22 @@ func initializePrivacyRestoreStage(ctx context.Context, authority PrivacyAuthori
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	rootOpen := true
+	defer func() {
+		if rootOpen {
+			_ = root.Close()
+		}
+	}()
 	lock, err := privacyLock(ctx, root)
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	lockOpen := true
+	defer func() {
+		if lockOpen {
+			_ = lock.Close()
+		}
+	}()
 	view, err := readPrivacy(root)
 	if err != nil {
 		return err
@@ -397,7 +407,41 @@ func initializePrivacyRestoreStage(ctx context.Context, authority PrivacyAuthori
 	if err != nil {
 		return err
 	}
-	return updateRestoreCopyLocked(root, view, base)
+	if err = updateRestoreCopyLocked(root, view, base); err != nil {
+		return err
+	}
+	lockErr := lock.Close()
+	lockOpen = false
+	rootErr := root.Close()
+	rootOpen = false
+	if err = errors.Join(lockErr, rootErr); err != nil {
+		return err
+	}
+	return rebindRestoredPrivacyBootstrap(ctx, authority, canonicalStage, canonicalTarget, instance, base.RestoreBinding)
+}
+
+func rebindRestoredPrivacyBootstrap(ctx context.Context, authority PrivacyAuthority, directory, target string, instance RuntimeInstance, restoreBinding string) error {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return err
+	}
+	ownerIdentity, identityErr := fileguard.DirectoryIdentity(root)
+	closeErr := root.Close()
+	if err = errors.Join(identityErr, closeErr); err != nil {
+		return err
+	}
+	if ownerIdentity != instance.PhysicalRoot {
+		return c.Fail(c.StaleAuthority, "restored bootstrap owner root differs from its runtime instance")
+	}
+	journal, err := store.Open(ctx, directory)
+	if err != nil {
+		return err
+	}
+	authorityRaw, encodeErr := c.CanonicalV1(authority)
+	if encodeErr == nil {
+		encodeErr = journal.RebindPrivacyBootstrapForRestore(ctx, authorityRaw, restoreBinding, directory, filepath.Clean(target), ownerIdentity, instance.ID, journal.Generation())
+	}
+	return errors.Join(encodeErr, journal.Close())
 }
 
 func rebasePrivacyRestoreCopyLocked(ctx context.Context, root *os.Root, authority PrivacyAuthority, view privacyView, copy ManagedCopy, journal *store.Store, instance RuntimeInstance) (ManagedCopy, privacyScope, error) {

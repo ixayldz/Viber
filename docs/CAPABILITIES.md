@@ -1,5 +1,15 @@
 # Güncel kullanıcı yetenekleri ve kabul sınırları
 
+14 Ekim public güncellemesi: [`engineering-96fe0b8`](https://github.com/ixayldz/Viber/releases/tag/engineering-96fe0b84284e270806ac6607433ab1a75114b6cd)
+için core CI 16/16 SUCCESS, publisher SUCCESS, anonim 11 asset/dokuz attestation
+readback ve gerçek Windows managed launcher/PATH kurulumu PASS. Bu paket restore
+düzeltmelerini içerir; daha yeni PRD seçimi, model worker ve metadata değişikliklerinin
+kabulü buna taşınmaz. Gerçek ChatGPT çağrısı 2.688 input / 24 output token ölçülmüş
+usage ile yanıt verdi. Araç `output_item.done` içinde geldi, terminal output listesi
+boş kaldı; eski decoder çağrıyı atladığından candidate değişmedi ve görev
+`BOUNDED_FINAL_ARTIFACT_REQUIRED` ile bekledi. Bu kayıt gerçek inference kabulüdür,
+tamamlanmış kodlama kabulü değildir; source-bound SSE düzeltmesi ayrı kabul bekler.
+
 14 Ekim denetim takibi: sihirbazda PRD seçimi serbest görev metninden ayrıldı; seçilen dosya özel görevle korunur. Başlangıçta bounded turn/tool/token/active-time bütçesi ve dış operatör goal review dosyası seçilebilir. PRD parser ek satır kopyaları oluşturmadan offset tarar; 128 bölüm + amaç + tam kaynak için 130 review mapping desteklenir. Değişmeyen PRD, ilgisiz candidate düzenlemesinden sonra da current-candidate receipt ile okunur. `/status` ve `/plan` kaynak okuma, yapısal plan ve bağımsız doğrulamayı ayrı gösterir; diff satırları ve onay önizlemeleri terminal kontrollerinden arındırılır. `project-memory suggest` ve `/memory suggest` güncel veya tarihsel kaynak önerisini açık provenance ile gösterir; yalnız explicit copy context'e kabul eder. `skills import-md` seçilmiş source-bound SKILL.md'yi bounded YAML alt kümesiyle öneriye çevirir; evaluator/activation lifecycle korunur. Bu takip kaynak işleri kendi exact-SHA CI/public paket/gerçek model kabulünü gerektirir.
 
 14 Ekim kaynak güncellemesi: `--prd` artık kalıcı captured dosya/input/section bağı, exact `fs_read` sayfa coverage'ı ve koddan önce plan gate'i kullanır. TUI'de `/approve` ve `/reject`, okunabilir `/status` ve patch gösteren `/diff`, yeni önerinin otomatik gösterimi, bounded canlı model çıktısı ve dizinsiz `/export`/`/preview` bulunur. `viber start --check-config ABSOLUTE_FILE` mevcut kayıtlı izole check backend'ini sihirbaza bağlar. Restore staging ilk byte öncesinde shared kotaya alınır ve final inode typed partition ile devredilir. Bunlar mevcut kaynak değişiklikleridir; yeni commit CI'si, public paket ve gerçek ChatGPT kodlama kabulü tamamlanmadan aşağıdaki public sürümün kabulü bunlara taşınmaz. [Plan ve kalan kabul sırası](PRODUCT_DELIVERY_EXECUTION_PLAN_2026_10_14.md).

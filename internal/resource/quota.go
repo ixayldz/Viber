@@ -77,6 +77,19 @@ func DefaultLimits() Limits {
 	return Limits{Bytes: defaultQuotaBytes, Entries: defaultQuotaItems, ControlBytes: defaultControlSize, ControlEntries: defaultControlItem, LowWaterBytes: defaultLowWater}
 }
 
+// PrivacyBootstrapOverhead returns the fixed upper envelope reserved for the
+// allocator and its in-root control reserve. It is based on the existing file
+// ceilings, not an observed byte count or an unbounded percentage of payload.
+// The owner-store bootstrap CAS holds this amount until the shared ledger and
+// its imported privacy inventory are durably bound.
+func PrivacyBootstrapOverhead() (uint64, uint64) {
+	// The fixed slack includes the authority genesis, ledger anchor, and lock
+	// file ceilings in addition to the allocator files and diskguard reserve.
+	bytes := uint64(maxLedgerDBBytes + maxLedgerWALBytes + maxLedgerSHMBytes + diskguard.ReserveBytes + metadataAdmission + 16<<10)
+	entries := uint64(16)
+	return bytes, entries
+}
+
 func (l Limits) validate() error {
 	if l.Bytes < 1<<20 || l.Bytes > 1<<48 || l.Entries < 1 || l.Entries > 1<<40 || l.ControlBytes < 1 || l.ControlBytes >= l.Bytes || l.ControlEntries < 1 || l.ControlEntries >= l.Entries || l.LowWaterBytes > 1<<48 {
 		return c.Fail(c.InvalidArgument, "invalid shared physical quota limits")
@@ -120,18 +133,27 @@ type Inventory struct {
 }
 
 type Capacity struct {
-	SchemaVersion    int    `json:"schema_version"`
-	Coverage         string `json:"coverage"`
-	LimitBytes       uint64 `json:"limit_bytes"`
-	LimitEntries     uint64 `json:"limit_entries"`
-	ControlBytes     uint64 `json:"control_bytes"`
-	ControlEntries   uint64 `json:"control_entries"`
-	RetainedBytes    uint64 `json:"retained_bytes"`
-	OutstandingBytes uint64 `json:"outstanding_bytes"`
-	RetainedEntries  uint64 `json:"retained_entries"`
-	OutstandingItems uint64 `json:"outstanding_entries"`
-	Unknown          int    `json:"uncertain_allocations"`
-	Allocations      int    `json:"allocations"`
+	SchemaVersion              int    `json:"schema_version"`
+	Coverage                   string `json:"coverage"`
+	LimitBytes                 uint64 `json:"limit_bytes"`
+	LimitEntries               uint64 `json:"limit_entries"`
+	ControlBytes               uint64 `json:"control_bytes"`
+	ControlEntries             uint64 `json:"control_entries"`
+	RetainedBytes              uint64 `json:"retained_bytes"`
+	OutstandingBytes           uint64 `json:"outstanding_bytes"`
+	RetainedEntries            uint64 `json:"retained_entries"`
+	OutstandingItems           uint64 `json:"outstanding_entries"`
+	Unknown                    int    `json:"uncertain_allocations"`
+	Allocations                int    `json:"allocations"`
+	MetadataBytes              uint64 `json:"privacy_metadata_bytes"`
+	MetadataEntries            uint64 `json:"privacy_metadata_entries"`
+	MetadataOutstandingBytes   uint64 `json:"privacy_metadata_outstanding_bytes"`
+	MetadataOutstandingEntries uint64 `json:"privacy_metadata_outstanding_entries"`
+	PhysicalEnvelopeBytes      uint64 `json:"total_physical_envelope_bytes"`
+	SelfOverheadBytes          uint64 `json:"allocator_self_overhead_limit_bytes"`
+	SelfOverheadEntries        uint64 `json:"allocator_self_overhead_limit_entries"`
+	SelfOverheadUsedBytes      uint64 `json:"allocator_self_overhead_used_bytes"`
+	SelfOverheadUsedEntries    uint64 `json:"allocator_self_overhead_used_entries"`
 }
 
 // ReconcileResult reports exact free intents resolved without hiding ones for
@@ -163,6 +185,7 @@ type Ledger struct {
 	root             *os.Root
 	db               *sql.DB
 	lockName         string
+	readOnly         bool
 	closed           bool
 	Authority        Authority
 	Limits           Limits
@@ -211,11 +234,43 @@ func Open(authority Authority, limits Limits) (*Ledger, error) {
 // OpenPinned attaches only to the exact authority ledger already witnessed by
 // an owner store. An empty expected ID is accepted only for first binding.
 func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*Ledger, error) {
+	return openPinned(authority, limits, expectedLedgerID, "", true, true, false)
+}
+
+// OpenPinnedBootstrap opens the first authority ledger under an owner-store
+// bootstrap reservation. The caller must durably record ledgerID before this
+// function is called. Creation, recovery of an unanchored database, and the
+// final anchor all use that exact ID; no random replacement is admitted.
+// Existing callers should use OpenPinned or OpenPinnedExisting. This entry
+// point is intentionally narrow so bootstrap recovery cannot accidentally
+// create a second ledger at the same authority path.
+func OpenPinnedBootstrap(authority Authority, limits Limits, ledgerID string) (*Ledger, error) {
+	if !validID(ledgerID) {
+		return nil, c.Fail(c.InvalidArgument, "bootstrap physical quota ledger ID required")
+	}
+	return openPinned(authority, limits, ledgerID, ledgerID, true, true, false)
+}
+
+// OpenPinnedExistingReadOnly verifies and attaches to an already-created
+// authority ledger without running metadata-schema migration or replaying
+// free intents. Compatibility and feature scanners use this path so merely
+// observing an old ledger cannot activate a new durable protocol.
+func OpenPinnedExistingReadOnly(authority Authority, expectedLedgerID string) (*Ledger, error) {
+	return openPinnedExistingMode(authority, expectedLedgerID, false, false, true)
+}
+
+func openPinned(authority Authority, limits Limits, expectedLedgerID, bootstrapLedgerID string, initializeMetadata, reconcile, readOnly bool) (*Ledger, error) {
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
 	if expectedLedgerID != "" && !validID(expectedLedgerID) {
 		return nil, c.Fail(c.InvalidArgument, "invalid pinned physical quota ledger ID")
+	}
+	if bootstrapLedgerID != "" && !validID(bootstrapLedgerID) {
+		return nil, c.Fail(c.InvalidArgument, "invalid bootstrap physical quota ledger ID")
+	}
+	if expectedLedgerID != "" && bootstrapLedgerID != "" && expectedLedgerID != bootstrapLedgerID {
+		return nil, c.Fail(c.StaleAuthority, "bootstrap physical quota ledger differs from its owner-store pin")
 	}
 	if err := validateAuthority(authority); err != nil {
 		return nil, err
@@ -238,8 +293,10 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 			_ = root.Close()
 		}
 	}()
-	if err = fileguard.Private(root); err != nil {
-		return nil, err
+	if !readOnly {
+		if err = fileguard.Private(root); err != nil {
+			return nil, err
+		}
 	}
 	physical, err := fileguard.DirectoryIdentity(root)
 	if err != nil || physical != authority.PhysicalRoot {
@@ -248,13 +305,20 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = verifyAuthorityGenesis(root, authority); err != nil {
 		return nil, err
 	}
-	lock, err := acquireLock(root)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-	if err = admitMetadata(root, metadataAdmission); err != nil {
-		return nil, err
+	var lock *os.File
+	if !readOnly {
+		lock, err = acquireLock(root)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if lock != nil {
+				_ = lock.Close()
+			}
+		}()
+		if err = admitMetadata(root, metadataAdmission); err != nil {
+			return nil, err
+		}
 	}
 	for _, name := range []string{"physical-quota.anchor", "physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock"} {
 		if err = fileguard.RegularPath(root, name, true); err != nil {
@@ -278,7 +342,7 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 		if expectedLedgerID != "" && saved.LedgerID != expectedLedgerID {
 			return nil, c.Fail(c.StaleAuthority, "physical quota ledger differs from owner-store pin")
 		}
-	} else if expectedLedgerID != "" {
+	} else if expectedLedgerID != "" && bootstrapLedgerID == "" {
 		return nil, c.Fail(c.StaleAuthority, "owner-pinned physical quota anchor is missing")
 	}
 	dbExists := true
@@ -290,15 +354,53 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if anchorExists && !dbExists {
 		return nil, c.Fail(c.StaleAuthority, "pinned physical quota database is missing")
 	}
+	if readOnly && !anchorExists {
+		return nil, c.Fail(c.StaleAuthority, "pinned physical quota anchor is missing")
+	}
 	if !anchorExists {
 		if dbExists {
-			return nil, c.Fail(c.StoreIntegrityError, "unanchored physical quota database exists")
-		}
-		if err = createDatabase(root, authority, limits); err != nil {
-			return nil, err
+			// A bootstrap crash may leave the freshly-created SQLite inode
+			// before its anchor publication. It is recoverable only when the
+			// owner-store reservation pins the exact ID and the database is
+			// still the empty, authority-bound genesis we created.
+			if bootstrapLedgerID == "" {
+				return nil, c.Fail(c.StoreIntegrityError, "unanchored physical quota database exists")
+			}
+			probe, openErr := openDatabase(root)
+			if openErr != nil {
+				return nil, openErr
+			}
+			probe.SetMaxOpenConns(1)
+			probeErr := configureDatabase(probe)
+			var stored databaseMeta
+			if probeErr == nil {
+				stored, probeErr = readMeta(probe)
+			}
+			if probeErr == nil && (stored.AuthorityID != authority.ID || stored.PhysicalRoot != authority.PhysicalRoot || stored.LedgerID != bootstrapLedgerID || stored.Limits != limits) {
+				probeErr = c.Fail(c.StaleAuthority, "unanchored bootstrap ledger differs from its exact reservation")
+			}
+			if probeErr == nil {
+				var count int
+				probeErr = probe.QueryRow("SELECT COUNT(*) FROM quota_allocations").Scan(&count)
+				if probeErr == nil && count != 0 {
+					probeErr = c.Fail(c.StoreIntegrityError, "unanchored bootstrap ledger is not empty")
+				}
+			}
+			closeErr := probe.Close()
+			if probeErr = errors.Join(probeErr, closeErr); probeErr != nil {
+				return nil, probeErr
+			}
+		} else {
+			if err = createDatabaseWithID(root, authority, limits, bootstrapLedgerID); err != nil {
+				return nil, err
+			}
 		}
 	}
-	db, err := openDatabase(root)
+	openDB := openDatabase
+	if readOnly {
+		openDB = openDatabaseReadOnly
+	}
+	db, err := openDB(root)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +411,12 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 			_ = db.Close()
 		}
 	}()
-	if err = configureDatabase(db); err != nil {
+	if readOnly {
+		err = validateDatabaseProfileReadOnly(db)
+	} else {
+		err = configureDatabase(db)
+	}
+	if err != nil {
 		return nil, err
 	}
 	stored, err := readMeta(db)
@@ -328,6 +435,8 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 		if strictJSON(anchorRaw, &saved) != nil || saved.LedgerID != stored.LedgerID || saved.DatabaseIdentity != databaseIdentity {
 			return nil, c.Fail(c.StaleAuthority, "physical quota database identity differs from its anchor")
 		}
+	} else if readOnly {
+		return nil, c.Fail(c.StaleAuthority, "read-only physical quota ledger anchor is missing")
 	} else {
 		var count int
 		if err = db.QueryRow("SELECT COUNT(*) FROM quota_allocations").Scan(&count); err != nil || count != 0 {
@@ -345,33 +454,44 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 	if err = checkDatabaseFiles(root); err != nil {
 		return nil, err
 	}
-	if err = ensureFreeIntentSchema(db); err != nil {
-		return nil, err
+	if !readOnly {
+		if err = ensureFreeIntentSchema(db); err != nil {
+			return nil, err
+		}
+		if err = ensureReservationIntentSchema(db); err != nil {
+			return nil, err
+		}
+		if err = ensureMutableReplacementSchema(db); err != nil {
+			return nil, err
+		}
+		if err = ensureControlReserveSchema(db); err != nil {
+			return nil, err
+		}
+		if err = ensureHandoffSchema(db); err != nil {
+			return nil, err
+		}
+		if err = ensureQuotaPartitionSchema(db); err != nil {
+			return nil, err
+		}
 	}
-	if err = ensureReservationIntentSchema(db); err != nil {
-		return nil, err
+	if initializeMetadata && !readOnly {
+		if err = ensureMetadataSchema(db, root, authority, limits, stored.LedgerID); err != nil {
+			return nil, err
+		}
 	}
-	if err = ensureMutableReplacementSchema(db); err != nil {
-		return nil, err
+	if !readOnly {
+		if err = validateQuotaPartitionRecords(db, stored.LedgerID); err != nil {
+			return nil, err
+		}
+		if err = validateHandoffRecordsOnOpen(db, root, authority, stored.LedgerID); err != nil {
+			return nil, err
+		}
 	}
-	if err = ensureControlReserveSchema(db); err != nil {
-		return nil, err
-	}
-	if err = ensureHandoffSchema(db); err != nil {
-		return nil, err
-	}
-	if err = ensureQuotaPartitionSchema(db); err != nil {
-		return nil, err
-	}
-	if err = validateQuotaPartitionRecords(db, stored.LedgerID); err != nil {
-		return nil, err
-	}
-	if err = validateHandoffRecordsOnOpen(db, root, authority, stored.LedgerID); err != nil {
-		return nil, err
-	}
-	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
-	if _, err = ledger.reconcileFreePendingLocked(context.Background()); err != nil {
-		return nil, err
+	ledger := &Ledger{root: root, db: db, lockName: "physical-quota.lock", readOnly: readOnly, Authority: authority, Limits: limits, LedgerID: stored.LedgerID, DatabaseIdentity: databaseIdentity}
+	if reconcile && !readOnly {
+		if _, err = ledger.reconcileFreePendingLocked(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	if err = ledger.verifyPinnedMetadata(); err != nil {
 		return nil, err
@@ -389,6 +509,10 @@ func OpenPinned(authority Authority, limits Limits, expectedLedgerID string) (*L
 // lock and OpenPinned then repeats the complete identity/anchor validation
 // before returning the live ledger.
 func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, error) {
+	return openPinnedExistingMode(authority, expectedLedgerID, true, true, false)
+}
+
+func openPinnedExistingMode(authority Authority, expectedLedgerID string, initializeMetadata, reconcile, readOnly bool) (*Ledger, error) {
 	if expectedLedgerID == "" || !validID(expectedLedgerID) {
 		return nil, c.Fail(c.InvalidArgument, "existing physical quota ledger ID required")
 	}
@@ -408,8 +532,10 @@ func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, 
 		return nil, err
 	}
 	defer root.Close()
-	if err = fileguard.Private(root); err != nil {
-		return nil, err
+	if !readOnly {
+		if err = fileguard.Private(root); err != nil {
+			return nil, err
+		}
 	}
 	physical, err := fileguard.DirectoryIdentity(root)
 	if err != nil || physical != authority.PhysicalRoot {
@@ -418,11 +544,18 @@ func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, 
 	if err = verifyAuthorityGenesis(root, authority); err != nil {
 		return nil, err
 	}
-	lock, err := acquireLock(root)
-	if err != nil {
-		return nil, err
+	var lock *os.File
+	if !readOnly {
+		lock, err = acquireLock(root)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if lock != nil {
+				_ = lock.Close()
+			}
+		}()
 	}
-	defer lock.Close()
 	for _, name := range []string{"physical-quota.anchor", "physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock"} {
 		if err = fileguard.RegularPath(root, name, true); err != nil {
 			return nil, err
@@ -440,7 +573,11 @@ func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, 
 	if err != nil || saved.DatabaseIdentity != databaseIdentity {
 		return nil, c.Fail(c.StaleAuthority, "physical quota database identity differs from its anchor")
 	}
-	db, err := openDatabase(root)
+	openDB := openDatabase
+	if readOnly {
+		openDB = openDatabaseReadOnly
+	}
+	db, err := openDB(root)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +588,12 @@ func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, 
 			_ = db.Close()
 		}
 	}()
-	if err = configureDatabase(db); err != nil {
+	if readOnly {
+		err = validateDatabaseProfileReadOnly(db)
+	} else {
+		err = configureDatabase(db)
+	}
+	if err != nil {
 		return nil, err
 	}
 	stored, err := readMeta(db)
@@ -475,10 +617,13 @@ func OpenPinnedExisting(authority Authority, expectedLedgerID string) (*Ledger, 
 		return nil, err
 	}
 	closeDB = false
-	if err = lock.Close(); err != nil {
-		return nil, err
+	if !readOnly {
+		if err = lock.Close(); err != nil {
+			return nil, err
+		}
+		lock = nil
 	}
-	return OpenPinned(authority, stored.Limits, expectedLedgerID)
+	return openPinned(authority, stored.Limits, expectedLedgerID, "", initializeMetadata, reconcile, readOnly)
 }
 
 func validateAuthority(authority Authority) error {
@@ -555,6 +700,13 @@ func (l *Ledger) acquire(ctx context.Context) (*os.File, error) {
 }
 
 func admitMetadata(root *os.Root, bytes int64) error {
+	return admitMetadataWithClass(root, bytes, true)
+}
+
+// admitMetadataWithClass admits allocator bookkeeping against the requested
+// disk class. Ordinary privacy payload imports must preserve the emergency
+// control reserve; only an all-control operation may consume that reserve.
+func admitMetadataWithClass(root *os.Root, bytes int64, control bool) error {
 	if bytes < 0 || bytes > 64<<20 {
 		return c.Fail(c.InvalidArgument, "physical quota metadata admission exceeds bounded profile")
 	}
@@ -562,7 +714,7 @@ func admitMetadata(root *os.Root, bytes int64) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(reserve.Admit(bytes, true), reserve.Close())
+	return errors.Join(reserve.Admit(bytes, control), reserve.Close())
 }
 
 // admitReceiptMutation covers the old/new SQLite row plus bounded WAL/page
@@ -599,6 +751,21 @@ func openDatabase(root *os.Root) (*sql.DB, error) {
 	return sql.Open("sqlite", u.String())
 }
 
+func openDatabaseReadOnly(root *os.Root) (*sql.DB, error) {
+	path := filepath.Join(root.Name(), "physical-quota.sqlite")
+	uriPath := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
 func configureDatabase(db *sql.DB) error {
 	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA foreign_keys=ON", "PRAGMA wal_autocheckpoint=1", "PRAGMA journal_size_limit=16777216", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
 		if _, err := db.Exec(pragma); err != nil {
@@ -632,6 +799,37 @@ func configureDatabase(db *sql.DB) error {
 	return nil
 }
 
+// validateDatabaseProfileReadOnly inspects the durable SQLite profile without
+// issuing any PRAGMA that can create a WAL, update a page limit, or otherwise
+// migrate the database. The connection is query-only for the lifetime of the
+// read-only ledger handle.
+func validateDatabaseProfileReadOnly(db *sql.DB) error {
+	// These settings are connection-local and do not migrate or rewrite the
+	// ledger. Set them explicitly for the reader, rather than comparing a new
+	// read-only connection's defaults with the writer connection's settings.
+	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
+		if _, err := db.Exec(pragma); err != nil {
+			return err
+		}
+	}
+	// WAL mode is durable and is the only journal profile accepted by the
+	// allocator. The page size/count and actual sidecar file ceilings below
+	// are durable physical bounds; synchronous, temp_store, journal_size_limit
+	// and max_page_count are connection or runtime settings on a fresh reader.
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+		return c.Fail(c.StoreIntegrityError, "physical quota SQLite WAL profile unavailable")
+	}
+	var pageSize, pageCount int64
+	if err := db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil || pageSize != 4096 {
+		return c.Fail(c.StoreIntegrityError, "invalid physical quota SQLite page profile")
+	}
+	if err := db.QueryRow("PRAGMA page_count").Scan(&pageCount); err != nil || pageCount < 1 || pageCount > maxLedgerPages {
+		return c.Fail(c.BudgetLimitReached, "physical quota ledger exceeded its bounded database profile")
+	}
+	return nil
+}
+
 type databaseMeta struct {
 	AuthorityID  string
 	PhysicalRoot string
@@ -640,6 +838,10 @@ type databaseMeta struct {
 }
 
 func createDatabase(root *os.Root, authority Authority, limits Limits) error {
+	return createDatabaseWithID(root, authority, limits, "")
+}
+
+func createDatabaseWithID(root *os.Root, authority Authority, limits Limits, requestedLedgerID string) error {
 	if err := admitMetadata(root, 2<<20); err != nil {
 		return err
 	}
@@ -652,11 +854,17 @@ func createDatabase(root *os.Root, authority Authority, limits Limits) error {
 	if err = configureDatabase(db); err != nil {
 		return err
 	}
-	var nonce [16]byte
-	if _, err = rand.Read(nonce[:]); err != nil {
-		return err
+	ledgerID := requestedLedgerID
+	if ledgerID == "" {
+		var nonce [16]byte
+		if _, err = rand.Read(nonce[:]); err != nil {
+			return err
+		}
+		ledgerID = hex.EncodeToString(nonce[:])
 	}
-	ledgerID := hex.EncodeToString(nonce[:])
+	if !validID(ledgerID) {
+		return c.Fail(c.InvalidArgument, "invalid requested physical quota ledger ID")
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -767,7 +975,7 @@ func readMeta(db *sql.DB) (databaseMeta, error) {
 }
 
 func checkDatabaseFiles(root *os.Root) error {
-	for _, name := range []string{"physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock"} {
+	for _, name := range []string{"physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock", "physical-quota.anchor", "authority.json", "control.reserve"} {
 		if err := fileguard.RegularPath(root, name, true); err != nil {
 			return err
 		}
@@ -792,9 +1000,25 @@ func checkDatabaseFiles(root *os.Root) error {
 			limit = maxLedgerWALBytes
 		case "physical-quota.lock":
 			limit = 4096
+		case "physical-quota.anchor", "authority.json":
+			limit = 4096
+		case "control.reserve":
+			limit = diskguard.ReserveBytes
 		}
 		if info.Size() > limit {
 			return c.Fail(c.BudgetLimitReached, "physical quota metadata exceeded its bounded file profile")
+		}
+		f, openErr := root.Open(name)
+		if openErr != nil {
+			return openErr
+		}
+		allocated, allocErr := fileguard.AllocatedBytes(f)
+		closeErr := f.Close()
+		if err := errors.Join(allocErr, closeErr); err != nil {
+			return err
+		}
+		if allocated < 0 || allocated > limit {
+			return c.Fail(c.BudgetLimitReached, "physical quota metadata allocation exceeded its bounded profile")
 		}
 	}
 	if _, err := root.Lstat("physical-quota.sqlite-journal"); err == nil {
@@ -838,7 +1062,66 @@ func (l *Ledger) verifyPinnedMetadata() error {
 	if databaseIdentity != l.DatabaseIdentity {
 		return c.Fail(c.StaleAuthority, "physical quota database inode changed after binding")
 	}
-	return checkDatabaseFiles(l.root)
+	if err = checkDatabaseFiles(l.root); err != nil {
+		return err
+	}
+	var pages, pageSize int64
+	if err = l.db.QueryRow("PRAGMA page_count").Scan(&pages); err != nil {
+		return err
+	}
+	if err = l.db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil {
+		return err
+	}
+	if pages < 1 || pageSize != 4096 || pages > maxLedgerPages || pages*pageSize > maxLedgerDBBytes {
+		return c.Fail(c.BudgetLimitReached, "physical quota allocator database exceeded its fixed self-overhead page ceiling")
+	}
+	return checkSelfOverhead(l.root)
+}
+
+func checkSelfOverhead(root *os.Root) error {
+	usedBytes, usedEntries, err := measureSelfOverhead(root)
+	if err != nil {
+		return err
+	}
+	upperBytes, upperEntries := PrivacyBootstrapOverhead()
+	if usedBytes > upperBytes || usedEntries > upperEntries {
+		return c.Fail(c.BudgetLimitReached, "physical quota allocator exceeded its fixed self-overhead reservation")
+	}
+	return nil
+}
+
+func measureSelfOverhead(root *os.Root) (uint64, uint64, error) {
+	var bytes, entries uint64
+	for _, name := range []string{"authority.json", "physical-quota.anchor", "physical-quota.sqlite", "physical-quota.sqlite-wal", "physical-quota.sqlite-shm", "physical-quota.lock", "control.reserve"} {
+		info, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return 0, 0, err
+		}
+		if !info.Mode().IsRegular() {
+			return 0, 0, c.Fail(c.UnsupportedCapability, "physical allocator self-overhead file is not regular")
+		}
+		f, err := root.Open(name)
+		if err != nil {
+			return 0, 0, err
+		}
+		allocated, allocErr := fileguard.AllocatedBytes(f)
+		closeErr := f.Close()
+		if err = errors.Join(allocErr, closeErr); err != nil {
+			return 0, 0, err
+		}
+		if allocated < 0 {
+			return 0, 0, c.Fail(c.UnsupportedCapability, "physical allocator self-overhead measurement unavailable")
+		}
+		bytes, err = add(bytes, uint64(allocated))
+		if err != nil {
+			return 0, 0, err
+		}
+		entries++
+	}
+	return bytes, entries, nil
 }
 
 func writeExclusive(root *os.Root, name string, raw []byte) error {
@@ -893,7 +1176,10 @@ func (l *Ledger) Close() error {
 	l.closed = true
 	var err error
 	if l.db != nil {
-		if lock, lockErr := l.lock(); lockErr == nil {
+		if l.readOnly {
+			err = errors.Join(err, l.verifyPinnedMetadata(), l.db.Close())
+			l.db = nil
+		} else if lock, lockErr := l.lock(); lockErr == nil {
 			if verifyErr := l.verifyPinnedMetadata(); verifyErr != nil {
 				err = errors.Join(err, verifyErr)
 			} else if admissionErr := admitCheckpointMetadata(l.root); admissionErr != nil {
@@ -906,7 +1192,10 @@ func (l *Ledger) Close() error {
 		} else {
 			err = errors.Join(err, lockErr)
 		}
-		err = errors.Join(err, l.db.Close())
+		if l.db != nil {
+			err = errors.Join(err, l.db.Close())
+			l.db = nil
+		}
 	}
 	if l.root != nil {
 		err = errors.Join(err, l.root.Close())
@@ -922,6 +1211,9 @@ func (l *Ledger) withLock(ctx context.Context, fn func() error) error {
 	defer l.mu.Unlock()
 	if l.closed {
 		return os.ErrClosed
+	}
+	if l.readOnly {
+		return c.Fail(c.UnsupportedCapability, "read-only physical quota ledger cannot admit mutations")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1836,6 +2128,12 @@ func (l *Ledger) Capacity(ctx context.Context) (Capacity, error) {
 			return err
 		}
 		result, err = capacityQuery(ctx, l.db, l.Limits)
+		if err == nil {
+			result.SelfOverheadUsedBytes, result.SelfOverheadUsedEntries, err = measureSelfOverhead(l.root)
+			if err == nil && (result.SelfOverheadUsedBytes > result.SelfOverheadBytes || result.SelfOverheadUsedEntries > result.SelfOverheadEntries) {
+				err = c.Fail(c.BudgetLimitReached, "physical allocator self-overhead exceeds its published fixed envelope")
+			}
+		}
 		return err
 	})
 	return result, err
@@ -2224,7 +2522,7 @@ func capacityQuery(ctx context.Context, db *sql.DB, limits Limits) (Capacity, er
 	if err != nil {
 		return Capacity{}, err
 	}
-	result.Capacity.SchemaVersion, result.Capacity.Coverage = 1, "AUTHORITY_SHARED_DURABLE_LEDGER"
+	result.Capacity.SchemaVersion, result.Capacity.Coverage = 1, "AUTHORITY_SHARED_DURABLE_LEDGER_PLUS_FIXED_SELF_OVERHEAD"
 	if err = tx.Commit(); err != nil {
 		return Capacity{}, err
 	}
@@ -2245,6 +2543,16 @@ type capacityParts struct {
 
 func capacityTx(tx *sql.Tx, limits Limits) (capacityParts, error) {
 	result := capacityParts{Capacity: Capacity{LimitBytes: limits.Bytes, LimitEntries: limits.Entries, ControlBytes: limits.ControlBytes, ControlEntries: limits.ControlEntries}}
+	var selfBytes, selfEntries int64
+	var metadataSchema int
+	if err := tx.QueryRow("SELECT schema_version,self_bytes,self_entries FROM quota_metadata_state WHERE singleton=1").Scan(&metadataSchema, &selfBytes, &selfEntries); err != nil {
+		return result, err
+	}
+	if metadataSchema != privacyMetadataSchema || selfBytes < 0 || selfEntries < 0 || limits.Bytes > math.MaxUint64-uint64(selfBytes) {
+		return result, c.Fail(c.StoreIntegrityError, "physical quota self-overhead reservation is invalid")
+	}
+	result.SelfOverheadBytes, result.SelfOverheadEntries = uint64(selfBytes), uint64(selfEntries)
+	result.PhysicalEnvelopeBytes = limits.Bytes + result.SelfOverheadBytes
 	rows, err := tx.Query("SELECT class,status,upper_bytes,upper_entries,retained_bytes,retained_entries FROM quota_allocations")
 	if err != nil {
 		return result, err
@@ -2311,6 +2619,82 @@ func capacityTx(tx *sql.Tx, limits Limits) (capacityParts, error) {
 		}
 	}
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return result, err
+	}
+	metadataRows, err := tx.Query("SELECT class,status,upper_bytes,upper_entries,charged_bytes,retained_entries FROM quota_metadata_files")
+	if err != nil {
+		return result, err
+	}
+	for metadataRows.Next() {
+		var class, status string
+		var upperBytes, upperEntries, retainedBytes, retainedEntries int64
+		if err = metadataRows.Scan(&class, &status, &upperBytes, &upperEntries, &retainedBytes, &retainedEntries); err != nil {
+			metadataRows.Close()
+			return result, err
+		}
+		if (class != string(Payload) && class != string(Control)) || upperBytes < 0 || upperEntries < 0 || retainedBytes < 0 || retainedEntries < 0 {
+			metadataRows.Close()
+			return result, c.Fail(c.StoreIntegrityError, "privacy metadata quota catalog is corrupt")
+		}
+		result.Allocations++
+		if status == "WRITING" {
+			result.Unknown++
+			result.OutstandingBytes, err = add(result.OutstandingBytes, uint64(upperBytes))
+			if err == nil {
+				result.OutstandingItems, err = add(result.OutstandingItems, uint64(upperEntries))
+			}
+			if err == nil {
+				result.MetadataOutstandingBytes, err = add(result.MetadataOutstandingBytes, uint64(upperBytes))
+			}
+			if err == nil {
+				result.MetadataOutstandingEntries, err = add(result.MetadataOutstandingEntries, uint64(upperEntries))
+			}
+			if err == nil && class == string(Payload) {
+				result.PayloadOutstandingBytes, err = add(result.PayloadOutstandingBytes, uint64(upperBytes))
+				if err == nil {
+					result.PayloadOutstandingEntries, err = add(result.PayloadOutstandingEntries, uint64(upperEntries))
+				}
+			} else if err == nil {
+				result.ControlOutstandingBytes, err = add(result.ControlOutstandingBytes, uint64(upperBytes))
+				if err == nil {
+					result.ControlOutstandingEntries, err = add(result.ControlOutstandingEntries, uint64(upperEntries))
+				}
+			}
+		} else if status == "RETAINED" || status == "FREE_PENDING" {
+			if status == "FREE_PENDING" {
+				result.Unknown++
+			}
+			result.RetainedBytes, err = add(result.RetainedBytes, uint64(retainedBytes))
+			if err == nil {
+				result.RetainedEntries, err = add(result.RetainedEntries, uint64(retainedEntries))
+			}
+			if err == nil {
+				result.MetadataBytes, err = add(result.MetadataBytes, uint64(retainedBytes))
+			}
+			if err == nil {
+				result.MetadataEntries, err = add(result.MetadataEntries, uint64(retainedEntries))
+			}
+			if err == nil && class == string(Payload) {
+				result.PayloadBytes, err = add(result.PayloadBytes, uint64(retainedBytes))
+				if err == nil {
+					result.PayloadEntries, err = add(result.PayloadEntries, uint64(retainedEntries))
+				}
+			} else if err == nil {
+				result.ControlUsedBytes, err = add(result.ControlUsedBytes, uint64(retainedBytes))
+				if err == nil {
+					result.ControlUsedEntries, err = add(result.ControlUsedEntries, uint64(retainedEntries))
+				}
+			}
+		} else if status != "RELEASED" {
+			metadataRows.Close()
+			return result, c.Fail(c.StoreIntegrityError, "privacy metadata allocation has an unknown lifecycle")
+		}
+		if err != nil {
+			metadataRows.Close()
+			return result, err
+		}
+	}
+	if err = errors.Join(metadataRows.Err(), metadataRows.Close()); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -2520,7 +2904,44 @@ func outstandingForVolumeTx(tx *sql.Tx, volume string) (uint64, error) {
 			return 0, err
 		}
 	}
-	return total, errors.Join(rows.Err(), rows.Close())
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return 0, err
+	}
+	var selfVolume string
+	var selfBytes int64
+	if err = tx.QueryRow("SELECT volume_identity,self_bytes FROM quota_metadata_state WHERE singleton=1").Scan(&selfVolume, &selfBytes); err != nil {
+		return 0, err
+	}
+	if selfBytes < 0 {
+		return 0, c.Fail(c.StoreIntegrityError, "negative allocator self-overhead reservation")
+	}
+	if selfVolume == volume {
+		total, err = add(total, uint64(selfBytes))
+		if err != nil {
+			return 0, err
+		}
+	}
+	metadataRows, err := tx.Query("SELECT upper_bytes FROM quota_metadata_files WHERE volume_identity=? AND status='WRITING'", volume)
+	if err != nil {
+		return 0, err
+	}
+	for metadataRows.Next() {
+		var n int64
+		if err = metadataRows.Scan(&n); err != nil {
+			metadataRows.Close()
+			return 0, err
+		}
+		if n < 0 {
+			metadataRows.Close()
+			return 0, c.Fail(c.StoreIntegrityError, "negative privacy metadata reservation")
+		}
+		total, err = add(total, uint64(n))
+		if err != nil {
+			metadataRows.Close()
+			return 0, err
+		}
+	}
+	return total, errors.Join(metadataRows.Err(), metadataRows.Close())
 }
 
 func add(a, b uint64) (uint64, error) {

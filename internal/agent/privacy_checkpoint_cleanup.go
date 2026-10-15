@@ -111,7 +111,7 @@ func pruneHistoricalPrivacyCheckpointMetadata(ctx context.Context, root *os.Root
 		return result, err
 	}
 	for _, candidate := range dataFiles {
-		removed, removeErr := fileguard.RemoveBoundIdentity(root, candidate.Path, candidate.Identity, candidate.Digest, candidate.Size, privacyCheckpointFileLimit)
+		removed, removeErr := removePrivacyMetadata(ctx, root, candidate.Path, candidate.Digest, candidate.Size, privacyCheckpointFileLimit, candidate.Identity)
 		if removeErr != nil {
 			return result, removeErr
 		}
@@ -120,7 +120,7 @@ func pruneHistoricalPrivacyCheckpointMetadata(ctx context.Context, root *os.Root
 		}
 	}
 	for _, candidate := range receiptFiles {
-		removed, removeErr := fileguard.RemoveBoundIdentity(root, candidate.Path, candidate.Identity, candidate.Digest, candidate.Size, privacyCheckpointFileLimit)
+		removed, removeErr := removePrivacyMetadata(ctx, root, candidate.Path, candidate.Digest, candidate.Size, privacyCheckpointFileLimit, candidate.Identity)
 		if removeErr != nil {
 			return result, removeErr
 		}

@@ -429,6 +429,12 @@ func (o *Owner) Handle(ctx context.Context, request ipc.Request) (any, error) {
 			return nil, c.Fail(c.InvalidArgument, "read worker envelope binding mismatch")
 		}
 		return o.Session.RunReadWorkers(ctx, request.TaskID, command)
+	case "read-worker":
+		var command agent.LLMReadWorkerCommand
+		if err := c.DecodeStrict(request.Payload, &command); err != nil {
+			return nil, err
+		}
+		return o.readWorkerControl(ctx, request.ID, request.TaskID, command)
 	case "project-memory-search":
 		var query struct {
 			Query  string `json:"query,omitempty"`

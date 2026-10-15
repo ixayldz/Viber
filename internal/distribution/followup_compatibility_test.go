@@ -57,17 +57,7 @@ func TestRollbackRespectsDurableFollowupCapabilities(t *testing.T) {
 				t.Fatal(err)
 			}
 			legacyRevision := strings.Repeat("5", 40)
-			// Existing project-memory support is present to isolate the new
-			// witness capability rather than failing the older memory gate.
-			legacyCapabilities := []string{RuntimeCapabilityProjectMemoryV1}
-			if capability == RuntimeCapabilityNativeEnginePartitionV1 {
-				legacyCapabilities = []string{}
-				for _, declared := range supportedRuntimeCapabilities {
-					if declared != capability {
-						legacyCapabilities = append(legacyCapabilities, declared)
-					}
-				}
-			}
+			legacyCapabilities := fixtureCapabilitiesWithout(capability)
 			legacy, err := ParseArchive(fixtureArchiveCapabilities(t, legacyRevision, legacyCapabilities, nil), "zip", legacyRevision, nativePlatform(t))
 			if err != nil {
 				t.Fatal(err)

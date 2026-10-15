@@ -17,6 +17,7 @@ import (
 	"github.com/ixayldz/Viber/internal/artifact"
 	c "github.com/ixayldz/Viber/internal/contracts"
 	"github.com/ixayldz/Viber/internal/fileguard"
+	"github.com/ixayldz/Viber/internal/resource"
 	"github.com/ixayldz/Viber/internal/store"
 )
 
@@ -623,7 +624,11 @@ func appendPrivacy(root *os.Root, view privacyView, record privacyRecord) error 
 	if err = admitPrivacyDisk(root, int64(len(raw))*2, control); err != nil {
 		return err
 	}
-	return fileguard.Publish(root, filepath.Join("records", fmt.Sprintf("%010d.json", record.Sequence)), raw)
+	class := resource.Payload
+	if record.Type == "DELETE_INTENT" {
+		class = resource.Control
+	}
+	return publishPrivacyMetadata(context.Background(), root, filepath.Join("records", fmt.Sprintf("%010d.json", record.Sequence)), raw, class)
 }
 func validateManagedCopy(copy ManagedCopy) error {
 	if (copy.Kind != "BACKUP" && copy.Kind != "RESTORE_STAGE" && copy.Kind != "EXPORT" && copy.Kind != "TRAINING_EXPORT" && copy.Kind != "DELIVERY_PREVIEW" && copy.Kind != "SUPPORT" && copy.Kind != "EVALUATION_REPORT") || !filepath.IsAbs(copy.Directory) || len(copy.Directory) > 2048 || !c.ValidDigest(copy.PhysicalRoot) || len(copy.Files) > backupMaxFiles+1 || len(copy.Tasks) > 4096 {

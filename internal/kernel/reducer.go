@@ -390,7 +390,9 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 				digest, digestErr := g.BudgetAllocation.Digest()
 				allocationValid = digestErr == nil && c.ValidDigest(g.BudgetAllocationDigest) && digest == g.BudgetAllocationDigest
 			}
-			if event.Actor != "user" || g == nil || !allocationValid || g.ID == "" || len(g.ID) > 128 || g.ID != event.ID || !nonterminal(next.Execution) && next.Execution != c.Terminated || next.Deletion != nil || !c.ValidDigest(g.Digest) || g.Bytes < 1 || g.Bytes > 64<<10 || g.ParentTaskSeq < 1 || g.ParentTaskSeq > next.TaskSeq || !c.ValidDigest(g.ParentDocumentDigest) || g.ParentDocumentDigest != next.DocumentDigest || !c.ValidDigest(g.SourceSnapshotDigest) || g.SourceSnapshotDigest != next.BaselineDigest || g.ChildTaskID == "" || len(g.ChildTaskID) > 128 || g.ChildTaskID == next.TaskID || g.ActivationCommandID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || len(next.GoalQueue) >= 64 {
+			sourceMatches := g != nil && (g.Role == "" && g.SourceSnapshotDigest == next.BaselineDigest || c.ValidReadWorkerRole(g.Role) && g.SourceSnapshotDigest == next.CandidateDigest)
+			workerLeaseMatches := g != nil && (g.Role == "" && g.ReadWorkerLease == (c.ReadWorkerLease{}) || c.ValidReadWorkerRole(g.Role) && g.ReadWorkerLease.Validate() == nil && g.ReadWorkerLease.ParentTask == event.TaskID && g.ReadWorkerLease.ParentTaskSeq == g.ParentTaskSeq && g.ReadWorkerLease.ParentDocumentDigest == g.ParentDocumentDigest && g.ReadWorkerLease.ParentCandidateDigest == g.SourceSnapshotDigest && g.ReadWorkerLease.ChildTaskID == g.ChildTaskID && g.ReadWorkerLease.Role == g.Role && g.ReadWorkerLease.SpecVersion == next.SpecVersion && g.ReadWorkerLease.PolicyEpoch == next.PolicyEpoch && g.ReadWorkerLease.KernelGeneration == event.KernelGeneration && g.ReadWorkerLease.OutputBudget == g.BudgetAllocation.MaxOutputTokens)
+			if event.Actor != "user" || g == nil || !allocationValid || g.ID == "" || len(g.ID) > 128 || g.ID != event.ID || !nonterminal(next.Execution) && next.Execution != c.Terminated || next.Deletion != nil || !c.ValidDigest(g.Digest) || g.Bytes < 1 || g.Bytes > 64<<10 || g.ParentTaskSeq < 1 || g.ParentTaskSeq > next.TaskSeq || !c.ValidDigest(g.ParentDocumentDigest) || g.ParentDocumentDigest != next.DocumentDigest || !c.ValidDigest(g.SourceSnapshotDigest) || !sourceMatches || !workerLeaseMatches || g.Role != "" && !c.ValidReadWorkerRole(g.Role) || g.ChildTaskID == "" || len(g.ChildTaskID) > 128 || g.ChildTaskID == next.TaskID || g.ActivationCommandID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || len(next.GoalQueue) >= 64 {
 				return next, c.Fail(c.InvalidArgument, "invalid durable goal schedule binding")
 			}
 			if legacyAllocation && next.WorkBudget != nil {
@@ -406,7 +408,7 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 					return next, c.Fail(c.CommandIDConflict, "goal or child task ID already scheduled")
 				}
 			}
-			next.GoalQueue = append(next.GoalQueue, c.GoalSchedule{ID: g.ID, Digest: g.Digest, BudgetAllocation: g.BudgetAllocation, BudgetAllocationDigest: g.BudgetAllocationDigest, Bytes: g.Bytes, ParentTaskSeq: g.ParentTaskSeq, ParentDocumentDigest: g.ParentDocumentDigest, SourceSnapshotDigest: g.SourceSnapshotDigest, ChildTaskID: g.ChildTaskID, Status: "QUEUED"})
+			next.GoalQueue = append(next.GoalQueue, c.GoalSchedule{ID: g.ID, Digest: g.Digest, BudgetAllocation: g.BudgetAllocation, BudgetAllocationDigest: g.BudgetAllocationDigest, Bytes: g.Bytes, ParentTaskSeq: g.ParentTaskSeq, ParentDocumentDigest: g.ParentDocumentDigest, SourceSnapshotDigest: g.SourceSnapshotDigest, ChildTaskID: g.ChildTaskID, Role: g.Role, ReadWorkerLease: g.ReadWorkerLease, Status: "QUEUED"})
 		case "GoalActivationIntent":
 			g := p.Goal
 			if event.Actor != "user" || g == nil || g.BudgetAllocation != (c.BudgetAllocation{}) || g.BudgetAllocationDigest != "" || g.ID == "" || len(g.ID) > 128 || g.ActivationCommandID != event.ID || len(event.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || g.ChildTaskID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || next.Deletion != nil {
@@ -453,13 +455,32 @@ func Reduce(state *c.TaskState, event c.Event, p c.EventPayload) (c.TaskState, e
 			}
 		case "GoalCancelled":
 			g := p.Goal
-			if event.Actor != "user" || g == nil || g.BudgetAllocation != (c.BudgetAllocation{}) || g.BudgetAllocationDigest != "" || g.ID == "" || len(g.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || g.ChildTaskID != "" || g.ActivationCommandID != "" || g.ChildTaskSeq != 0 || g.ChildDocumentDigest != "" || !c.ValidDigest(g.Reason) || next.Deletion != nil {
+			activeWorkerCancellation := g != nil && c.ValidReadWorkerRole(g.Role)
+			workerReceiptValid := g != nil && g.ChildTaskID != "" && g.ActivationCommandID != "" && (g.ChildTaskSeq == 0 && g.ChildDocumentDigest == "" || g.ChildTaskSeq >= 1 && c.ValidDigest(g.ChildDocumentDigest))
+			if event.Actor != "user" || g == nil || g.BudgetAllocation != (c.BudgetAllocation{}) || g.BudgetAllocationDigest != "" || g.ID == "" || len(g.ID) > 128 || g.Digest != "" || g.Bytes != 0 || g.ParentTaskSeq != 0 || g.ParentDocumentDigest != "" || g.SourceSnapshotDigest != "" || !activeWorkerCancellation && g.Role != "" || !activeWorkerCancellation && g.ChildTaskID != "" || !activeWorkerCancellation && g.ActivationCommandID != "" || !activeWorkerCancellation && g.ChildTaskSeq != 0 || !activeWorkerCancellation && g.ChildDocumentDigest != "" || activeWorkerCancellation && !workerReceiptValid || !c.ValidDigest(g.Reason) || next.Deletion != nil {
 				return next, c.Fail(c.InvalidArgument, "invalid goal cancellation")
 			}
 			found := false
 			for i := range next.GoalQueue {
 				if next.GoalQueue[i].ID != g.ID {
 					continue
+				}
+				if activeWorkerCancellation {
+					item := &next.GoalQueue[i]
+					if item.Role != g.Role || item.ChildTaskID != g.ChildTaskID || item.ActivationCommandID != g.ActivationCommandID || item.ChildTaskSeq != g.ChildTaskSeq || item.ChildDocumentDigest != g.ChildDocumentDigest || item.Status != "ACTIVATING" && item.Status != "ACTIVATED" && item.Status != "UNKNOWN" {
+						return next, c.Fail(c.Conflict, "read-worker cancellation no longer matches its durable child")
+					}
+					// Once a worker activation intent exists, the parent cannot
+					// prove that no child admission happened: CreateGoalTask may
+					// have durably created a Ready child before the activation
+					// receipt was committed. Retain every activated cancellation
+					// under UNKNOWN, including a receipt-free ACTIVATING intent,
+					// and preserve its immutable allocation and receipt fields.
+					// Only the ordinary QUEUED branch below can become refundable
+					// CANCELLED.
+					item.Status = "UNKNOWN"
+					found = true
+					break
 				}
 				if next.GoalQueue[i].Status != "QUEUED" {
 					return next, c.Fail(c.Conflict, "only a queued goal without an activation intent can be cancelled")

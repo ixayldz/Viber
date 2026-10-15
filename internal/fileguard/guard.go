@@ -5,6 +5,7 @@ package fileguard
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,6 +85,40 @@ func Publish(root *os.Root, name string, raw []byte) error {
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
+	if err != nil {
+		return err
+	}
+	if err = publishName(root, temp, name); err != nil {
+		return err
+	}
+	return SyncParents(root, filepath.Dir(name))
+}
+
+// PublishExisting atomically publishes a caller-created, already-synced
+// private temporary file without replacing an existing artifact. The caller
+// owns the durable reservation and the exact temporary name so a crash can be
+// recovered against that same inode.
+func PublishExisting(root *os.Root, temp, name string) error {
+	if root == nil || temp == "" || name == "" || filepath.IsAbs(temp) || filepath.IsAbs(name) || strings.ContainsRune(temp+name, 0) {
+		return c.Fail(c.InvalidArgument, "safe rooted publication paths required")
+	}
+	temp, name = filepath.FromSlash(temp), filepath.FromSlash(name)
+	if filepath.Clean(temp) != temp || filepath.Clean(name) != name || temp == "." || name == "." || temp == ".." || name == ".." || strings.HasPrefix(temp, ".."+string(filepath.Separator)) || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return c.Fail(c.PolicyDenied, "publication paths escape their rooted directory")
+	}
+	info, err := root.Lstat(temp)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return c.Fail(c.PolicyDenied, "publication temporary must be a regular file")
+	}
+	f, err := root.Open(temp)
+	if err != nil {
+		return err
+	}
+	err = SingleLink(f)
+	err = errors.Join(err, f.Close())
 	if err != nil {
 		return err
 	}

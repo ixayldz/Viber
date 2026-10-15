@@ -20,6 +20,19 @@ type testGenesis struct {
 	PhysicalRoot  string `json:"physical_root"`
 }
 
+// SQLite checkpoint/reopen changes observed DB/WAL/SHM allocation without
+// changing a durable payload reservation. Check the fixed allocator envelope
+// separately, then compare every accounting field without its volatile usage.
+func capacityAccounting(t *testing.T, value Capacity) Capacity {
+	t.Helper()
+	if value.SelfOverheadBytes == 0 || value.SelfOverheadUsedBytes == 0 || value.SelfOverheadUsedBytes > value.SelfOverheadBytes || value.SelfOverheadUsedEntries == 0 || value.SelfOverheadUsedEntries > value.SelfOverheadEntries {
+		t.Fatalf("allocator measurement exceeded or lost its fixed envelope: %+v", value)
+	}
+	value.SelfOverheadUsedBytes = 0
+	value.SelfOverheadUsedEntries = 0
+	return value
+}
+
 func testAuthority(t *testing.T) (Authority, string) {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "authority")

@@ -240,6 +240,20 @@ func (s *Store) Migrate(ctx context.Context, intent MigrationIntent) (MigrationR
 		if available < required {
 			return receipt, c.Fail(c.UnsupportedCapability, "insufficient migration space; work stopped before schema writes")
 		}
+		// Schema-1 stores do not yet have a shared ledger or mutable-SQLite
+		// receipt. Still run the same measured admission hook before publishing
+		// the intent or issuing DDL so the local control reserve and any
+		// already-attached quota broker see the real page/WAL upper bound. The
+		// hook has a bounded per-call profile; the full migration upper remains
+		// covered by the measured free-space check above.
+		migrationBytes := required
+		if migrationBytes > uint64(64<<20) {
+			migrationBytes = uint64(64 << 20)
+		}
+		requestDigest := c.HashBytes([]byte("store-migration-admission-v1\x00" + intent.ID))
+		if err = s.admitSQLiteMutation(ctx, int64(migrationBytes), true, requestDigest, uint64(pages*pageSize)); err != nil {
+			return receipt, err
+		}
 		if pending == nil {
 			raw, err := c.CanonicalV1(intent)
 			if err != nil {

@@ -20,16 +20,20 @@ import (
 
 const (
 	RuntimeCapabilityGCReceiptCompactionV1           = "gc_completed_receipt_compaction_v1"
+	RuntimeCapabilityLLMReadWorkersV1                = "llm_read_workers_v1"
 	RuntimeCapabilityPhysicalQuotaHandoffV1          = "physical_quota_handoff_v1"
+	RuntimeCapabilityPrivacyMetadataV1               = "physical_quota_metadata_v1"
 	RuntimeCapabilityNativeEnginePartitionV1         = "physical_quota_native_engine_partition_v1"
 	RuntimeCapabilityPhysicalQuotaPartitionV1        = "physical_quota_owner_partition_v1"
 	RuntimeCapabilityPhysicalQuotaIntentV1           = "physical_quota_retry_intent_v1"
 	RuntimeCapabilityPhysicalQuotaRestorePartitionV1 = "physical_quota_restore_partition_v1"
 	RuntimeCapabilityPRDTaskContractV1               = "prd_task_contract_v1"
+	RuntimeCapabilityPrivacyBootstrapV1              = "privacy_bootstrap_reservation_v1"
 	RuntimeCapabilityProjectMemoryConflictMetadataV1 = "project_memory_conflict_metadata_v1"
 	RuntimeCapabilityProjectMemoryCopyV1             = "project_memory_copy_v1"
 	RuntimeCapabilityProjectMemoryV1                 = "project_memory_v1"
 	RuntimeCapabilityReadWorkersV1                   = "read_workers_v1"
+	RuntimeCapabilitySkillMarkdownV1                 = "skill_markdown_v1"
 	maxRuntimeCapabilityStates                       = 1 << 16
 	maxRuntimeCapabilityDocuments                    = 1 << 16
 	maxRuntimeCapabilityBytes                        = 512 << 20
@@ -37,16 +41,20 @@ const (
 
 var supportedRuntimeCapabilities = []string{
 	RuntimeCapabilityGCReceiptCompactionV1,
+	RuntimeCapabilityLLMReadWorkersV1,
 	RuntimeCapabilityPhysicalQuotaHandoffV1,
+	RuntimeCapabilityPrivacyMetadataV1,
 	RuntimeCapabilityNativeEnginePartitionV1,
 	RuntimeCapabilityPhysicalQuotaPartitionV1,
 	RuntimeCapabilityPhysicalQuotaRestorePartitionV1,
 	RuntimeCapabilityPhysicalQuotaIntentV1,
 	RuntimeCapabilityPRDTaskContractV1,
+	RuntimeCapabilityPrivacyBootstrapV1,
 	RuntimeCapabilityProjectMemoryConflictMetadataV1,
 	RuntimeCapabilityProjectMemoryCopyV1,
 	RuntimeCapabilityProjectMemoryV1,
 	RuntimeCapabilityReadWorkersV1,
+	RuntimeCapabilitySkillMarkdownV1,
 }
 
 func validateRuntimeCapabilities(capabilities []string) error {
@@ -225,11 +233,18 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 }
 
 func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used map[string]bool) error {
+	bootstrap, err := owner.PrivacyBootstrap(ctx)
+	if err != nil {
+		return err
+	}
+	if bootstrap != nil {
+		used[RuntimeCapabilityPrivacyBootstrapV1] = true
+	}
 	pin, err := owner.PhysicalQuotaBinding(ctx)
 	if err != nil || pin == nil {
 		return err
 	}
-	ledger, err := resource.OpenPinnedExisting(resource.Authority{ID: pin.AuthorityID, Directory: pin.Directory, PhysicalRoot: pin.PhysicalRoot}, pin.LedgerID)
+	ledger, err := resource.OpenPinnedExistingReadOnly(resource.Authority{ID: pin.AuthorityID, Directory: pin.Directory, PhysicalRoot: pin.PhysicalRoot}, pin.LedgerID)
 	if err != nil {
 		return err
 	}
@@ -242,6 +257,9 @@ func applyQuotaRuntimeCapabilities(ctx context.Context, owner *store.Store, used
 	}
 	if usage.ReservationIntents {
 		used[RuntimeCapabilityPhysicalQuotaIntentV1] = true
+	}
+	if usage.PrivacyMetadata || usage.AllocatorSelfOverhead {
+		used[RuntimeCapabilityPrivacyMetadataV1] = true
 	}
 	if usage.StageHandoffs {
 		used[RuntimeCapabilityPhysicalQuotaHandoffV1] = true
@@ -273,6 +291,15 @@ func applyTaskRuntimeCapabilities(state c.TaskState, used map[string]bool) error
 	}
 	if len(state.ReadWorkerAdmissions) > 0 {
 		used[RuntimeCapabilityReadWorkersV1] = true
+	}
+	for _, goal := range state.GoalQueue {
+		if goal.Role == "" && goal.ReadWorkerLease == (c.ReadWorkerLease{}) {
+			continue
+		}
+		if !c.ValidReadWorkerRole(goal.Role) || goal.ReadWorkerLease.Validate() != nil || goal.ReadWorkerLease.Role != goal.Role {
+			return c.Fail(c.StoreIntegrityError, "registered task has invalid LLM read-worker capability binding")
+		}
+		used[RuntimeCapabilityLLMReadWorkersV1] = true
 	}
 	return nil
 }
@@ -394,6 +421,33 @@ func scanStoreProjectMemory(ctx context.Context, directory string, states map[st
 		if coverage, present := document["prd_coverage"]; present && !bytes.Equal(bytes.TrimSpace(coverage), []byte("null")) {
 			for _, features := range featureMaps {
 				features[RuntimeCapabilityPRDTaskContractV1] = true
+			}
+		}
+		if marker, present := document["skill_markdown_used"]; present {
+			if !bytes.Equal(bytes.TrimSpace(marker), []byte("true")) && !bytes.Equal(bytes.TrimSpace(marker), []byte("false")) {
+				return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "imported skill runtime marker is invalid")
+			}
+			if bytes.Equal(bytes.TrimSpace(marker), []byte("true")) {
+				for _, features := range featureMaps {
+					features[RuntimeCapabilitySkillMarkdownV1] = true
+				}
+			}
+		}
+		if originRaw, present := document["goal_origin"]; present && !bytes.Equal(bytes.TrimSpace(originRaw), []byte("null")) {
+			var origin struct {
+				Role  string            `json:"role"`
+				Lease c.ReadWorkerLease `json:"read_worker_lease"`
+			}
+			if json.Unmarshal(originRaw, &origin) != nil {
+				return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "scheduled child runtime marker is invalid")
+			}
+			if origin.Role != "" || origin.Lease != (c.ReadWorkerLease{}) {
+				if !c.ValidReadWorkerRole(origin.Role) || origin.Lease.Validate() != nil || origin.Lease.Role != origin.Role {
+					return false, projectMemoryCopy, scanned, c.Fail(c.StoreIntegrityError, "LLM read-worker runtime marker is invalid")
+				}
+				for _, features := range featureMaps {
+					features[RuntimeCapabilityLLMReadWorkersV1] = true
+				}
 			}
 		}
 		refsRaw, exists := document["project_memory_refs"]

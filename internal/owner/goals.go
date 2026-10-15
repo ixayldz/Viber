@@ -92,6 +92,14 @@ func (o *Owner) reconcileGoal(ctx context.Context, parent string, parentState c.
 	if _, _, _, admitted, receiptErr := o.Session.Journal.CommandReceipt(ctx, id+"-admitted"); receiptErr != nil || admitted {
 		return
 	}
+	if c.ValidReadWorkerRole(item.Role) {
+		// A stale/expired parent lease is an admission failure. Keep the
+		// immutable child result inspectable, but never start a new model/tool
+		// turn without an explicit fresh worker request.
+		if err := o.Session.ReadWorkerAdmission(ctx, child.TaskID); err != nil {
+			return
+		}
+	}
 	_, _ = o.StartDetached(ctx, child.TaskID, id)
 }
 

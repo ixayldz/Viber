@@ -186,6 +186,55 @@ def main():
                 count += 1
             else:
                 raise AssertionError("invalid installation proof admitted: " + name)
+        managed = {"schema_version": 1, "source_revision": REV, "platform": "linux/amd64",
+                   "status": "PASS", "archive_sha256": "d" * 64, "actual_oidc_verification": True,
+                   "external_store_preserved": True, "owned_uninstall": True, "release_ready": False,
+                   "installed_first_task": "OFFLINE_FIXTURE_UNVERIFIED_EXIT_2",
+                   "scope": "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; DURABLE_PROTOCOL_DOWNGRADE_REFUSAL; NO_SIGNING_CLAIM",
+                   "cross_version": {"baseline_revision": "b" * 40, "baseline_archive_sha256": "e" * 64,
+                                     "actual_oidc_verification": True, "status": "PASS",
+                                     "existing_task_projection_preserved": True,
+                                     "upgrade_rollback_upgrade": True,
+                                     "rollback_refused_after_protocol_activation": True,
+                                     "rollback_refusal_code": "UNSUPPORTED_CAPABILITY",
+                                     "missing_capabilities": ["physical_quota_metadata_v1"],
+                                     "active_revision_after_refusal": REV,
+                                     "active_selection_preserved_after_refusal": True,
+                                     "active_manifest_digest_after_refusal": "f" * 64,
+                                     "active_archive_digest_after_refusal": "a" * 64,
+                                     "new_binary_projection_preserved": True,
+                                     "scope": "COMPATIBLE_SELECTION_THEN_DURABLE_PROTOCOL_DOWNGRADE_REFUSAL"}}
+        release.validate_managed_install(managed, "linux/amd64", REV, "d" * 64)
+        old_managed = copy.deepcopy(managed)
+        old_managed["scope"] = "EXACT_SOURCE_INSTALL_REINSTALL_CROSS_VERSION_ROLLBACK_UNINSTALL; NO_SIGNING_CLAIM"
+        old_managed["cross_version"] = {"baseline_revision": "b" * 40, "baseline_archive_sha256": "e" * 64,
+                                         "actual_oidc_verification": True, "status": "PASS",
+                                         "existing_task_projection_preserved": True,
+                                         "upgrade_rollback_upgrade": True,
+                                         "scope": "COMPATIBLE_FORMAT_NO_IMPLICIT_STORE_MIGRATION"}
+        release.validate_managed_install(old_managed, "linux/amd64", REV, "d" * 64)
+        for name, mutate in [
+            ("missing refusal marker", lambda p: p["cross_version"].pop("rollback_refused_after_protocol_activation")),
+            ("wrong refusal code", lambda p: p["cross_version"].update(rollback_refusal_code="POLICY_DENIED")),
+            ("changed active revision", lambda p: p["cross_version"].update(active_revision_after_refusal="c" * 40)),
+            ("changed active selection", lambda p: p["cross_version"].update(active_selection_preserved_after_refusal=False)),
+            ("missing active manifest digest", lambda p: p["cross_version"].pop("active_manifest_digest_after_refusal")),
+            ("changed active archive digest", lambda p: p["cross_version"].update(active_archive_digest_after_refusal="not-a-digest")),
+            ("projection changed after refusal", lambda p: p["cross_version"].update(new_binary_projection_preserved=False)),
+            ("missing capability field", lambda p: p["cross_version"].pop("missing_capabilities")),
+            ("unknown capability", lambda p: p["cross_version"].update(missing_capabilities=["physical_quota_metadata_v1", "foreign_protocol_v1"])),
+            ("unsorted capability set", lambda p: p["cross_version"].update(missing_capabilities=["privacy_bootstrap_reservation_v1", "physical_quota_metadata_v1"])),
+            ("metadata capability omitted", lambda p: p["cross_version"].update(missing_capabilities=["privacy_bootstrap_reservation_v1"])),
+            ("wrong durable scope", lambda p: p["cross_version"].update(scope="COMPATIBLE_FORMAT_NO_IMPLICIT_STORE_MIGRATION")),
+        ]:
+            changed = copy.deepcopy(managed)
+            mutate(changed)
+            try:
+                release.validate_managed_install(changed, "linux/amd64", REV, "d" * 64)
+            except ValueError:
+                count += 1
+            else:
+                raise AssertionError("invalid durable protocol proof admitted: " + name)
         original = release.api, release.api_body
         try:
             for failure in (None, "foreign SHA", "annotated tag", "missing object"):

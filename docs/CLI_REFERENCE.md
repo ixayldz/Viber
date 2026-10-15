@@ -352,6 +352,25 @@ Yeni store'un ilk görevi, değişmez ortak input/output token limitlerini kayde
 
 ## Model ve API anahtarı durumu
 
+### Kaynak bağlı model incelemesi
+
+Yeni kaynak sürümünde `viber read-worker explore TASK --store STORE --prompt "SORU"`
+ve `viber read-worker review TASK --store STORE --prompt "SORU"` parent candidate'ın
+değişmez yakalamasında `ANALYSIS` child oluşturur. TUI karşılıkları `/explore SORU`,
+`/review SORU`, `/worker result` ve `/worker cancel GOAL_ID` şeklindedir.
+Durum/sonuç için CLI `read-worker status|result TASK --store STORE --goal GOAL_ID`;
+iptal için `read-worker cancel TASK --store STORE --goal GOAL_ID` kullanılır.
+
+Child parent'ın provider/model bağlantısını ve mevcut çalışma bütçesinden ayrılan
+sabit tranche'ı kullanır. ChatGPT veya yerel Ollama parent'ı API anahtarı istemez;
+API provider parent'ı kendi credential'ını ister. Kaynak, parent scope/policy,
+generation, context profile ve monotonic TTL lease'e bağlıdır. Child candidate
+yazamaz, parent plan/check/verification sonucunu değiştiremez. Sonuç
+`MODEL_AUTHORED_UNREVIEWED_ADVISORY` olarak gösterilir; kaynak veya lease değişirse
+stale olarak kalır. Bu yüzey tam paralel multi-writer değildir; owner bir model
+invocation'ını aynı anda yürütür. Exact kaynak kabul sonucu [doğrulama kaydında](VALIDATION.md)
+ayrıca tutulur.
+
 | Profil | Anahtar | Bugün kullanıcı akışı |
 |---|---|---|
 | Offline fixture | Gerekmez | Çalışır; deterministik, gerçek inference yok |

@@ -139,7 +139,7 @@ func TestHandoffCrashAfterRenameReopensChargedAndCommitsExactRetry(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capacityAfterRetry != capacity {
+	if capacityAccounting(t, capacityAfterRetry) != capacityAccounting(t, capacity) {
 		t.Fatalf("exact retry changed quota accounting: before=%+v after=%+v", capacity, capacityAfterRetry)
 	}
 }

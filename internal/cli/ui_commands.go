@@ -38,6 +38,8 @@ func (u uiSession) call(ctx context.Context, action string, payload any) (json.R
 		id = value.CommandID
 	case agent.GoalCommand:
 		id = value.CommandID
+	case agent.LLMReadWorkerCommand:
+		id = value.CommandID
 	case agent.ReadWorkersRequest:
 		id = value.OperationID
 	case agent.ContinuityCommand:
@@ -174,6 +176,8 @@ func (u uiSession) command(ctx context.Context, text string) (string, bool, erro
 		return string(raw), false, err
 	case "/memory":
 		return u.memoryCommand(ctx, arg)
+	case "/explore", "/review", "/worker":
+		return u.llmReadWorkerCommand(ctx, command, arg)
 	case "/workers":
 		view, err := u.status(ctx)
 		if err != nil {

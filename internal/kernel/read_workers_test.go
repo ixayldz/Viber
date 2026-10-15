@@ -131,3 +131,72 @@ func TestReadWorkersAdmissionRebindsOnlyQuiescentOwnerGeneration(t *testing.T) {
 		}
 	}
 }
+
+func readWorkerLeaseForGoalTest(state c.TaskState, allocation c.BudgetAllocation, role, child string) c.ReadWorkerLease {
+	lease := c.ReadWorkerLease{
+		SchemaVersion: c.ReadWorkerLeaseSchemaVersion, ParentTask: state.TaskID,
+		ParentTaskSeq: state.TaskSeq, ParentDocumentDigest: state.DocumentDigest,
+		ParentCandidateDigest: state.CandidateDigest, ChildTaskID: child, Role: role,
+		SpecVersion: state.SpecVersion, PolicyEpoch: state.PolicyEpoch,
+		KernelGeneration: state.KernelGeneration, ContextProfileDigest: c.HashBytes([]byte("worker-profile")),
+		OutputBudget: allocation.MaxOutputTokens, ClockDomain: c.HashBytes([]byte("worker-clock"))[:32],
+		IssuedMillis: 0, DeadlineMillis: 1000,
+	}
+	return lease
+}
+
+func TestReadWorkerGoalQueueBindsParentAuthorityWhenParentVersionIsRevised(t *testing.T) {
+	state := readWorkerTestTask(t)
+	state.SpecVersion = 2
+	state.PolicyEpoch = 2
+	allocation := c.BudgetAllocation{MaxSteps: 4, MaxToolCalls: 4, MaxInputTokens: 4096, MaxOutputTokens: 512, MaxActiveMillis: 1000}
+	lease := readWorkerLeaseForGoalTest(state, allocation, c.ReadWorkerRoleExplore, "worker-child-versioned")
+	if err := lease.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	allocationDigest, _ := allocation.Digest()
+	reason := c.HashBytes([]byte("queue-parent-version"))
+	next, err := Reduce(&state, c.Event{SchemaVersion: c.SchemaVersion, ID: "worker-goal-versioned", TaskID: state.TaskID, TaskSeq: state.TaskSeq + 1, StoreSeq: state.StoreSeq + 1, KernelGeneration: state.KernelGeneration, Actor: "user", Type: "GoalQueued"}, c.EventPayload{Goal: &c.GoalMutation{
+		ID: "worker-goal-versioned", Digest: c.HashBytes([]byte("worker-goal")), BudgetAllocation: allocation, BudgetAllocationDigest: allocationDigest,
+		Bytes: 16, ParentTaskSeq: state.TaskSeq, ParentDocumentDigest: state.DocumentDigest, SourceSnapshotDigest: state.CandidateDigest,
+		ChildTaskID: lease.ChildTaskID, Role: lease.Role, ReadWorkerLease: lease, Reason: reason,
+	}})
+	if err != nil {
+		t.Fatalf("parent version-two worker queue admission rejected: %v", err)
+	}
+	if len(next.GoalQueue) != 1 || next.GoalQueue[0].ReadWorkerLease != lease || next.GoalQueue[0].Status != "QUEUED" {
+		t.Fatalf("parent authority lease was not durably preserved: %+v", next.GoalQueue)
+	}
+}
+
+func TestReadWorkerGoalCancellationRetainsEveryActivatedIntent(t *testing.T) {
+	state := readWorkerTestTask(t)
+	allocation := c.BudgetAllocation{MaxSteps: 4, MaxToolCalls: 4, MaxInputTokens: 4096, MaxOutputTokens: 512, MaxActiveMillis: 1000}
+	allocationDigest, _ := allocation.Digest()
+	lease := readWorkerLeaseForGoalTest(state, allocation, c.ReadWorkerRoleReview, "worker-child-cancel")
+	state.GoalQueue = []c.GoalSchedule{{ID: "worker-goal-cancel", Digest: c.HashBytes([]byte("worker-goal-cancel")), BudgetAllocation: allocation, BudgetAllocationDigest: allocationDigest, Bytes: 8, ParentTaskSeq: state.TaskSeq, ParentDocumentDigest: state.DocumentDigest, SourceSnapshotDigest: state.CandidateDigest, ChildTaskID: lease.ChildTaskID, Role: lease.Role, ReadWorkerLease: lease, Status: "ACTIVATING", ActivationCommandID: "worker-activation"}}
+	reason := c.HashBytes([]byte("cancel-before-child"))
+	preState := state
+	preState.GoalQueue = append([]c.GoalSchedule(nil), state.GoalQueue...)
+	preChild, err := Reduce(&preState, c.Event{SchemaVersion: c.SchemaVersion, ID: "worker-cancel-pre-child", TaskID: preState.TaskID, TaskSeq: preState.TaskSeq + 1, StoreSeq: preState.StoreSeq + 1, KernelGeneration: preState.KernelGeneration, Actor: "user", Type: "GoalCancelled"}, c.EventPayload{Goal: &c.GoalMutation{ID: preState.GoalQueue[0].ID, Role: lease.Role, ChildTaskID: lease.ChildTaskID, ActivationCommandID: preState.GoalQueue[0].ActivationCommandID, Reason: reason}})
+	if err != nil {
+		t.Fatalf("pre-child cancellation rejected: %v", err)
+	}
+	if preChild.GoalQueue[0].Status != "UNKNOWN" || preChild.GoalQueue[0].ActivationCommandID == "" || preChild.GoalQueue[0].ChildTaskSeq != 0 || preChild.GoalQueue[0].ChildDocumentDigest != "" {
+		t.Fatalf("receipt-free activation was incorrectly refunded: %+v", preChild.GoalQueue[0])
+	}
+
+	state.TaskSeq++
+	state.StoreSeq++
+	state.GoalQueue[0].Status = "ACTIVATED"
+	state.GoalQueue[0].ChildTaskSeq = 5
+	state.GoalQueue[0].ChildDocumentDigest = c.HashBytes([]byte("worker-child-document"))
+	active, err := Reduce(&state, c.Event{SchemaVersion: c.SchemaVersion, ID: "worker-cancel-active", TaskID: state.TaskID, TaskSeq: state.TaskSeq + 1, StoreSeq: state.StoreSeq + 1, KernelGeneration: state.KernelGeneration, Actor: "user", Type: "GoalCancelled"}, c.EventPayload{Goal: &c.GoalMutation{ID: state.GoalQueue[0].ID, Role: lease.Role, ChildTaskID: lease.ChildTaskID, ActivationCommandID: state.GoalQueue[0].ActivationCommandID, ChildTaskSeq: state.GoalQueue[0].ChildTaskSeq, ChildDocumentDigest: state.GoalQueue[0].ChildDocumentDigest, Reason: reason}})
+	if err != nil {
+		t.Fatalf("active cancellation rejected: %v", err)
+	}
+	item := active.GoalQueue[0]
+	if item.Status != "UNKNOWN" || item.ActivationCommandID == "" || item.ChildTaskSeq != 5 || item.ChildDocumentDigest == "" {
+		t.Fatalf("active cancellation refunded or discarded the child receipt: %+v", item)
+	}
+}

@@ -173,7 +173,7 @@ func (s *Session) validateTokenReceipts(state c.TaskState, doc Document) error {
 			usage = model.Usage{Known: true, Input: r.Used.Input, Output: r.Used.Output}
 		} else if r.UsageSource == "KERNEL_NO_DISPATCH" {
 			var proof model.NoDispatchReceipt
-			if receiptDoc.Runtime == nil || c.DecodeStrict(raw, &proof) != nil || proof.SchemaVersion != 1 || proof.Decision != "KERNEL_PREFLIGHT_DECLINED" || proof.RequestID != r.ID || proof.RequestDigest != r.RequestDigest || proof.ProfileDigest != r.ProfileDigest || proof.Provider != provider || proof.Model != request.Model || r.Used != (c.TokenLimits{}) {
+			if c.DecodeStrict(raw, &proof) != nil || proof.SchemaVersion != 1 || proof.Decision != "KERNEL_PREFLIGHT_DECLINED" || proof.RequestID != r.ID || proof.RequestDigest != r.RequestDigest || proof.ProfileDigest != r.ProfileDigest || proof.Provider != provider || proof.Model != request.Model || r.Used != (c.TokenLimits{}) {
 				return c.Fail(c.StoreIntegrityError, "kernel preflight receipt binding invalid")
 			}
 			usage = model.Usage{Known: true}

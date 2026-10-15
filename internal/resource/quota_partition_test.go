@@ -162,7 +162,7 @@ func TestOwnerPartitionCrashReopenSettlesOnceAndAllowsFreshGCReservation(t *test
 		t.Fatalf("exact partition settlement retry: %v", err)
 	}
 	retried, err := ledger.Capacity(ctx)
-	if err != nil || retried != committed {
+	if err != nil || capacityAccounting(t, retried) != capacityAccounting(t, committed) {
 		t.Fatalf("partition retry changed its exact capacity receipt: before=%+v after=%+v err=%v", committed, retried, err)
 	}
 	if err = ledger.ValidateOwnerPartition(ctx, ownerPath); err != nil {
@@ -176,7 +176,7 @@ func TestOwnerPartitionCrashReopenSettlesOnceAndAllowsFreshGCReservation(t *test
 		t.Fatalf("validate reopened evaluator owner: %v", err)
 	}
 	reopenedCapacity, err := ledger.Capacity(ctx)
-	if err != nil || reopenedCapacity != committed {
+	if err != nil || capacityAccounting(t, reopenedCapacity) != capacityAccounting(t, committed) {
 		t.Fatalf("opening the owner charged its bytes twice: before=%+v after=%+v err=%v", committed, reopenedCapacity, err)
 	}
 
@@ -207,7 +207,7 @@ func TestOwnerPartitionCrashReopenSettlesOnceAndAllowsFreshGCReservation(t *test
 		t.Fatalf("reopened owner rejected files inside the exact outstanding GC subtree: %v", err)
 	}
 	resumedCapacity, err := ledger.Capacity(ctx)
-	if err != nil || resumedCapacity != pendingCapacity {
+	if err != nil || capacityAccounting(t, resumedCapacity) != capacityAccounting(t, pendingCapacity) {
 		t.Fatalf("owner reopen released or duplicated the uncertain GC upper charge: before=%+v after=%+v err=%v", pendingCapacity, resumedCapacity, err)
 	}
 	gc = Allocation{ledger: ledger, ID: gcID, targetRoot: gcTarget}
@@ -317,7 +317,7 @@ func TestOwnerPartitionCrashReopenSettlesOnceAndAllowsFreshGCReservation(t *test
 		t.Fatalf("reopened owner rejected the exact pending-free retry state: %v", err)
 	}
 	resumedCapacity, capacityErr := ledger.Capacity(ctx)
-	if capacityErr != nil || resumedCapacity != pendingCapacity {
+	if capacityErr != nil || capacityAccounting(t, resumedCapacity) != capacityAccounting(t, pendingCapacity) {
 		t.Fatalf("pending-free reopen changed retained or UNKNOWN charge: before=%+v after=%+v err=%v", pendingCapacity, resumedCapacity, capacityErr)
 	}
 	if _, err = ledger.Reserve(ctx, Request{Writer: "agent", Family: "BAD_REPORT_OVERLAP", RequestDigest: c.HashBytes([]byte("overlaps report remainder")), TargetRoot: filepath.Join(rootPath, "unowned-report-file"), UpperBytes: 4096, UpperEntries: 1, Class: Payload}); err == nil {
@@ -457,7 +457,7 @@ func TestOwnerPartitionBindsOptionalNativeEngineFile(t *testing.T) {
 		t.Fatal("owner partition accepted a changed native engine receipt")
 	}
 	after, err := ledger.Capacity(ctx)
-	if err != nil || after != committed {
+	if err != nil || capacityAccounting(t, after) != capacityAccounting(t, committed) {
 		t.Fatalf("rejecting changed native engine bytes altered their conservative charge: before=%+v after=%+v err=%v", committed, after, err)
 	}
 }

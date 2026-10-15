@@ -89,6 +89,7 @@ type Document struct {
 	NativeCleanupAttempts []string                     `json:"native_cleanup_receipts,omitempty"`
 	GoalCoverage          *verify.ReviewedCoverage     `json:"goal_coverage,omitempty"`
 	PRDCoverage           *c.PRDCoverage               `json:"prd_coverage,omitempty"`
+	SkillMarkdownUsed     bool                         `json:"skill_markdown_used,omitempty"`
 	VerificationReport    string                       `json:"verification_report,omitempty"`
 	Config                *config.Resolved             `json:"retained_config,omitempty"`
 	ResourcePolicy        *c.ResourcePolicy            `json:"store_resource_policy,omitempty"`
@@ -221,26 +222,41 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 	if rawAuthority != nil {
 		var retainedAuthority PrivacyAuthority
 		if err = c.DecodeStrict(rawAuthority, &retainedAuthority); err == nil {
-			err = session.attachPhysicalQuota(ctx, &retainedAuthority)
+			session.privacy = &retainedAuthority
 		}
 		if err != nil {
 			session.Close()
 			return nil, err
 		}
 	}
-	if err = session.attachPrivacy(ctx); err != nil {
-		session.Close()
-		return nil, err
-	}
 	info, err := journal.SnapshotInfo(ctx)
-	if err == nil && info.SchemaVersion == 2 {
+	if err == nil && rawAuthority != nil {
+		bootstrap, bootstrapErr := journal.PrivacyBootstrap(ctx)
+		err = bootstrapErr
+		if err == nil && bootstrap != nil && bootstrap.State != "BOUND" && bootstrap.State != "RELEASED" {
+			err = session.initializePrivacyAuthority(ctx)
+		}
+	}
+	if err == nil && info.SchemaVersion == 2 && session.privacy == nil {
 		err = session.ensurePrivacy(ctx)
 	}
 	if err != nil {
 		session.Close()
 		return nil, err
 	}
+	if err = session.preparePrivacyMetadataBootstrap(ctx); err != nil {
+		session.Close()
+		return nil, err
+	}
 	if err = session.attachPhysicalQuota(ctx, session.privacy); err != nil {
+		session.Close()
+		return nil, err
+	}
+	if err = session.finishPrivacyMetadataBootstrap(ctx); err != nil {
+		session.Close()
+		return nil, err
+	}
+	if err = session.attachPrivacy(ctx); err != nil {
 		session.Close()
 		return nil, err
 	}
@@ -958,6 +974,9 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	if err != nil {
 		return state, err
 	}
+	if err = s.validateReadWorkerLease(ctx, state, doc); err != nil {
+		return state, err
+	}
 	if doc.GoalOrigin != nil && doc.GoalOrigin.hasLegacyBudget() {
 		return state, c.Fail(c.UnsupportedCapability, "legacy scheduled child is available for inspection only; its original budget was not reserved from the parent pool")
 	}
@@ -983,16 +1002,22 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		return state, err
 	}
 	var live workspace.Capture
-	if base.Snapshot.Git != nil {
-		live, err = workspace.CaptureRepository(base.Snapshot.Root, configuredCaptureLimits(doc.Config))
+	if doc.GoalOrigin != nil && c.ValidReadWorkerRole(doc.GoalOrigin.Role) {
+		// Read workers run against the archived candidate bound by their origin.
+		// A live recapture here would retarget the child after a parent edit.
+		live = base
 	} else {
-		live, err = workspace.CaptureDirectory(base.Snapshot.Root, configuredCaptureLimits(doc.Config))
-	}
-	if err != nil {
-		return state, err
-	}
-	if live.Snapshot.Digest != base.Snapshot.Digest {
-		return s.stop(ctx, state, doc, "STALE_LIVE_BASE_REQUIRES_RESCOPING", c.WaitingUser)
+		if base.Snapshot.Git != nil {
+			live, err = workspace.CaptureRepository(base.Snapshot.Root, configuredCaptureLimits(doc.Config))
+		} else {
+			live, err = workspace.CaptureDirectory(base.Snapshot.Root, configuredCaptureLimits(doc.Config))
+		}
+		if err != nil {
+			return state, err
+		}
+		if live.Snapshot.Digest != base.Snapshot.Digest {
+			return s.stop(ctx, state, doc, "STALE_LIVE_BASE_REQUIRES_RESCOPING", c.WaitingUser)
+		}
 	}
 	if state.Execution == c.Created {
 		state, err = s.transition(ctx, state, c.Scoping, "", "reconcile interrupted creation")
@@ -1041,6 +1066,9 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	started := time.Now()
 	initialActive := doc.Budget.ActiveMillis
 	for {
+		if err = s.validateReadWorkerLease(ctx, state, doc); err != nil {
+			return state, err
+		}
 		doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()
 		if ctx.Err() != nil {
 			return state, ctx.Err()
@@ -1140,6 +1168,13 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 			}
 			return state, err
 		}
+		// Fixture inference has no provider-side Authority callback. Recheck the
+		// parent-bound lease after durable model admission and immediately before
+		// dispatch so a candidate/policy change cannot grant this child a turn.
+		if leaseErr := s.validateReadWorkerLease(ctx, state, doc); leaseErr != nil {
+			doc.Budget.ActiveMillis = initialActive + time.Since(started).Milliseconds()
+			return s.settleModelNoDispatch(ctx, state, doc, request, requestDigest, "READ_WORKER_LEASE_STALE_BEFORE_DISPATCH")
+		}
 		var result model.Result
 		var callErr error
 		if client == nil {
@@ -1164,20 +1199,7 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 		}
 		var preflight *model.PreflightFailure
 		if doc.Runtime != nil && errors.As(callErr, &preflight) {
-			raw, encodeErr := c.CanonicalV1(model.NoDispatchReceipt{SchemaVersion: 1, RequestID: request.ID, RequestDigest: requestDigest, ProfileDigest: tokenProfile(doc), Provider: doc.Runtime.Provider, Model: request.Model, Decision: "KERNEL_PREFLIGHT_DECLINED"})
-			if encodeErr != nil {
-				return state, encodeErr
-			}
-			doc.LastResponseBlob, err = s.Archive.PutControlBytes(task, raw, true)
-			if err != nil {
-				return state, err
-			}
-			doc.LastNoDispatch = true
-			doc.Budget.ReservedInput, doc.Budget.ReservedOutput = 0, 0
-			doc.Pending = nil
-			controlCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			return s.stop(controlCtx, state, doc, "MODEL_PREFLIGHT_DECLINED; reconnect selected account/credential or inspect current policy", c.WaitingResource)
+			return s.settleModelNoDispatch(ctx, state, doc, request, requestDigest, "MODEL_PREFLIGHT_DECLINED; reconnect selected account/credential or inspect current policy")
 		}
 		if callErr != nil || !result.Usage.Known || result.Usage.Input < 0 || result.Usage.Output < 0 || result.Usage.Input > 1<<40 || result.Usage.Output > 1<<40 || !c.ValidDigest(doc.LastResponseBlob) {
 			doc.UnknownEffect = true
@@ -1238,10 +1260,16 @@ func (s *Session) runLocked(ctx context.Context, task string) (c.TaskState, erro
 	}
 }
 func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Document, calls []model.Call) (c.TaskState, Document, error) {
+	if err := s.validateReadWorkerLease(ctx, state, doc); err != nil {
+		return state, doc, err
+	}
 	if doc.ToolCursor < 0 || doc.ToolCursor > int64(len(calls)) || int64(len(doc.PendingReplies)) != doc.ToolCursor {
 		return state, doc, c.Fail(c.StoreIntegrityError, "tool recovery cursor/reply mismatch")
 	}
 	for n := doc.ToolCursor; n < int64(len(calls)); n++ {
+		if err := s.validateReadWorkerLease(ctx, state, doc); err != nil {
+			return state, doc, err
+		}
 		call := calls[n]
 		approvedIndex := -1
 		var extensionIntent *ExtensionIntent
@@ -1385,6 +1413,12 @@ func (s *Session) completeTools(ctx context.Context, state c.TaskState, doc Docu
 			if readErr := recordPRDRead(&doc, reply); readErr != nil {
 				toolErr = readErr
 				reply = model.Reply{CallID: call.ID, Content: readErr.Error(), IsError: true}
+			}
+		}
+		if toolErr == nil && !reply.IsError && call.Name == "skill_advice" {
+			if usageErr := recordSkillMarkdownUsage(&doc, reply); usageErr != nil {
+				toolErr = usageErr
+				reply = model.Reply{CallID: call.ID, Content: usageErr.Error(), IsError: true}
 			}
 		}
 		doc.PendingReplies = append(doc.PendingReplies, reply)
