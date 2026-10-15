@@ -239,6 +239,17 @@ Open {shell} in the extracted package directory (or `cd` there first):
 {command} version
 {command} doctor --json
 
+Start the interactive project wizard:
+{command}
+Choose ChatGPT, select your project and a PRD (or NONE), then describe your task.
+Review the context-sharing prompt; use LOGIN if the wizard asks you to sign in.
+Inside the task UI, type /help to see commands. Use /plan, /requests,
+/approve REQUEST_ID, /resume, /diff and /export to review and deliver work.
+Changes stay in the isolated candidate; your source project is preserved.
+New tasks default to 16 model turns, 64 tools and two active minutes. For a
+larger bounded task, start the wizard with:
+{command} start --max-steps 32 --max-tool-calls 128 --max-active-ms 300000
+
 To use your ChatGPT plan (no model API key/client secret required):
 {command} auth login
 {command} auth status
@@ -246,8 +257,8 @@ To use your ChatGPT plan (no model API key/client secret required):
 The browser opens the official Sign in with ChatGPT flow. Choose the workspace
 and grant plan usage. A connected identity without plan usage permission cannot
 run the model. Eligible account/model availability is controlled by OpenAI.
-ChatGPT account-to-first-task acceptance status for this public package is
-NOT_RUN; its offline smoke does not test account acceptance.
+Automated archive smoke tests use offline fixtures. Separately recorded real
+ChatGPT account/task acceptance is reported in the GitHub release notes.
 Linux needs a running Secret Service; macOS needs an accessible Keychain.
 
 Run a reviewed task against YOUR existing project, with a store outside it:
@@ -257,7 +268,7 @@ Replace the project path above with your own. Then run:
 --allow-remote permits sending selected project context to the model.
 For an approval request, open the task UI:
 {command} ui first-task --store "$store"
-Use /requests, /respond REQUEST_ID approve, and /resume as appropriate.
+Use /requests, /approve REQUEST_ID, and /resume as appropriate.
 {command} diff first-task --store "$store"
 {command} export first-task --store "$store" --output "$delivery"
 The output must be a fresh directory. Candidate changes require review; a

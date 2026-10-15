@@ -7,6 +7,7 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func Lock(root *os.Root, name string) (*os.File, error) {
@@ -51,7 +52,41 @@ func Private(root *os.Root) error {
 		return err
 	}
 	defer windows.CloseHandle(handle)
+	current, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	if privateDACLMatches(current, descriptor) {
+		return nil
+	}
 	return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// Reapplying inheritable ACEs propagates them across existing children on
+// Windows. Check the live descriptor rather than repeating that tree walk on
+// each ledger open. No cached identity or permissions authorize this path.
+func privateDACLMatches(current, expected *windows.SECURITY_DESCRIPTOR) bool {
+	if current == nil || expected == nil {
+		return false
+	}
+	control, _, err := current.Control()
+	if err != nil || control&(windows.SE_DACL_PRESENT|windows.SE_DACL_PROTECTED) != windows.SE_DACL_PRESENT|windows.SE_DACL_PROTECTED {
+		return false
+	}
+	allowedControl := windows.SECURITY_DESCRIPTOR_CONTROL(windows.SE_DACL_PRESENT | windows.SE_DACL_PROTECTED | windows.SE_DACL_AUTO_INHERITED | windows.SE_SELF_RELATIVE)
+	if control & ^allowedControl != 0 {
+		return false
+	}
+	dacl, defaulted, err := current.DACL()
+	if err != nil || dacl == nil || defaulted {
+		return false
+	}
+	actual, wanted := current.String(), expected.String()
+	actualACE, wantedACE := strings.IndexByte(actual, '('), strings.IndexByte(wanted, '(')
+	// DACL control flags such as AUTO_INHERITED can be added by Windows. The
+	// protected bit was checked above; every ACE, SID, mask and inheritance flag
+	// must still match the requested descriptor exactly and in the same order.
+	return strings.HasPrefix(actual, "D:") && strings.HasPrefix(wanted, "D:") && actualACE >= 0 && wantedACE >= 0 && actual[actualACE:] == wanted[wantedACE:]
 }
 func SingleLink(f *os.File) error {
 	var info windows.ByHandleFileInformation
