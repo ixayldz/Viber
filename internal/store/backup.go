@@ -58,6 +58,9 @@ func (s *Store) SnapshotInfo(ctx context.Context) (SnapshotInfo, error) {
 func (s *Store) SnapshotDatabase(ctx context.Context, directory string) (SnapshotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.compatibility {
+		return SnapshotInfo{}, c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
+	}
 	var allocation resource.Allocation
 	if s.physical != nil {
 		_, covered, err := s.physical.EnclosingReservation(ctx, directory)
@@ -102,6 +105,9 @@ func (s *Store) SnapshotDatabaseUpperBytes(ctx context.Context) (uint64, error) 
 func (s *Store) SnapshotDatabaseReserved(ctx context.Context, directory string, allocation resource.Allocation) (SnapshotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.compatibility {
+		return SnapshotInfo{}, c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
+	}
 	if s.physical != nil {
 		active, covered, err := s.physical.EnclosingReservation(ctx, directory)
 		if err != nil {

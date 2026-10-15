@@ -18,6 +18,9 @@ func TestPrivateRechecksLiveProtectedDACLAndRepairsChangedAccess(t *testing.T) {
 	if err = Private(root); err != nil {
 		t.Fatal(err)
 	}
+	if err = CheckPrivate(root); err != nil {
+		t.Fatal("read-only policy inspection rejected the private directory", err)
+	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +65,9 @@ func TestPrivateRechecksLiveProtectedDACLAndRepairsChangedAccess(t *testing.T) {
 	}
 	if privateDACLMatches(read(), wanted) {
 		t.Fatal("extra Everyone ACE was accepted as private")
+	}
+	if err = CheckPrivate(root); err == nil || privateDACLMatches(read(), wanted) {
+		t.Fatal("read-only inspection accepted or repaired a broad ACL", err)
 	}
 	if err = Private(root); err != nil || !privateDACLMatches(read(), wanted) {
 		t.Fatal("changed live ACL was not repaired", err)

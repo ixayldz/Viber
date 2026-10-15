@@ -99,6 +99,9 @@ func (s *Store) writableLocked() error {
 	if s.db == nil {
 		return c.Fail(c.StoreIntegrityError, "store closed")
 	}
+	if s.compatibility {
+		return c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
+	}
 	if s.readOnlyReason != "" {
 		return c.Fail(c.UnsupportedCapability, s.readOnlyReason)
 	}

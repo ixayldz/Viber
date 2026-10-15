@@ -76,7 +76,7 @@ def main(args):
     # No compiler/PATH dependency is used by the installed child. Provenance was
     # actually verified above with the caller-selected absolute GitHub CLI.
     environment = dict(portable.os.environ, PATH="")
-    run = ["package", "run", "--prefix", str(prefix), "--", "run", "Update hello.txt to the fixture greeting",
+    run = ["package", "run", "--prefix", str(prefix), "--json", "--", "run", "Update hello.txt to the fixture greeting",
            "--offline", "--fixture", str(binary_root / "examples/offline/greeting.json"), "--root", str(source.parent),
            "--store", str(stores), "--task", "greeting", "--allow-unverified", "--json"]
     result = portable.strict_json(portable.invoke(bootstrap, run, expected=2, environment=environment))
@@ -87,7 +87,7 @@ def main(args):
     # an older baseline is present, keep its child selected for this first diff:
     # invoking the current bootstrap directly would initialize the new bound
     # metadata protocol before the compatible selection round-trip is measured.
-    baseline_run = ["package", "run", "--prefix", str(prefix), "--", "diff", "greeting",
+    baseline_run = ["package", "run", "--prefix", str(prefix), "--json", "--", "diff", "greeting",
                     "--store", str(stores), "--json"]
     diff_args = baseline_run if baseline else ["diff", "greeting", "--store", str(stores), "--json"]
     diff = portable.strict_json(portable.invoke(bootstrap, diff_args, environment=environment))
@@ -108,7 +108,7 @@ def main(args):
         selected = portable.strict_json(portable.invoke(bootstrap, ["package", "status", "--prefix", str(prefix), "--json"]))
         if selected.get("active", {}).get("revision") != revision:
             portable.fail("cross-version upgrade selection mismatch")
-        current_run = portable.strict_json(portable.invoke(bootstrap, ["package", "run", "--prefix", str(prefix), "--",
+        current_run = portable.strict_json(portable.invoke(bootstrap, ["package", "run", "--prefix", str(prefix), "--json", "--",
                     "diff", "greeting", "--store", str(stores), "--json"], environment=environment))
         if current_run != diff or source.read_bytes() != before:
             portable.fail("new binary changed the existing task projection or source")
@@ -127,7 +127,7 @@ def main(args):
         if (not isinstance(manifest_digest, str) or not portable.DIGEST.fullmatch(manifest_digest)
                 or not isinstance(archive_digest, str) or not portable.DIGEST.fullmatch(archive_digest)):
             portable.fail("protocol downgrade status omitted exact active selection identities")
-        after_rejection = portable.strict_json(portable.invoke(bootstrap, ["package", "run", "--prefix", str(prefix), "--",
+        after_rejection = portable.strict_json(portable.invoke(bootstrap, ["package", "run", "--prefix", str(prefix), "--json", "--",
                     "diff", "greeting", "--store", str(stores), "--json"], environment=environment))
         if after_rejection != current_run or source.read_bytes() != before:
             portable.fail("new binary projection/source changed after rejected downgrade")

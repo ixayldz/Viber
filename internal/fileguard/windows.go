@@ -62,6 +62,36 @@ func Private(root *os.Root) error {
 	return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
+// CheckPrivate validates the live private-directory policy without repairing
+// permissions. Compatibility inspection must not change the inspected store.
+func CheckPrivate(root *os.Root) error {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	expected, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + user.User.Sid.String() + ")(A;OICI;FA;;;SY)")
+	if err != nil {
+		return err
+	}
+	name, err := windows.UTF16PtrFromString(root.Name())
+	if err != nil {
+		return err
+	}
+	handle, err := windows.CreateFile(name, windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	current, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	if !privateDACLMatches(current, expected) {
+		return c.Fail(c.PolicyDenied, "artifact directory is not private")
+	}
+	return nil
+}
+
 // Reapplying inheritable ACEs propagates them across existing children on
 // Windows. Check the live descriptor rather than repeating that tree walk on
 // each ledger open. No cached identity or permissions authorize this path.

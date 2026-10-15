@@ -199,6 +199,9 @@ func (s *Store) ReservePrivacyBootstrap(ctx context.Context, p PrivacyBootstrapR
 func (s *Store) BindPrivacyBootstrapRoot(ctx context.Context, physicalRoot string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writableLocked(); err != nil {
+		return err
+	}
 	prior, err := privacyBootstrapFromDB(ctx, s.db)
 	if err != nil || prior == nil {
 		if err == nil {
@@ -242,6 +245,9 @@ func (s *Store) BindPrivacyBootstrapRoot(ctx context.Context, physicalRoot strin
 func (s *Store) BindPrivacyBootstrapStage(ctx context.Context, created *os.Root, physicalRoot string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writableLocked(); err != nil {
+		return err
+	}
 	if created == nil || !c.ValidDigest(physicalRoot) {
 		return c.Fail(c.InvalidArgument, "created privacy bootstrap stage and identity required")
 	}
@@ -370,6 +376,9 @@ func (s *Store) RebindPrivacyBootstrapForRestore(ctx context.Context, authorityR
 func (s *Store) AdvancePrivacyBootstrap(ctx context.Context, expectedState string, next PrivacyBootstrapReservation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writableLocked(); err != nil {
+		return err
+	}
 	prior, err := privacyBootstrapFromDB(ctx, s.db)
 	if err != nil || prior == nil {
 		if err == nil {

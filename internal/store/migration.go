@@ -145,8 +145,17 @@ func (s *Store) Migrate(ctx context.Context, intent MigrationIntent) (MigrationR
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	receipt := MigrationReceipt{}
+	// A pending migration deliberately puts a writable store into
+	// migrationRecovery until the original request is replayed.  Migrate is
+	// the operation that is allowed to clear that state; routing it through
+	// writableLocked would make recovery permanently impossible.  The
+	// compatibility inspector is different: it is always read-only and must
+	// never be able to publish migration markers or schema changes.
 	if s.db == nil {
 		return receipt, os.ErrClosed
+	}
+	if s.compatibility {
+		return receipt, c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
 	}
 	if err := intent.Validate(); err != nil {
 		return receipt, err

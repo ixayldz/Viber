@@ -158,6 +158,9 @@ func (s *Store) PhysicalQuotaBinding(ctx context.Context) (*PhysicalQuotaBinding
 func (s *Store) BindPhysicalQuota(ctx context.Context, binding PhysicalQuotaBinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writableLocked(); err != nil {
+		return err
+	}
 	if err := binding.validate(); err != nil {
 		return err
 	}
@@ -217,8 +220,8 @@ func (s *Store) BindPhysicalQuota(ctx context.Context, binding PhysicalQuotaBind
 func (s *Store) AttachPhysicalQuota(ledger *resource.Ledger) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.db == nil {
-		return os.ErrClosed
+	if err := s.writableLocked(); err != nil {
+		return err
 	}
 	if ledger == nil || s.physical != nil {
 		return c.Fail(c.InvalidArgument, "one shared physical quota ledger required")

@@ -126,6 +126,8 @@ func runPackage(args []string, out, errout io.Writer) int {
 		}
 	}
 	// A store owner must really be quiescent: an acknowledgement flag cannot
+	// substitute for acquiring its OS writer lock. Compatibility inspection must
+	// not change schema, owner generation, or the physical quota protocol.
 	m, err := distribution.Open(*prefix)
 	if err != nil {
 		return report(out, errout, err, *jsonMode)
@@ -153,7 +155,6 @@ func runPackage(args []string, out, errout io.Writer) int {
 			paths = append(paths, known.Path)
 		}
 	}
-	// substitute for acquiring its OS writer lock. No schema migration runs here.
 	locked := []*store.Store{}
 	defer func() {
 		for _, s := range locked {
@@ -173,7 +174,7 @@ func runPackage(args []string, out, errout io.Writer) int {
 					return report(out, errout, c.Fail(c.InvalidArgument, "duplicate or overlapping store paths"), *jsonMode)
 				}
 			}
-			s, err := store.Open(ctx, directory)
+			s, err := store.OpenForCompatibility(ctx, directory)
 			if err != nil {
 				return report(out, errout, err, *jsonMode)
 			}

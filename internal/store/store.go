@@ -39,6 +39,7 @@ type Store struct {
 	physical       *resource.Ledger
 	mutable        *resource.MutableSQLite
 	controlReserve *resource.ControlReserve
+	compatibility  bool
 }
 type Command struct {
 	ID              string         `json:"command_id"`
@@ -254,6 +255,124 @@ func Open(ctx context.Context, directory string) (result *Store, resultErr error
 	}
 	return s, nil
 }
+
+const compatibilityReadOnlyReason = "store compatibility inspection is read-only"
+
+// OpenForCompatibility opens an existing owner store for the distribution
+// runtime-capability scan. It takes the normal owner lease so a writer cannot
+// change the database while it is being inspected, but deliberately avoids the
+// normal Open path: no directory or reserve creation, SQLite DDL, quota
+// attachment/migration, WAL checkpoint, or generation increment is allowed.
+//
+// The returned Store supports the same bounded read APIs as Open. Mutation
+// APIs reject compatibility mode, and closing the read-only connection cannot
+// checkpoint or refresh writable reservations.
+func OpenForCompatibility(ctx context.Context, directory string) (result *Store, resultErr error) {
+	if ctx == nil {
+		return nil, c.Fail(c.InvalidArgument, "compatibility context required")
+	}
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	privateRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer privateRoot.Close()
+	// Do not call fileguard.Private here: its contract repairs permissions on
+	// Unix/Windows, which would make a compatibility probe a write operation.
+	if err = fileguard.CheckPrivate(privateRoot); err != nil {
+		return nil, err
+	}
+	if err = fileguard.RegularPath(privateRoot, "owner.lock", false); err != nil {
+		return nil, err
+	}
+	lock, err := fileguard.LockExisting(privateRoot, "owner.lock")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = lock.Close()
+		}
+	}()
+	if err = fileguard.RegularPath(privateRoot, "state.sqlite", false); err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"state.sqlite-wal", "state.sqlite-shm"} {
+		if err = fileguard.RegularPath(privateRoot, name, true); err != nil {
+			return nil, err
+		}
+	}
+	db, err := openStoreDatabaseReadOnly(root)
+	if err != nil {
+		return nil, err
+	}
+	cleanupDB := true
+	defer func() {
+		if cleanupDB {
+			_ = db.Close()
+		}
+	}()
+	var version int
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return nil, err
+	}
+	if version < 1 || version > storeVersion {
+		return nil, c.Fail(c.UnsupportedCapability, "unsupported existing store schema")
+	}
+	s := &Store{db: db, lock: lock, directory: root, schema: version, compatibility: true, readOnlyReason: compatibilityReadOnlyReason}
+	if err = s.verifyProjectionsLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err = s.checkMigrationLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err = db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='generation'").Scan(&s.generation); err != nil {
+		return nil, err
+	}
+	cleanupDB = false
+	result = s
+	return result, nil
+}
+
+func openStoreDatabaseReadOnly(directory string) (*sql.DB, error) {
+	path := filepath.Join(directory, "state.sqlite")
+	uriPath := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = db.Close()
+		}
+	}()
+	// These settings are connection-local. In particular, query_only prevents
+	// an accidental write if a future read-side helper issues a transaction.
+	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY", "PRAGMA mmap_size=0"} {
+		if _, err = db.Exec(pragma); err != nil {
+			return nil, err
+		}
+	}
+	var journalMode string
+	if err = db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil || journalMode != "wal" {
+		return nil, c.Fail(c.StoreIntegrityError, "SQLite durability profile unavailable")
+	}
+	cleanup = false
+	return db, nil
+}
 func (s *Store) Generation() int64 { return s.generation }
 func (s *Store) Close() error {
 	s.mu.Lock()
@@ -268,10 +387,21 @@ func (s *Store) Close() error {
 	if s.controlReserve != nil {
 		err = errors.Join(err, s.controlReserve.Refresh(context.Background()))
 	}
-	err = errors.Join(err, s.db.Close())
-	lockErr := s.lock.Close()
-	s.db = nil
-	return errors.Join(err, lockErr, s.disk.Close())
+	if s.db != nil {
+		err = errors.Join(err, s.db.Close())
+		s.db = nil
+	}
+	var lockErr error
+	if s.lock != nil {
+		lockErr = s.lock.Close()
+		s.lock = nil
+	}
+	var diskErr error
+	if s.disk != nil {
+		diskErr = s.disk.Close()
+		s.disk = nil
+	}
+	return errors.Join(err, lockErr, diskErr)
 }
 func (s *Store) Execute(ctx context.Context, command Command) (c.TaskState, error) {
 	s.mu.Lock()
@@ -645,6 +775,14 @@ func (s *Store) verifyProjectionsLocked(ctx context.Context) error {
 }
 
 func (s *Store) DiskAdmission(bytes int64, control bool) error {
+	if s == nil || s.compatibility || s.disk == nil {
+		return c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
+	}
 	return s.disk.AdmitWithScope(bytes, control, diskguard.AdmissionScope{})
 }
-func (s *Store) DiskStatus() (diskguard.Status, error) { return s.disk.Status() }
+func (s *Store) DiskStatus() (diskguard.Status, error) {
+	if s == nil || s.compatibility || s.disk == nil {
+		return diskguard.Status{}, c.Fail(c.UnsupportedCapability, compatibilityReadOnlyReason)
+	}
+	return s.disk.Status()
+}

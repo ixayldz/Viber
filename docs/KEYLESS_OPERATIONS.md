@@ -1,10 +1,10 @@
 # Anahtarsız çalışma yüzeyleri
 
-Aşağıda ayrıca sonraki kaynak geliştirmesi olarak belirtilen eklemeler haricinde bu kılavuzun komutları [güncel engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-af70426fe61756c63d8722b6221fe31f26a3f087) bulunur. Exact source `af70426fe61756c63d8722b6221fe31f26a3f087`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38294014619) başarılıdır. Üç native yönetilen kurulum raporu ve 11 public asset/dokuz provenance subject readback'i doğrulandı; yerel readback indirilen binary'leri çalıştırmadı. Stable readiness ayrı PRD kapısıdır.
+Aşağıda ayrıca sonraki kaynak geliştirmesi olarak belirtilen eklemeler haricinde bu kılavuzun komutları [güncel engineering paketinde](https://github.com/ixayldz/Viber/releases/tag/engineering-96fe0b84284e270806ac6607433ab1a75114b6cd) bulunur. Exact source `96fe0b84284e270806ac6607433ab1a75114b6cd`; [16 CI işi](https://github.com/ixayldz/Viber/actions/runs/38582637676) başarılıdır. Üç native yönetilen kurulum raporu, 11 public asset/dokuz provenance subject readback'i ve gerçek Windows yönetilen kurulum/launcher kabulü doğrulandı. Stable readiness ayrı PRD kapısıdır.
 
 ## Yönetilen kurulum
 
-`/memory`, `/workers`, slash palette ve proje talimatları güncel public pakettedir; [CLI referansında](CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler) kullanımını okuyun. Explicit memory copy ve retrieval report/scoring sonraki kaynak eklemeleridir; kendi exact-source kabulünü gerektirir. Managed pakette kullanılan memory/read-worker capability'sini okuyamayan eski binary'ye rollback engellenir; yeni manifesti tanımayan bootstrap yerine yeni doğrulanmış portable binary gerekir.
+`/memory`, `/workers`, slash palette, proje talimatları, explicit memory copy ve retrieval report/scoring güncel public pakettedir; [CLI referansında](CLI_REFERENCE.md#proje-talimatları-bellek-ve-yerel-analizler) kullanımını okuyun. README'deki yeni PRD seçimi ve model kullanan `/explore`/`/review` komutları sonraki kaynak geliştirmesidir; henüz bu public pakette değildir. Managed pakette kullanılan memory/read-worker capability'sini okuyamayan eski binary'ye rollback engellenir; yeni manifesti tanımayan bootstrap yerine yeni doğrulanmış portable binary gerekir.
 
 İlk bootstrap binary'sini doğrulanmış portable paketten ayrı bir dizine açın. `package install` aynı byte snapshot'ında GitHub provenance'ını repo/workflow/ref/full SHA ile doğrular; checksum tek başına yeterli değildir. `--gh` PATH yerine operatörün seçtiği GitHub CLI'nin tam yoludur.
 

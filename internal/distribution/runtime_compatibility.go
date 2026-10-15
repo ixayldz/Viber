@@ -119,9 +119,11 @@ func verifiedBundleManifest(bundle Bundle) (Manifest, error) {
 	return manifest, nil
 }
 
-// lockRegisteredStoreCapabilities opens every registered store under its
+// lockRegisteredStoreCapabilities inspects every registered store under its
 // exclusive owner lock and keeps those locks until the caller finishes changing
-// the selected program. A racing writer in one of those stores either completes
+// the selected program. Inspection must not activate a newer storage protocol:
+// package selection alone cannot make a previously compatible binary unsafe.
+// A racing writer in one of those stores either completes
 // before this scan or prevents the lock from being acquired. Privacy-family
 // copy intent is read from its authoritative journal under that journal's short
 // registry lock; this does not claim an atomic handoff against an unregistered
@@ -148,7 +150,7 @@ func (m *Manager) lockRegisteredStoreCapabilities(ctx context.Context) ([]*store
 		if statErr != nil || !statInfo.IsDir() || statInfo.Mode()&os.ModeSymlink != 0 {
 			return closeOnError(c.Fail(c.StaleAuthority, "registered store is not a current real directory"))
 		}
-		owner, openErr := store.Open(ctx, known.Path)
+		owner, openErr := store.OpenForCompatibility(ctx, known.Path)
 		if openErr != nil {
 			return closeOnError(openErr)
 		}

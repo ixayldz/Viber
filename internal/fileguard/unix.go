@@ -40,6 +40,23 @@ func Private(root *os.Root) error {
 	}
 	return f.Chmod(0700)
 }
+
+// CheckPrivate observes ownership and permissions without changing either.
+func CheckPrivate(root *os.Root) error {
+	f, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var st unix.Stat_t
+	if err = unix.Fstat(int(f.Fd()), &st); err != nil {
+		return err
+	}
+	if st.Uid != uint32(os.Geteuid()) || st.Mode&0777 != 0700 {
+		return c.Fail(c.PolicyDenied, "artifact directory is not private")
+	}
+	return nil
+}
 func SingleLink(f *os.File) error {
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
