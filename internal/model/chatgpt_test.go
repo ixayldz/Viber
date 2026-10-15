@@ -20,6 +20,52 @@ func planRequest() Request {
 func streamEvent(kind string, response string) string {
 	return "event: " + kind + "\ndata: {\"type\":\"" + kind + "\",\"response\":" + response + "}\n\n"
 }
+
+func jsonStreamEvent(kind string, fields map[string]any) string {
+	fields["type"] = kind
+	raw, _ := json.Marshal(fields)
+	return "event: " + kind + "\ndata: " + string(raw) + "\n\n"
+}
+
+func reconstructedChatGPTEvents() (string, string, string, string, string) {
+	created := jsonStreamEvent("response.created", map[string]any{"response": map[string]any{"id": "resp_plan", "model": ChatGPTModel, "status": "in_progress"}, "sequence_number": 1})
+	added := jsonStreamEvent("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{
+		"id": "item_plan", "type": "function_call", "status": "in_progress", "arguments": "", "call_id": "call_plan", "name": "fs_read", "namespace": "viber",
+	}, "sequence_number": 2})
+	delta := jsonStreamEvent("response.function_call_arguments.delta", map[string]any{"item_id": "item_plan", "output_index": 0, "delta": `{"path":"a.txt"}`, "sequence_number": 3})
+	argumentsDone := jsonStreamEvent("response.function_call_arguments.done", map[string]any{"item_id": "item_plan", "output_index": 0, "arguments": `{"path":"a.txt"}`, "sequence_number": 4})
+	done := jsonStreamEvent("response.output_item.done", map[string]any{"output_index": 0, "item": map[string]any{
+		"id": "item_plan", "type": "function_call", "status": "completed", "arguments": `{"path":"a.txt"}`, "call_id": "call_plan", "name": "fs_read", "namespace": "viber",
+	}, "sequence_number": 5})
+	return created, added, delta, argumentsDone, done
+}
+
+func reconstructedChatGPTTerminal(terminalKind, status string, output []any) string {
+	response := map[string]any{"id": "resp_plan", "model": ChatGPTModel, "status": status, "output": output, "usage": map[string]any{"input_tokens": 2688, "output_tokens": 24}}
+	return jsonStreamEvent(terminalKind, map[string]any{"response": response, "sequence_number": 6})
+}
+
+func reconstructedChatGPTWire(terminalKind, status string, output []any) string {
+	created, added, delta, argumentsDone, done := reconstructedChatGPTEvents()
+	return created + added + delta + argumentsDone + done + reconstructedChatGPTTerminal(terminalKind, status, output) + "data: [DONE]\n\n"
+}
+
+func reconstructedReasoningChatGPTWire() string {
+	created := jsonStreamEvent("response.created", map[string]any{"response": map[string]any{"id": "resp_reasoning", "model": ChatGPTModel, "status": "in_progress"}, "sequence_number": 1})
+	reasoningAdded := jsonStreamEvent("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"id": "reason_plan", "type": "reasoning", "status": "in_progress", "encrypted_content": "", "summary": []any{}}, "sequence_number": 2})
+	functionAdded := jsonStreamEvent("response.output_item.added", map[string]any{"output_index": 1, "item": map[string]any{
+		"id": "item_plan", "type": "function_call", "status": "in_progress", "arguments": "", "call_id": "call_plan", "name": "fs_read", "namespace": "viber",
+	}, "sequence_number": 3})
+	delta := jsonStreamEvent("response.function_call_arguments.delta", map[string]any{"item_id": "item_plan", "output_index": 1, "delta": `{"path":"a.txt"}`, "sequence_number": 4})
+	argumentsDone := jsonStreamEvent("response.function_call_arguments.done", map[string]any{"item_id": "item_plan", "output_index": 1, "arguments": `{"path":"a.txt"}`, "sequence_number": 5})
+	reasoningDone := jsonStreamEvent("response.output_item.done", map[string]any{"output_index": 0, "item": map[string]any{"id": "reason_plan", "type": "reasoning", "encrypted_content": "opaque", "summary": []any{}}, "sequence_number": 6})
+	functionDone := jsonStreamEvent("response.output_item.done", map[string]any{"output_index": 1, "item": map[string]any{
+		"id": "item_plan", "type": "function_call", "status": "completed", "arguments": `{"path":"a.txt"}`, "call_id": "call_plan", "name": "fs_read", "namespace": "viber",
+	}, "sequence_number": 7})
+	terminal := jsonStreamEvent("response.completed", map[string]any{"response": map[string]any{"id": "resp_reasoning", "model": ChatGPTModel, "status": "completed", "output": []any{}, "usage": map[string]any{"input_tokens": 2688, "output_tokens": 24}}, "sequence_number": 8})
+	return created + reasoningAdded + functionAdded + delta + argumentsDone + reasoningDone + functionDone + terminal + "data: [DONE]\n\n"
+}
+
 func planResponse(status, namespace string) string {
 	raw := map[string]any{"id": "resp_plan", "model": ChatGPTModel, "status": status, "output": []any{map[string]any{"type": "reasoning", "encrypted_content": "opaque", "summary": []any{}}, map[string]any{"type": "function_call", "status": "completed", "namespace": namespace, "call_id": "call_plan", "name": "fs_read", "arguments": `{"path":"a.txt"}`}}, "usage": map[string]any{"input_tokens": 50, "output_tokens": 10}}
 	bytes, _ := json.Marshal(raw)
@@ -108,6 +154,98 @@ func TestChatGPTPlanUsesNamespaceStreamingAndPublishedCeilingReservation(t *test
 		t.Fatal("unregistered output ceiling admitted")
 	}
 }
+
+func TestChatGPTReconstructsCompletedOutputItemsWhenTerminalOutputIsEmpty(t *testing.T) {
+	r := planRequest()
+	wire := reconstructedChatGPTWire("response.completed", "completed", []any{})
+	result, err := planClient(t, wire, nil).Complete(context.Background(), r)
+	if err != nil {
+		t.Fatalf("bounded output-item reconstruction failed: %+v %v", result, err)
+	}
+	if result.CompletionStatus != "COMPLETE" || len(result.Calls) != 1 || result.Calls[0].ID != "call_plan" || result.Calls[0].Name != "fs_read" || string(result.Calls[0].Arguments) != `{"path":"a.txt"}` {
+		t.Fatalf("reconstructed function call was not sealed: %+v", result)
+	}
+	if !result.Usage.Known || result.Usage.Input != 2688 || result.Usage.Output != 24 || len(result.Continuation) != 1 {
+		t.Fatalf("terminal identity/usage or opaque continuation was not preserved: %+v", result)
+	}
+	item, err := object(result.Continuation[0])
+	if err != nil || text(item, "id") != "item_plan" || text(item, "type") != "function_call" || text(item, "namespace") != "viber" {
+		t.Fatalf("sealed output item was not retained opaquely: %s %v", result.Continuation[0], err)
+	}
+	sealed, err := DecodeReceipt(r, "chatgpt", result.Raw)
+	if err != nil || len(sealed.Calls) != 1 || sealed.Usage.Input != 2688 {
+		t.Fatalf("retained reconstructed receipt did not revalidate: %+v %v", sealed, err)
+	}
+}
+
+func TestChatGPTReconstructionAllowsStatuslessCompletedReasoning(t *testing.T) {
+	result, err := planClient(t, reconstructedReasoningChatGPTWire(), nil).Complete(context.Background(), planRequest())
+	if err != nil || result.CompletionStatus != "COMPLETE" || len(result.Calls) != 1 || len(result.Continuation) != 2 {
+		t.Fatalf("statusless reasoning done item was rejected: %+v %v", result, err)
+	}
+	reasoning, err := object(result.Continuation[0])
+	if err != nil || text(reasoning, "type") != "reasoning" || text(reasoning, "status") != "" || text(reasoning, "encrypted_content") != "opaque" {
+		t.Fatalf("reasoning continuation was not preserved: %s %v", result.Continuation[0], err)
+	}
+}
+
+func TestChatGPTReconstructionBindsFunctionMetadataAcrossItemLifecycle(t *testing.T) {
+	created, added, delta, argumentsDone, done := reconstructedChatGPTEvents()
+	terminal := reconstructedChatGPTTerminal("response.completed", "completed", []any{}) + "data: [DONE]\n\n"
+	cases := map[string]string{
+		"changed name":      created + strings.Replace(added, `"name":"fs_read"`, `"name":"fs_stat"`, 1) + delta + argumentsDone + done + terminal,
+		"changed call ID":   created + strings.Replace(added, `"call_id":"call_plan"`, `"call_id":"other_call"`, 1) + delta + argumentsDone + done + terminal,
+		"changed namespace": created + added + delta + argumentsDone + strings.Replace(done, `"namespace":"viber"`, `"namespace":"other"`, 1) + terminal,
+	}
+	for name, wire := range cases {
+		t.Run(name, func(t *testing.T) {
+			result, err := planClient(t, wire, nil).Complete(context.Background(), planRequest())
+			var failure *Failure
+			if err == nil || !errors.As(err, &failure) || !failure.UsageUnknown || len(result.Calls) != 0 {
+				t.Fatalf("function metadata mutation was accepted: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestOpenAIIncompleteLifecycleKeepsTerminalUsageAccounting(t *testing.T) {
+	r := requestFixture()
+	r.Stream = true
+	wire := reconstructedChatGPTWire("response.incomplete", "incomplete", []any{})
+	wire = strings.ReplaceAll(wire, ChatGPTModel, r.Model)
+	wire = strings.ReplaceAll(wire, `,"namespace":"viber"`, "")
+	result, err := DecodeReceipt(r, "openai", []byte(wire))
+	if err != nil || !result.Usage.Known || result.CompletionStatus == "COMPLETE" || len(result.Calls) != 0 || len(result.Continuation) != 0 {
+		t.Fatalf("OpenAI incomplete lifecycle lost terminal accounting: %+v %v", result, err)
+	}
+}
+
+func TestChatGPTOutputItemReconstructionRejectsUnsealedOrConflictingEvents(t *testing.T) {
+	created, added, delta, argumentsDone, done := reconstructedChatGPTEvents()
+	terminal := reconstructedChatGPTTerminal("response.completed", "completed", []any{})
+	finish := "data: [DONE]\n\n"
+	vectors := map[string]string{
+		"duplicate added":             strings.Replace(created+added+delta+argumentsDone+done+terminal+finish, argumentsDone, added+argumentsDone, 1),
+		"out of order done":           created + added + delta + argumentsDone + strings.Replace(done, `"output_index":0`, `"output_index":1`, 1) + terminal + finish,
+		"wrong namespace":             created + strings.ReplaceAll(added+delta+argumentsDone+done, `"namespace":"viber"`, `"namespace":"attacker"`) + terminal + finish,
+		"incomplete item":             created + added + delta + argumentsDone + strings.Replace(done, `"status":"completed"`, `"status":"incomplete"`, 1) + terminal + finish,
+		"missing argument seal":       created + added + delta + done + terminal + finish,
+		"conflicting terminal output": created + added + delta + argumentsDone + done + reconstructedChatGPTTerminal("response.completed", "completed", []any{map[string]any{"type": "function_call", "status": "completed", "namespace": "viber", "call_id": "other", "name": "fs_read", "arguments": `{"path":"other.txt"}`}}) + finish,
+		"incomplete response":         created + added + delta + argumentsDone + done + reconstructedChatGPTTerminal("response.incomplete", "incomplete", []any{}) + finish,
+		"failed response":             created + added + delta + argumentsDone + done + reconstructedChatGPTTerminal("response.failed", "failed", []any{}) + finish,
+		"disconnected":                created + added + delta + argumentsDone + done,
+	}
+	for name, wire := range vectors {
+		t.Run(name, func(t *testing.T) {
+			result, err := planClient(t, wire, nil).Complete(context.Background(), planRequest())
+			var failure *Failure
+			if err == nil || !errors.As(err, &failure) || !failure.UsageUnknown || len(result.Calls) != 0 || len(result.Continuation) != 0 {
+				t.Fatalf("unsafe reconstructed stream was accepted: %+v %v", result, err)
+			}
+		})
+	}
+}
+
 func TestChatGPTPartialMalformedOrWrongNamespaceNeverDispatchesCalls(t *testing.T) {
 	complete := streamEvent("response.completed", planResponse("completed", "viber"))
 	for name, wire := range map[string]string{
