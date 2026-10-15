@@ -55,6 +55,9 @@ func migrationFixture(t *testing.T) (*Session, StartOptions) {
 func TestApplicationMigrationValidatesBackupAndPreservesFullHistory(t *testing.T) {
 	ctx := context.Background()
 	s, options := migrationFixture(t)
+	if s.PhysicalQuota != nil || s.privacyOwner != nil {
+		t.Fatal("legacy inspection activated a mutable privacy owner")
+	}
 	before, doc, err := s.Load(ctx, options.TaskID)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +69,9 @@ func TestApplicationMigrationValidatesBackupAndPreservesFullHistory(t *testing.T
 	}
 	if receipt.Target.SchemaVersion != 2 || receipt.Intent.BackupDigest == "" || receipt.Status != "COMMITTED" {
 		t.Fatal(receipt)
+	}
+	if s.PhysicalQuota == nil || s.privacyOwner == nil {
+		t.Fatal("committed migration did not attach its current privacy runtime")
 	}
 	manifest, err := migrationBackupManifest(backup)
 	if err != nil || manifest.Store.SchemaVersion != 1 {

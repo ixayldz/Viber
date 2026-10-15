@@ -230,7 +230,7 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 		}
 	}
 	info, err := journal.SnapshotInfo(ctx)
-	if err == nil && rawAuthority != nil {
+	if err == nil && info.SchemaVersion == 2 && rawAuthority != nil {
 		bootstrap, bootstrapErr := journal.PrivacyBootstrap(ctx)
 		err = bootstrapErr
 		if err == nil && bootstrap != nil && bootstrap.State != "BOUND" && bootstrap.State != "RELEASED" {
@@ -244,23 +244,35 @@ func openSessionWithPrivacyFault(ctx context.Context, directory string, authorit
 		session.Close()
 		return nil, err
 	}
-	if err = session.preparePrivacyMetadataBootstrap(ctx); err != nil {
-		session.Close()
-		return nil, err
+	// Legacy stores are read-only migration inputs. Copied authority metadata
+	// is historical evidence, not permission to attach a new physical owner.
+	if info.SchemaVersion == 1 {
+		return session, nil
 	}
-	if err = session.attachPhysicalQuota(ctx, session.privacy); err != nil {
-		session.Close()
-		return nil, err
-	}
-	if err = session.finishPrivacyMetadataBootstrap(ctx); err != nil {
-		session.Close()
-		return nil, err
-	}
-	if err = session.attachPrivacy(ctx); err != nil {
+	if err = session.attachCurrentPrivacyRuntime(ctx); err != nil {
 		session.Close()
 		return nil, err
 	}
 	return session, nil
+}
+
+func (s *Session) attachCurrentPrivacyRuntime(ctx context.Context) error {
+	if err := s.ensurePrivacy(ctx); err != nil {
+		return err
+	}
+	if err := s.preparePrivacyMetadataBootstrap(ctx); err != nil {
+		return err
+	}
+	if err := s.attachPhysicalQuota(ctx, s.privacy); err != nil {
+		return err
+	}
+	if err := s.finishPrivacyMetadataBootstrap(ctx); err != nil {
+		return err
+	}
+	if s.privacyOwner == nil {
+		return s.attachPrivacy(ctx)
+	}
+	return nil
 }
 func (s *Session) Close() error {
 	if s == nil {
@@ -268,6 +280,10 @@ func (s *Session) Close() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *Session) closeLocked() error {
 	return errors.Join(s.retrievalCache.Close(), s.Archive.Close(), s.Journal.Close(), s.PhysicalQuota.Close(), s.privacyOwner.Close())
 }
 func newID(prefix string) string {

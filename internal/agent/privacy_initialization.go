@@ -257,7 +257,25 @@ func (s *Session) validatePrivacyBootstrapOwner(bootstrap store.PrivacyBootstrap
 	if err = errors.Join(identityErr, closeErr); err != nil {
 		return err
 	}
-	pathMatches := filepath.Clean(ownerDirectory) == filepath.Clean(s.directory) || ownerTarget != "" && filepath.Clean(ownerTarget) == filepath.Clean(s.directory)
+	// Restore receipts contain canonical stage/target paths. The caller can
+	// reopen the same inode through a platform alias (for example /var on
+	// macOS); compare resolved paths as well as the pinned physical identity.
+	currentPath, err := fileguard.ResolveProspective(s.directory)
+	if err != nil {
+		return err
+	}
+	boundPath, err := fileguard.ResolveProspective(ownerDirectory)
+	if err != nil {
+		return err
+	}
+	pathMatches := boundPath == currentPath
+	if !pathMatches && ownerTarget != "" {
+		targetPath, resolveErr := fileguard.ResolveProspective(ownerTarget)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		pathMatches = targetPath == currentPath
+	}
 	if !pathMatches || ownerIdentity != identity || ownerInstance != s.instance.ID ||
 		ownerGeneration < 1 || s.Journal.Generation() < ownerGeneration || bootstrap.UpperBytes < 1 || bootstrap.UpperEntries < 1 {
 		return c.Fail(c.StaleAuthority, "privacy bootstrap owner instance, generation, or store identity changed")

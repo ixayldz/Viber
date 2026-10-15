@@ -117,7 +117,7 @@ func (s *Session) Migrate(ctx context.Context, id, backupOutput string) (store.M
 		return result, c.Fail(c.CommandIDConflict, "migration retry requires the original command ID and backup path")
 	}
 	if pending != nil && complete != nil {
-		return s.Journal.Migrate(ctx, *pending)
+		return s.migrateAndAttachRuntime(ctx, *pending)
 	}
 	if err = s.migrationQuiescent(ctx); err != nil {
 		return result, err
@@ -173,5 +173,22 @@ func (s *Session) Migrate(ctx context.Context, id, backupOutput string) (store.M
 	if err = validateMigrationBackup(ctx, backup, manifest); err != nil {
 		return result, err
 	}
-	return s.Journal.Migrate(ctx, intent)
+	return s.migrateAndAttachRuntime(ctx, intent)
+}
+
+// A schema-1 inspection session has no mutable quota/privacy attachments.
+// Activate them only after the journal's explicit migration commits. A crash
+// in this phase is recovered by the normal current-format open path.
+func (s *Session) migrateAndAttachRuntime(ctx context.Context, intent store.MigrationIntent) (store.MigrationReceipt, error) {
+	receipt, err := s.Journal.Migrate(ctx, intent)
+	if err != nil {
+		return receipt, err
+	}
+	if err = s.attachCurrentPrivacyRuntime(ctx); err != nil {
+		// Some attachments may already have succeeded. Invalidate this session
+		// rather than allowing a same-session retry to skip a partial bind;
+		// normal reopen recovers from the committed journal and exact pins.
+		return receipt, errors.Join(err, s.closeLocked())
+	}
+	return receipt, nil
 }

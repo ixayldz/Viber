@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	c "github.com/ixayldz/Viber/internal/contracts"
@@ -73,5 +74,36 @@ func TestMetadataCatalogImportPublishAndFreeReceipt(t *testing.T) {
 	}
 	if _, err = root.Lstat("records/0000000002.json"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("metadata file still exists after exact free receipt: %v", err)
+	}
+}
+
+func TestMetadataControlPublicationNormalizesNativePathBeforeClassValidation(t *testing.T) {
+	authority, _ := testAuthority(t)
+	ledger := openTestLedger(t, authority, smallLimits(), "")
+	defer ledger.Close()
+	root, err := os.OpenRoot(authority.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = root.MkdirAll("records", 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"type":"DELETE_INTENT"}`)
+	if _, err = ledger.ImportMetadataFiles(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join("records", "0000000001.json")
+	if err = ledger.PublishMetadataFile(context.Background(), root, name, raw, Control); err != nil {
+		t.Fatal("native deletion intent path rejected before normalization", err)
+	}
+	if err = ledger.PublishMetadataFile(context.Background(), root, name, raw, Control); err != nil {
+		t.Fatal("native deletion intent retry failed", err)
+	}
+	if err = ledger.PublishMetadataFile(context.Background(), root, filepath.Join("owners", "scope.json"), raw, Control); err == nil {
+		t.Fatal("non-journal metadata consumed the deletion control reserve")
+	}
+	if err = ledger.PublishMetadataFile(context.Background(), root, filepath.Join("records", "0000000002.json"), []byte(`{"type":"CREATE"}`), Control); err == nil {
+		t.Fatal("ordinary journal record consumed the deletion control reserve")
 	}
 }

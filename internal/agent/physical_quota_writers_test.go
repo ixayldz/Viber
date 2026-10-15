@@ -221,6 +221,15 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	if err != nil || !found || beforeIntent.Match.Status != "WRITING" || beforeIntent.Match.RequestDigest != request.RequestDigest ||
+		beforeIntent.Match.UpperBytes != request.UpperBytes || beforeIntent.Match.UpperEntries != request.UpperEntries || !bytes.Equal(beforeIntent.Binding, bindingRaw) {
+		t.Fatalf("reopened support writer did not retain its exact original intent: intent=%+v found=%v err=%v", beforeIntent, found, err)
+	}
+	metadataBefore, _, err := reopened.PhysicalQuota.MetadataCatalogSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	exported, err := reopened.ExportSupport(ctx, output)
 	if err != nil {
 		t.Fatal("support retry did not resume its saved WRITING intent", err)
@@ -234,8 +243,42 @@ func TestSupportRetryAfterReopenUsesSavedOriginalReport(t *testing.T) {
 		t.Fatal("resumed support call did not return the original reserved report", err)
 	}
 	after, err := reopened.PhysicalQuota.Capacity(ctx)
-	if err != nil || after.Allocations != before.Allocations || after.OutstandingItems >= before.OutstandingItems || after.RetainedEntries <= before.RetainedEntries {
-		t.Fatalf("support retry changed the original physical charge: before=%+v after=%+v err=%v", before, after, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	if err != nil || !found || afterIntent.Match.Status != "RETAINED" || afterIntent.Match.Allocation.ID != beforeIntent.Match.Allocation.ID ||
+		afterIntent.Match.RequestDigest != beforeIntent.Match.RequestDigest || afterIntent.Match.UpperBytes != beforeIntent.Match.UpperBytes ||
+		afterIntent.Match.UpperEntries != beforeIntent.Match.UpperEntries || !bytes.Equal(afterIntent.Binding, beforeIntent.Binding) {
+		t.Fatalf("support retry did not settle its original writer allocation: before=%+v after=%+v found=%v err=%v", beforeIntent, afterIntent, found, err)
+	}
+	// Registering this one managed output adds one measured immutable privacy
+	// metadata receipt. The original support reservation itself must settle
+	// in place, with no duplicate writer charge.
+	metadataCharge := addedPrivacyMetadataCharge(t, reopened, metadataBefore)
+	if after.Allocations != before.Allocations+1 || after.MetadataBytes != before.MetadataBytes+metadataCharge || after.MetadataEntries != before.MetadataEntries+1 ||
+		after.OutstandingBytes >= before.OutstandingBytes || after.OutstandingItems >= before.OutstandingItems ||
+		after.RetainedBytes-after.MetadataBytes <= before.RetainedBytes-before.MetadataBytes ||
+		after.RetainedEntries-after.MetadataEntries <= before.RetainedEntries-before.MetadataEntries {
+		t.Fatalf("support retry changed physical quota beyond its one immutable privacy metadata receipt: before=%+v after=%+v", before, after)
+	}
+	repeated, err := reopened.ExportSupport(ctx, output)
+	if err != nil {
+		t.Fatalf("completed exact support retry was not idempotent: %v", err)
+	}
+	repeatedRaw, err := c.CanonicalV1(repeated)
+	if err != nil || !bytes.Equal(repeatedRaw, originalRaw) {
+		t.Fatalf("completed support retry changed the saved report: %v", err)
+	}
+	afterRepeat, err := reopened.PhysicalQuota.Capacity(ctx)
+	if err != nil || afterRepeat != after {
+		t.Fatalf("completed support retry charged physical metadata or payload twice: first=%+v repeat=%+v err=%v", after, afterRepeat, err)
+	}
+	repeatedIntent, found, err := reopened.PhysicalQuota.FindReservationIntent(ctx, output, "agent", "SUPPORT")
+	if err != nil || !found || repeatedIntent.Match.Allocation.ID != afterIntent.Match.Allocation.ID ||
+		repeatedIntent.Match.RequestDigest != afterIntent.Match.RequestDigest || repeatedIntent.Match.UpperBytes != afterIntent.Match.UpperBytes ||
+		repeatedIntent.Match.UpperEntries != afterIntent.Match.UpperEntries || !bytes.Equal(repeatedIntent.Binding, afterIntent.Binding) {
+		t.Fatalf("completed support retry lost its exact writer allocation: original=%+v repeated=%+v found=%v err=%v", afterIntent, repeatedIntent, found, err)
 	}
 }
 

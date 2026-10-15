@@ -569,7 +569,7 @@ func (l *Ledger) MetadataImportComplete(ctx context.Context) (bool, error) {
 }
 
 func (l *Ledger) PublishMetadataFile(ctx context.Context, root *os.Root, name string, raw []byte, class Class) error {
-	if len(raw) == 0 || len(raw) > 16<<20 || (class != Payload && class != Control) || class == Control && !strings.HasPrefix(name, "records/") {
+	if len(raw) == 0 || len(raw) > 16<<20 || (class != Payload && class != Control) {
 		return c.Fail(c.InvalidArgument, "bounded typed privacy metadata publication required")
 	}
 	refs, err := validateMetadataRefs([]MetadataFileRef{{Path: name, Class: class}})

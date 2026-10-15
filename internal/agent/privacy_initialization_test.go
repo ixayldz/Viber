@@ -166,7 +166,8 @@ func TestPrivacyBootstrapRecoversPinnedStagingDirectory(t *testing.T) {
 	}
 	defer session.Close()
 	recovered, err := session.Journal.PrivacyBootstrap(ctx)
-	if err != nil || recovered == nil || recovered.State != "AUTHORITY_BOUND" || recovered.PhysicalRoot != bootstrap.PhysicalRoot {
+	if err != nil || recovered == nil || recovered.State != "RELEASED" || recovered.PhysicalRoot != bootstrap.PhysicalRoot ||
+		recovered.AuthorityID != bootstrap.AuthorityID || recovered.RequestDigest != bootstrap.RequestDigest {
 		t.Fatal("recovery changed staging identity", recovered, err)
 	}
 }
